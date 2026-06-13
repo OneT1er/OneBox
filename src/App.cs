@@ -932,6 +932,225 @@ namespace PowerAudioManager
         }
     }
 
+    public static class TranslateService
+    {
+        const string EndpointAi = "https://fanyi-api.baidu.com/ait/api/aiTextTranslate";
+        const string EndpointV1 = "https://fanyi-api.baidu.com/api/trans/vip/translate";
+        static readonly Random _rng = new Random();
+
+        public static string GetAppId() { try { using (var k = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\PowerAudioManager\App")) return k == null ? "" : (k.GetValue("Translate.AppId") as string ?? ""); } catch { return ""; } }
+        public static string GetKey() { try { using (var k = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\PowerAudioManager\App")) return k == null ? "" : (k.GetValue("Translate.Key") as string ?? ""); } catch { return ""; } }
+        public static void SetCreds(string appId, string key)
+        {
+            try { using (var k = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(@"Software\PowerAudioManager\App")) { k.SetValue("Translate.AppId", appId ?? ""); k.SetValue("Translate.Key", key ?? ""); } } catch { }
+        }
+
+        public class Result
+        {
+            public string Translation;
+            public string Error;
+            public string DetectedFrom;
+        }
+
+        public static Result Translate(string text, string from, string to)
+        {
+            var r = new Result();
+            string appId = GetAppId(); string key = GetKey();
+            if (string.IsNullOrEmpty(appId) || string.IsNullOrEmpty(key))
+            { r.Error = "未设置 APPID 或密钥"; return r; }
+            if (string.IsNullOrEmpty(text)) { r.Translation = ""; return r; }
+            // Try the LLM endpoint first (Bearer token = key); fall back to v1 with MD5 sign on failure
+            try
+            {
+                System.Net.ServicePointManager.SecurityProtocol = System.Net.SecurityProtocolType.Tls12 | System.Net.ServicePointManager.SecurityProtocol;
+                var req = (System.Net.HttpWebRequest)System.Net.WebRequest.Create(EndpointAi);
+                req.Method = "POST";
+                req.ContentType = "application/json";
+                req.Headers["Authorization"] = "Bearer " + key;
+                req.Timeout = 12000;
+                string fromArg = string.IsNullOrEmpty(from) ? "auto" : from;
+                string toArg = string.IsNullOrEmpty(to) ? "zh" : to;
+                string body = "{\"appid\":\"" + JsonEscape(appId) + "\",\"from\":\"" + JsonEscape(fromArg) + "\",\"to\":\"" + JsonEscape(toArg) + "\",\"q\":\"" + JsonEscape(text) + "\"}";
+                var bytes = System.Text.Encoding.UTF8.GetBytes(body);
+                req.ContentLength = bytes.Length;
+                using (var s = req.GetRequestStream()) s.Write(bytes, 0, bytes.Length);
+                using (var resp = (System.Net.HttpWebResponse)req.GetResponse())
+                using (var rs = resp.GetResponseStream())
+                using (var rd = new System.IO.StreamReader(rs, System.Text.Encoding.UTF8))
+                {
+                    var json = rd.ReadToEnd();
+                    string err = ExtractJson(json, "error_code");
+                    if (!string.IsNullOrEmpty(err) && err != "0" && err != "52000")
+                    {
+                        // Fall through to v1; record this error in case v1 also fails
+                        r.Error = "大模型: " + err + " " + ExtractJson(json, "error_msg");
+                    }
+                    else
+                    {
+                        // LLM responses usually return { "data": { "result": "..." }, "from": "..." }
+                        string result = ExtractJson(json, "result");
+                        if (!string.IsNullOrEmpty(result))
+                        {
+                            r.Translation = result;
+                            r.DetectedFrom = ExtractJson(json, "from");
+                            return r;
+                        }
+                        // Some shapes: { "trans_result": [{ "dst": "..." }] }
+                        var dst = ExtractAllDst(json);
+                        if (dst.Count > 0)
+                        {
+                            r.Translation = string.Join(System.Environment.NewLine, dst.ToArray());
+                            r.DetectedFrom = ExtractJson(json, "from");
+                            return r;
+                        }
+                        r.Error = "大模型: 响应解析失败";
+                    }
+                }
+            }
+            catch (Exception exAi)
+            {
+                r.Error = "大模型请求失败: " + exAi.Message;
+            }
+
+            // Fallback to v1 generic translate API (MD5 sign)
+            try
+            {
+                string salt = _rng.Next(10000, 99999).ToString();
+                string sign = Md5(appId + text + salt + key);
+                var sb = new System.Text.StringBuilder();
+                sb.Append("q=").Append(Uri.EscapeDataString(text));
+                sb.Append("&from=").Append(string.IsNullOrEmpty(from) ? "auto" : from);
+                sb.Append("&to=").Append(string.IsNullOrEmpty(to) ? "zh" : to);
+                sb.Append("&appid=").Append(appId);
+                sb.Append("&salt=").Append(salt);
+                sb.Append("&sign=").Append(sign);
+                var body = System.Text.Encoding.UTF8.GetBytes(sb.ToString());
+                System.Net.ServicePointManager.SecurityProtocol = System.Net.SecurityProtocolType.Tls12 | System.Net.ServicePointManager.SecurityProtocol;
+                var req = (System.Net.HttpWebRequest)System.Net.WebRequest.Create(EndpointV1);
+                req.Method = "POST";
+                req.ContentType = "application/x-www-form-urlencoded";
+                req.ContentLength = body.Length;
+                req.Timeout = 8000;
+                using (var s = req.GetRequestStream()) s.Write(body, 0, body.Length);
+                using (var resp = (System.Net.HttpWebResponse)req.GetResponse())
+                using (var rs = resp.GetResponseStream())
+                using (var rd = new System.IO.StreamReader(rs, System.Text.Encoding.UTF8))
+                {
+                    var json = rd.ReadToEnd();
+                    string err = ExtractJson(json, "error_code");
+                    if (!string.IsNullOrEmpty(err) && err != "52000")
+                    {
+                        r.Error = "百度: " + err + " " + ExtractJson(json, "error_msg");
+                        return r;
+                    }
+                    r.DetectedFrom = ExtractJson(json, "from");
+                    var dst = ExtractAllDst(json);
+                    r.Translation = string.Join(System.Environment.NewLine, dst.ToArray());
+                    if (!string.IsNullOrEmpty(r.Translation)) r.Error = null;
+                }
+            }
+            catch (Exception ex)
+            {
+                if (string.IsNullOrEmpty(r.Error)) r.Error = ex.Message;
+            }
+            return r;
+        }
+
+        static string JsonEscape(string s)
+        {
+            if (s == null) return "";
+            var sb = new System.Text.StringBuilder(s.Length + 8);
+            foreach (var ch in s)
+            {
+                switch (ch)
+                {
+                    case '\"': sb.Append("\\\""); break;
+                    case '\\': sb.Append("\\\\"); break;
+                    case '\b': sb.Append("\\b"); break;
+                    case '\f': sb.Append("\\f"); break;
+                    case '\n': sb.Append("\\n"); break;
+                    case '\r': sb.Append("\\r"); break;
+                    case '\t': sb.Append("\\t"); break;
+                    default:
+                        if (ch < 0x20) sb.AppendFormat("\\u{0:x4}", (int)ch);
+                        else sb.Append(ch);
+                        break;
+                }
+            }
+            return sb.ToString();
+        }
+
+        static string Md5(string s)
+        {
+            using (var md5 = System.Security.Cryptography.MD5.Create())
+            {
+                var bytes = md5.ComputeHash(System.Text.Encoding.UTF8.GetBytes(s));
+                var sb = new System.Text.StringBuilder(32);
+                foreach (var b in bytes) sb.Append(b.ToString("x2"));
+                return sb.ToString();
+            }
+        }
+
+        // Tiny JSON extractor (no Newtonsoft); good enough for Baidu's simple flat response
+        static string ExtractJson(string json, string field)
+        {
+            int idx = json.IndexOf("\"" + field + "\"");
+            if (idx < 0) return null;
+            int colon = json.IndexOf(":", idx);
+            if (colon < 0) return null;
+            int i = colon + 1;
+            while (i < json.Length && (json[i] == ' ' || json[i] == '\t')) i++;
+            if (i >= json.Length) return null;
+            if (json[i] == '\"')
+            {
+                i++;
+                int end = i;
+                var sb = new System.Text.StringBuilder();
+                while (end < json.Length && json[end] != '\"')
+                {
+                    if (json[end] == '\\' && end + 1 < json.Length)
+                    {
+                        char nx = json[end + 1];
+                        if (nx == 'n') sb.Append('\n');
+                        else if (nx == 't') sb.Append('\t');
+                        else if (nx == '\"') sb.Append('\"');
+                        else if (nx == '\\') sb.Append('\\');
+                        else if (nx == 'u' && end + 5 < json.Length)
+                        {
+                            int code; if (int.TryParse(json.Substring(end + 2, 4), System.Globalization.NumberStyles.HexNumber, null, out code)) sb.Append((char)code);
+                            end += 4;
+                        }
+                        else sb.Append(nx);
+                        end += 2;
+                    }
+                    else { sb.Append(json[end]); end++; }
+                }
+                return sb.ToString();
+            }
+            else
+            {
+                int end = i;
+                while (end < json.Length && json[end] != ',' && json[end] != '}') end++;
+                return json.Substring(i, end - i).Trim();
+            }
+        }
+
+        static List<string> ExtractAllDst(string json)
+        {
+            var list = new List<string>();
+            int from = 0;
+            while (true)
+            {
+                int idx = json.IndexOf("\"dst\"", from);
+                if (idx < 0) break;
+                from = idx + 5;
+                string s = ExtractJson(json.Substring(idx), "dst");
+                if (s != null) list.Add(s);
+            }
+            return list;
+        }
+    }
+
     public static class AdminUtils
     {
         // Environment.OSVersion lies on Win8.1+ when the app has no manifest; use RtlGetVersion which always returns the real value.
@@ -1155,6 +1374,244 @@ namespace PowerAudioManager
         }
     }
 
+    public class TranslateWindow : Window
+    {
+        TextBox _input, _output;
+        ComboBox _fromBox, _toBox;
+        TextBlock _statusBlock;
+        Button _btnGo, _btnCopy, _btnSwap;
+
+        public TranslateWindow()
+        {
+            Title = "OneBox · 翻译";
+            Width = 720; Height = 520;
+            MinWidth = 460; MinHeight = 320;
+            WindowStartupLocation = WindowStartupLocation.CenterScreen;
+            WindowStyle = WindowStyle.None;
+            ResizeMode = ResizeMode.CanResizeWithGrip;
+            AllowsTransparency = true;
+            Background = new SolidColorBrush(Color.FromRgb(28, 26, 40));
+            BuildUI();
+            // Restore last position
+            double sl, st, sw, sh;
+            if (AppPrefs.GetDouble("Translate.Left", out sl) && AppPrefs.GetDouble("Translate.Top", out st)) { Left = sl; Top = st; }
+            if (AppPrefs.GetDouble("Translate.Width", out sw) && sw > 300) Width = sw;
+            if (AppPrefs.GetDouble("Translate.Height", out sh) && sh > 200) Height = sh;
+            LocationChanged += (s, e) => { if (IsLoaded) { AppPrefs.SetDouble("Translate.Left", Left); AppPrefs.SetDouble("Translate.Top", Top); } };
+            SizeChanged += (s, e) => { if (IsLoaded) { AppPrefs.SetDouble("Translate.Width", Width); AppPrefs.SetDouble("Translate.Height", Height); } };
+        }
+
+        void BuildUI()
+        {
+            var rootGrid = new Grid();
+            rootGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            rootGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+
+            // Custom title bar (OneBox style)
+            var titleBar = new DockPanel {
+                Background = new SolidColorBrush(Color.FromRgb(34, 32, 50)),
+                Height = 36,
+                LastChildFill = true
+            };
+            var titleText = new TextBlock {
+                Text = "  \uD83D\uDCDD  OneBox · 翻译",
+                Foreground = Brushes.White,
+                FontSize = 13,
+                FontWeight = FontWeights.SemiBold,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            var closeBtn = new Button {
+                Content = "\u2715",
+                Width = 36, Height = 36,
+                FontSize = 12,
+                Foreground = new SolidColorBrush(Color.FromRgb(190, 188, 220)),
+                Background = Brushes.Transparent,
+                BorderBrush = Brushes.Transparent,
+                Cursor = Cursors.Hand,
+                ToolTip = "关闭"
+            };
+            closeBtn.Click += (s, e) => Close();
+            DockPanel.SetDock(closeBtn, Dock.Right);
+            titleBar.Children.Add(closeBtn);
+            titleBar.Children.Add(titleText);
+            titleBar.MouseLeftButtonDown += (s, e) => { try { DragMove(); } catch { } };
+            Grid.SetRow(titleBar, 0); rootGrid.Children.Add(titleBar);
+
+            var grid = new Grid { Margin = new Thickness(12) };
+            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            Grid.SetRow(grid, 1); rootGrid.Children.Add(grid);
+
+            // Top toolbar
+            var bar = new DockPanel { Margin = new Thickness(0, 0, 0, 8), LastChildFill = false };
+            _fromBox = MakeLangBox(true);
+            _toBox = MakeLangBox(false);
+            _btnSwap = new Button { Content = "\u21C4", Width = 32, Height = 28, FontSize = 14, Margin = new Thickness(4, 0, 4, 0), ToolTip = "交换源/目标语言" };
+            _btnSwap.Click += (s, e) => SwapLanguages();
+            DockPanel.SetDock(_fromBox, Dock.Left);
+            DockPanel.SetDock(_btnSwap, Dock.Left);
+            DockPanel.SetDock(_toBox, Dock.Left);
+            bar.Children.Add(_fromBox);
+            bar.Children.Add(_btnSwap);
+            bar.Children.Add(_toBox);
+            _btnGo = new Button { Content = "翻译", Width = 80, Height = 28, FontSize = 12 };
+            _btnGo.Click += (s, e) => RunTranslation(_input.Text);
+            DockPanel.SetDock(_btnGo, Dock.Right);
+            bar.Children.Add(_btnGo);
+            Grid.SetRow(bar, 0); grid.Children.Add(bar);
+
+            _input = MakeBox(false, "在此输入或粘贴文本，按 Ctrl+Enter 翻译");
+            _input.PreviewKeyDown += (s, e) => {
+                if (e.Key == Key.Enter && (Keyboard.Modifiers & ModifierKeys.Control) != 0)
+                { e.Handled = true; RunTranslation(_input.Text); }
+            };
+            Grid.SetRow(_input, 1); grid.Children.Add(_input);
+
+            // Status / actions row
+            var midBar = new DockPanel { Margin = new Thickness(0, 8, 0, 8), LastChildFill = true };
+            _statusBlock = new TextBlock { Foreground = new SolidColorBrush(Color.FromRgb(190, 188, 220)), FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
+            _btnCopy = new Button { Content = "复制译文", Width = 80, Height = 28, FontSize = 12 };
+            _btnCopy.Click += (s, e) => { try { if (!string.IsNullOrEmpty(_output.Text)) Clipboard.SetText(_output.Text); _statusBlock.Text = "已复制"; } catch { } };
+            DockPanel.SetDock(_btnCopy, Dock.Right);
+            midBar.Children.Add(_btnCopy);
+            midBar.Children.Add(_statusBlock);
+            Grid.SetRow(midBar, 2); grid.Children.Add(midBar);
+
+            _output = MakeBox(true, "");
+            Grid.SetRow(_output, 3); grid.Children.Add(_output);
+
+            var foot = new TextBlock { Text = "由百度翻译提供 · Ctrl+Enter 触发翻译 · Ctrl+Shift+T 全局翻译剪贴板", Foreground = new SolidColorBrush(Color.FromRgb(140, 138, 180)), FontSize = 10, Margin = new Thickness(0, 8, 0, 0), HorizontalAlignment = HorizontalAlignment.Center };
+            Grid.SetRow(foot, 4); grid.Children.Add(foot);
+
+            // Outer border for visual finish
+            var border = new Border {
+                BorderBrush = new SolidColorBrush(Color.FromRgb(80, 75, 120)),
+                BorderThickness = new Thickness(1),
+                Child = rootGrid
+            };
+            Content = border;
+        }
+
+        TextBox MakeBox(bool readOnly, string placeholder)
+        {
+            return new TextBox {
+                IsReadOnly = readOnly,
+                AcceptsReturn = true,
+                TextWrapping = TextWrapping.Wrap,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                FontSize = 13,
+                Padding = new Thickness(8),
+                Background = new SolidColorBrush(readOnly ? Color.FromRgb(24, 22, 36) : Color.FromRgb(42, 39, 60)),
+                Foreground = readOnly ? new SolidColorBrush(Color.FromRgb(220, 218, 245)) : Brushes.White,
+                BorderBrush = new SolidColorBrush(Color.FromRgb(80, 75, 120)),
+                BorderThickness = new Thickness(1),
+                ToolTip = placeholder
+            };
+        }
+
+        ComboBox MakeLangBox(bool isFrom)
+        {
+            var cb = new ComboBox {
+                Width = 110, Height = 28,
+                FontSize = 12,
+                Background = Brushes.White,
+                Foreground = Brushes.Black,
+                BorderBrush = new SolidColorBrush(Color.FromRgb(80, 75, 120))
+            };
+            // Force any TextBlock inside the ComboBox (selected-display + popup items) to black on white.
+            var tbStyle = new Style(typeof(TextBlock));
+            tbStyle.Setters.Add(new Setter(TextBlock.ForegroundProperty, Brushes.Black));
+            cb.Resources.Add(typeof(TextBlock), tbStyle);
+            string[][] codes = isFrom
+                ? new[] { new[] { "auto","自动检测" }, new[] { "zh","中文" }, new[] { "en","英语" }, new[] { "jp","日语" }, new[] { "kor","韩语" }, new[] { "fra","法语" }, new[] { "de","德语" }, new[] { "ru","俄语" }, new[] { "spa","西班牙语" }, new[] { "ara","阿拉伯语" } }
+                : new[] { new[] { "zh","中文" }, new[] { "en","英语" }, new[] { "jp","日语" }, new[] { "kor","韩语" }, new[] { "fra","法语" }, new[] { "de","德语" }, new[] { "ru","俄语" }, new[] { "spa","西班牙语" }, new[] { "ara","阿拉伯语" } };
+            foreach (var p in codes)
+            {
+                cb.Items.Add(new ComboBoxItem
+                {
+                    Content = p[1],
+                    Tag = p[0],
+                    Foreground = Brushes.Black,
+                    Background = Brushes.White,
+                    Padding = new Thickness(8, 4, 8, 4)
+                });
+            }
+            // Make sure the dropdown popup itself has a dark background and visible items.
+            // WPF defaults paint items on system white, ignoring item.Background. We override the
+            // hosted ItemsPresenter via a Style with template trigger.
+            var itemStyle = new Style(typeof(ComboBoxItem));
+            itemStyle.Setters.Add(new Setter(ComboBoxItem.BackgroundProperty, Brushes.White));
+            itemStyle.Setters.Add(new Setter(ComboBoxItem.ForegroundProperty, Brushes.Black));
+            itemStyle.Setters.Add(new Setter(ComboBoxItem.PaddingProperty, new Thickness(8, 4, 8, 4)));
+            var hover = new Trigger { Property = ComboBoxItem.IsHighlightedProperty, Value = true };
+            hover.Setters.Add(new Setter(ComboBoxItem.BackgroundProperty, new SolidColorBrush(Color.FromRgb(220, 215, 245))));
+            hover.Setters.Add(new Setter(ComboBoxItem.ForegroundProperty, Brushes.Black));
+            itemStyle.Triggers.Add(hover);
+            cb.ItemContainerStyle = itemStyle;
+            string saved;
+            using (var k = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\PowerAudioManager\App"))
+                saved = k == null ? null : (k.GetValue(isFrom ? "Translate.From" : "Translate.To") as string);
+            int idx = 0;
+            for (int i = 0; i < codes.Length; i++) if (codes[i][0] == saved) { idx = i; break; }
+            if (saved == null) idx = isFrom ? 0 : 0; // auto / zh
+            cb.SelectedIndex = idx;
+            cb.SelectionChanged += (s, e) => {
+                var item = cb.SelectedItem as ComboBoxItem;
+                if (item != null)
+                {
+                    using (var k = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(@"Software\PowerAudioManager\App"))
+                        k.SetValue(isFrom ? "Translate.From" : "Translate.To", item.Tag.ToString());
+                }
+            };
+            return cb;
+        }
+
+        void SwapLanguages()
+        {
+            var fItem = _fromBox.SelectedItem as ComboBoxItem;
+            var tItem = _toBox.SelectedItem as ComboBoxItem;
+            if (fItem == null || tItem == null) return;
+            string fTag = fItem.Tag.ToString();
+            if (fTag == "auto") return; // cannot put auto on the right side
+            // Find matching items
+            foreach (ComboBoxItem ci in _fromBox.Items) if ((ci.Tag as string) == tItem.Tag.ToString()) { _fromBox.SelectedItem = ci; break; }
+            foreach (ComboBoxItem ci in _toBox.Items) if ((ci.Tag as string) == fTag) { _toBox.SelectedItem = ci; break; }
+            if (!string.IsNullOrEmpty(_output.Text))
+            {
+                var temp = _input.Text;
+                _input.Text = _output.Text;
+                _output.Text = temp;
+            }
+        }
+
+        public void RunTranslation(string text)
+        {
+            if (text == null) text = "";
+            _input.Text = text;
+            if (string.IsNullOrEmpty(text)) { _output.Text = ""; return; }
+            var fItem = _fromBox.SelectedItem as ComboBoxItem;
+            var tItem = _toBox.SelectedItem as ComboBoxItem;
+            string from = fItem == null ? "auto" : fItem.Tag.ToString();
+            string to = tItem == null ? "zh" : tItem.Tag.ToString();
+            _statusBlock.Text = "翻译中...";
+            _btnGo.IsEnabled = false;
+            _output.Text = "";
+            System.Threading.ThreadPool.QueueUserWorkItem(state =>
+            {
+                var r = TranslateService.Translate(text, from, to);
+                Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    _btnGo.IsEnabled = true;
+                    if (!string.IsNullOrEmpty(r.Error)) { _output.Text = ""; _statusBlock.Text = "失败: " + r.Error; }
+                    else { _output.Text = r.Translation ?? ""; _statusBlock.Text = "完成" + (string.IsNullOrEmpty(r.DetectedFrom) ? "" : " · 检测到 " + r.DetectedFrom); }
+                }));
+            });
+        }
+    }
+
     public class MainWindow : Window
     {
         private List<PowerPlanInfo> _powerPlans;
@@ -1181,6 +1638,7 @@ namespace PowerAudioManager
         private bool _volSliderUpdating;
         private TextBlock _volLabel;
         private TextBlock _memStatusLabel;
+        private StackPanel _contentPanel;
 
         static readonly Color AccentColor = Color.FromRgb(142, 140, 216);   // 紫影 #8E8CD8
         static readonly Color BgColor = Color.FromRgb(28, 26, 40);          // 深底，与紫影协调
@@ -1357,6 +1815,7 @@ namespace PowerAudioManager
             _root.Children.Add(titleBar);
 
             var contentPanel = new StackPanel { Margin = new Thickness(12, 8, 12, 12) };
+            _contentPanel = contentPanel;
 
             var powerHeader = new TextBlock
             {
@@ -1459,6 +1918,23 @@ namespace PowerAudioManager
             StyleButton(memBtn, false);
             memBtn.Click += (s, e) => CleanMemory();
             contentPanel.Children.Add(memBtn);
+
+            // Translate section
+            contentPanel.Children.Add(new Border {
+                Height = 1,
+                Background = new SolidColorBrush(BorderColor),
+                Margin = new Thickness(0, 12, 0, 12)
+            });
+            var trBtn = new Button {
+                Content = "\uD83D\uDCDD  打开翻译窗口",
+                Padding = new Thickness(10, 6, 10, 6),
+                FontSize = 12,
+                Cursor = Cursors.Hand,
+                ToolTip = "全局快捷键：Ctrl+Shift+T 自动翻译剪贴板"
+            };
+            StyleButton(trBtn, false);
+            trBtn.Click += (s, e) => OpenTranslateWindow(null);
+            contentPanel.Children.Add(trBtn);
 
             _root.Children.Add(contentPanel);
             mainBorder.Child = _root;
@@ -1681,6 +2157,41 @@ namespace PowerAudioManager
                 if (++hits >= 3) t.Stop();
             };
             t.Start();
+        }
+
+        void DoTranslate(string text)
+        {
+            // Compatibility wrapper: open the dedicated window with this initial text
+            OpenTranslateWindow(text);
+        }
+
+        TranslateWindow _translateWindow;
+        void OpenTranslateWindow(string initialText)
+        {
+            if (_translateWindow == null || !_translateWindow.IsLoaded)
+            {
+                _translateWindow = new TranslateWindow { FontFamily = this.FontFamily };
+                _translateWindow.Closed += (s, e) => _translateWindow = null;
+            }
+            _translateWindow.Show();
+            _translateWindow.Activate();
+            if (!string.IsNullOrEmpty(initialText)) _translateWindow.RunTranslation(initialText);
+        }
+
+        void TranslateFromClipboard()
+        {
+            try
+            {
+                if (Clipboard.ContainsText())
+                {
+                    string txt = Clipboard.GetText();
+                    if (!string.IsNullOrEmpty(txt))
+                    {
+                        OpenTranslateWindow(txt);
+                    }
+                }
+            }
+            catch { }
         }
 
         void UpdateMemoryUI()
@@ -1999,6 +2510,12 @@ namespace PowerAudioManager
             if (msg == WM_HOTKEY)
             {
                 int id = wParam.ToInt32();
+                if (id == HOTKEY_ID_TRANSLATE)
+                {
+                    TranslateFromClipboard();
+                    handled = true;
+                    return IntPtr.Zero;
+                }
                 string devName;
                 if (_hotkeyMap.TryGetValue(id, out devName))
                 {
@@ -2041,6 +2558,7 @@ namespace PowerAudioManager
         const uint MOD_ALT = 0x1, MOD_CONTROL = 0x2;
         const int WM_HOTKEY = 0x0312;
         const int HOTKEY_ID_BASE = 0xB000;
+        const int HOTKEY_ID_TRANSLATE = 0xBFFF;
         Dictionary<int, string> _hotkeyMap = new Dictionary<int, string>();
         IntPtr _hotkeyHwnd = IntPtr.Zero;
 
@@ -2049,6 +2567,7 @@ namespace PowerAudioManager
             if (_hotkeyHwnd == IntPtr.Zero) return;
             foreach (var id in _hotkeyMap.Keys) UnregisterHotKey(_hotkeyHwnd, id);
             _hotkeyMap.Clear();
+            UnregisterHotKey(_hotkeyHwnd, HOTKEY_ID_TRANSLATE);
         }
 
         void RefreshHotkeys()
@@ -2057,6 +2576,9 @@ namespace PowerAudioManager
             // Unregister all known IDs
             foreach (var id in _hotkeyMap.Keys) UnregisterHotKey(_hotkeyHwnd, id);
             _hotkeyMap.Clear();
+            // Translate hotkey: Ctrl+Shift+T (VK_T = 0x54)
+            UnregisterHotKey(_hotkeyHwnd, HOTKEY_ID_TRANSLATE);
+            RegisterHotKey(_hotkeyHwnd, HOTKEY_ID_TRANSLATE, MOD_CONTROL | 0x4, 0x54);
             int nextId = HOTKEY_ID_BASE;
             foreach (var kv in DevicePrefs.GetAllHotkeys())
             {
@@ -2084,25 +2606,28 @@ namespace PowerAudioManager
             if (_isExpanded)
             {
                 btn.Content = "\u25BC"; // pointing down: click to collapse
-                _powerSection.Visibility = Visibility.Visible;
-                _audioSection.Visibility = Visibility.Visible;
-                if (_volSlider != null) ((FrameworkElement)_volSlider.Parent).Visibility = Visibility.Visible;
-                if (_memStatusLabel != null) _memStatusLabel.Visibility = Visibility.Visible;
+                if (_contentPanel != null) _contentPanel.Visibility = Visibility.Visible;
                 SizeToContent = SizeToContent.Height;
             }
             else
             {
                 btn.Content = "\u25B2"; // pointing up: click to expand
-                _powerSection.Visibility = Visibility.Collapsed;
-                _audioSection.Visibility = Visibility.Collapsed;
-                if (_volSlider != null) ((FrameworkElement)_volSlider.Parent).Visibility = Visibility.Collapsed;
-                if (_memStatusLabel != null) _memStatusLabel.Visibility = Visibility.Collapsed;
-                SizeToContent = SizeToContent.Manual;
-                Height = 38;
+                if (_contentPanel != null) _contentPanel.Visibility = Visibility.Collapsed;
+                SizeToContent = SizeToContent.Height; // let WPF compute exact title-bar height
+                MinHeight = 36;
             }
-            // Re-anchor: keep bottom edge fixed
-            Dispatcher.BeginInvoke(new Action(() => { Top = bottom - ActualHeight; }),
-                System.Windows.Threading.DispatcherPriority.Loaded);
+            // Re-anchor: keep bottom edge fixed. Wait for the next LayoutUpdated when ActualHeight is correct.
+            EventHandler reanchor = null;
+            reanchor = (xs, xe) =>
+            {
+                LayoutUpdated -= reanchor;
+                double newTop = bottom - ActualHeight;
+                var wa = SystemParameters.WorkArea;
+                if (newTop < wa.Top) newTop = wa.Top;
+                if (newTop + ActualHeight > wa.Bottom) newTop = wa.Bottom - ActualHeight;
+                Top = newTop;
+            };
+            LayoutUpdated += reanchor;
         }
     }
 
