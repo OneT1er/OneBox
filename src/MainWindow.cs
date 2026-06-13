@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
@@ -8,6 +8,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using System.Windows.Documents;
 using System.Windows.Threading;
 using System.IO;
 using Microsoft.Win32;
@@ -334,12 +335,13 @@ namespace PowerAudioManager
                 Margin = new Thickness(0, 12, 0, 12)
             });
             var memHeader = new TextBlock {
-                Text = "\uD83D\uDDD1 内存清理", FontFamily = EmojiFont,  // 🗑 Wastebasket (U+1F5D1) — present in Segoe UI Symbol
                 Foreground = new SolidColorBrush(AccentColor),
                 FontSize = 12,
                 FontWeight = FontWeights.SemiBold,
                 Margin = new Thickness(0, 0, 0, 6)
             };
+            memHeader.Inlines.Add(new Run("🗑") { FontFamily = EmojiFont });
+            memHeader.Inlines.Add(new Run(" 内存清理"));
             contentPanel.Children.Add(memHeader);
             _memStatusLabel = new TextBlock {
                 Foreground = new SolidColorBrush(TextSecondary),
@@ -379,10 +381,15 @@ namespace PowerAudioManager
                 Background = new SolidColorBrush(BorderColor),
                 Margin = new Thickness(0, 12, 0, 12)
             });
-            var trBtn = new Button {
-                Content = "\uD83D\uDCDD  打开翻译窗口", FontFamily = EmojiFont,
-                Padding = new Thickness(10, 6, 10, 6),
+            var trContent = new TextBlock {
                 FontSize = 12,
+                Foreground = new SolidColorBrush(TextSecondary)
+            };
+            trContent.Inlines.Add(new Run("\uD83D\uDCDD") { FontFamily = EmojiFont });
+            trContent.Inlines.Add(new Run("  打开翻译窗口"));
+            var trBtn = new Button {
+                Content = trContent,
+                Padding = new Thickness(10, 6, 10, 6),
                 Cursor = Cursors.Hand,
                 ToolTip = "全局快捷键：Ctrl+Shift+T 自动翻译剪贴板"
             };
