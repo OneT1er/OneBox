@@ -1,3 +1,4 @@
-﻿src/output/
-tray-check.png
+src/output/
 *.log
+*.user
+onebox-emoji-test.png

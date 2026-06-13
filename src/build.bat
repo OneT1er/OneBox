@@ -19,12 +19,25 @@ echo Compiling OneBox...
   /reference:"System.Core.dll" ^
   /reference:"System.Drawing.dll" ^
   /reference:"System.Windows.Forms.dll" ^
-  "%SRC%App.cs"
+  "%SRC%App.cs" ^
+  "%SRC%Native.cs" ^
+  "%SRC%Models.cs" ^
+  "%SRC%Prefs.cs" ^
+  "%SRC%PowerPlanService.cs" ^
+  "%SRC%AudioDevices.cs" ^
+  "%SRC%VolumeControl.cs" ^
+  "%SRC%MemoryCleaner.cs" ^
+  "%SRC%TranslateService.cs" ^
+  "%SRC%AdminUtils.cs" ^
+  "%SRC%Dialogs.cs" ^
+  "%SRC%MainWindow.cs"
 
 if %ERRORLEVEL% EQU 0 (
     echo Build successful! Output: %OUTDIR%\OneBox.exe
     copy /Y "%SRC%app.ico" "%OUTDIR%\app.ico" >nul
     copy /Y "%SRC%app.png" "%OUTDIR%\app.png" >nul
+    copy /Y "%SRC%icon-power.png" "%OUTDIR%\icon-power.png" >nul
+    copy /Y "%SRC%icon-audio.png" "%OUTDIR%\icon-audio.png" >nul
 ) else (
     echo Build failed!
 )
