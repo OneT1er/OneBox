@@ -7,9 +7,10 @@ set SRC=%~dp0
 
 if not exist "%OUTDIR%" mkdir "%OUTDIR%"
 
-echo Compiling PowerAudioManager...
+echo Compiling OneBox...
 
-"%CSC%" /nologo /target:winexe /out:"%OUTDIR%\PowerAudioManager.exe" /codepage:65001 ^
+"%CSC%" /nologo /target:winexe /out:"%OUTDIR%\OneBox.exe" /codepage:65001 ^
+  /win32icon:"%SRC%app.ico" ^
   /reference:"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\WPF\PresentationCore.dll" ^
   /reference:"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\WPF\PresentationFramework.dll" ^
   /reference:"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\WPF\WindowsBase.dll" ^
@@ -21,7 +22,9 @@ echo Compiling PowerAudioManager...
   "%SRC%App.cs"
 
 if %ERRORLEVEL% EQU 0 (
-    echo Build successful! Output: %OUTDIR%\PowerAudioManager.exe
+    echo Build successful! Output: %OUTDIR%\OneBox.exe
+    copy /Y "%SRC%app.ico" "%OUTDIR%\app.ico" >nul
+    copy /Y "%SRC%app.png" "%OUTDIR%\app.png" >nul
 ) else (
     echo Build failed!
 )
