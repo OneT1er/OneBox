@@ -283,6 +283,50 @@ namespace PowerAudioManager
             if (AppPrefs.GetDouble("Translate.Height", out sh) && sh > 200) Height = sh;
             LocationChanged += (s, e) => { if (IsLoaded) { AppPrefs.SetDouble("Translate.Left", Left); AppPrefs.SetDouble("Translate.Top", Top); } };
             SizeChanged += (s, e) => { if (IsLoaded) { AppPrefs.SetDouble("Translate.Width", Width); AppPrefs.SetDouble("Translate.Height", Height); } };
+            // Recover from display config changes (4K -> 1080p, monitor unplug, DPI scale change).
+            EventHandler displayHandler = (ss, ee) =>
+            {
+                try { Dispatcher.BeginInvoke(new Action(ClampToWorkArea)); } catch { }
+            };
+            Microsoft.Win32.SystemEvents.DisplaySettingsChanged += displayHandler;
+            this.Closed += (s, e) =>
+            {
+                try { Microsoft.Win32.SystemEvents.DisplaySettingsChanged -= displayHandler; } catch { }
+            };
+            this.Loaded += (s, e) => ClampToWorkArea();
+        }
+
+        void ClampToWorkArea()
+        {
+            try
+            {
+                var wa = SystemParameters.WorkArea;
+                double w = ActualWidth > 0 ? ActualWidth : Width;
+                double h = ActualHeight > 0 ? ActualHeight : Height;
+                if (double.IsNaN(w) || w <= 0) w = 720;
+                if (double.IsNaN(h) || h <= 0) h = 520;
+                double left = Left;
+                double top = Top;
+                bool offscreen = double.IsNaN(left) || double.IsNaN(top)
+                    || left + w <= wa.Left + 8 || left >= wa.Right - 8
+                    || top + h <= wa.Top + 8  || top >= wa.Bottom - 8;
+                if (offscreen)
+                {
+                    Left = wa.Left + Math.Max(0, (wa.Width - w) / 2);
+                    Top  = wa.Top  + Math.Max(0, (wa.Height - h) / 2);
+                    return;
+                }
+                // Shrink the window if the new work area is smaller than its restored size.
+                if (w > wa.Width)  { Width  = wa.Width;  w = wa.Width; }
+                if (h > wa.Height) { Height = wa.Height; h = wa.Height; }
+                if (left + w > wa.Right)  left = wa.Right - w;
+                if (top  + h > wa.Bottom) top  = wa.Bottom - h;
+                if (left < wa.Left) left = wa.Left;
+                if (top  < wa.Top)  top  = wa.Top;
+                if (left != Left) Left = left;
+                if (top  != Top)  Top  = top;
+            }
+            catch { }
         }
 
         void BuildUI()

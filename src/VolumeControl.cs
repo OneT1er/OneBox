@@ -45,16 +45,6 @@ namespace PowerAudioManager
             int Activate(ref Guid iid, int dwClsCtx, IntPtr activationParams, [MarshalAs(UnmanagedType.IUnknown)] out object ppInterface);
         }
 
-        [ComImport, Guid("A95664D2-9614-4F35-A746-DE8DB63617E6"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-        interface IMMDeviceEnumeratorVol
-        {
-            int EnumAudioEndpoints(int dataFlow, int stateMask, out IntPtr devices);
-            int GetDefaultAudioEndpoint(int dataFlow, int role, [MarshalAs(UnmanagedType.IUnknown)] out object device);
-        }
-
-        [ComImport, Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")]
-        class MMDeviceEnumeratorVol { }
-
         static IAudioEndpointVolume _cachedEp;
 
         static IAudioEndpointVolume GetEndpoint()
@@ -62,12 +52,22 @@ namespace PowerAudioManager
             if (_cachedEp != null) return _cachedEp;
             try
             {
-                var e = (IMMDeviceEnumeratorVol)new MMDeviceEnumeratorVol();
-                object dev;
-                if (e.GetDefaultAudioEndpoint(0, 0, out dev) != 0) return null;
+                // Reuse the single MMDeviceEnumerator2 ComImport class declared in AudioDevices.cs
+                // to avoid CLR's "duplicate CLSID -> different managed types" confusion.
+                var e = (AudioDevices.IMMDeviceEnumerator2)new AudioDevices.MMDeviceEnumerator2();
+                IntPtr pDev;
+                if (e.GetDefaultAudioEndpoint(0, 0, out pDev) != 0 || pDev == IntPtr.Zero)
+                {
+                    Marshal.ReleaseComObject(e);
+                    return null;
+                }
+                var dev = (IMMDeviceVol)Marshal.GetObjectForIUnknown(pDev);
                 var iid = new Guid("5CDF2C82-841E-4546-9722-0CF74078229A");
                 object ep;
-                ((IMMDeviceVol)dev).Activate(ref iid, 1, IntPtr.Zero, out ep);
+                dev.Activate(ref iid, 1, IntPtr.Zero, out ep);
+                Marshal.ReleaseComObject(dev);
+                Marshal.Release(pDev);
+                Marshal.ReleaseComObject(e);
                 _cachedEp = (IAudioEndpointVolume)ep;
                 return _cachedEp;
             }

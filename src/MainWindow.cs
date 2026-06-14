@@ -138,10 +138,61 @@ namespace PowerAudioManager
                 _deviceWatcher.OnChange = () => Dispatcher.BeginInvoke(new Action(() => { VolumeControl.Invalidate(); LoadData(); ScheduleVolumeRefresh(); }));
                 Dispatcher.BeginInvoke(new Action(() => { try { TrimWorkingSet(); } catch { } }),
                     System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+                // Re-clamp window into the work area when display config changes (e.g. 4K -> 1080p,
+                // monitor unplugged, DPI / scaling change). SystemEvents callbacks fire on a
+                // worker thread, so always hop back to the UI dispatcher.
+                Microsoft.Win32.SystemEvents.DisplaySettingsChanged += OnDisplaySettingsChanged;
+                Microsoft.Win32.SystemEvents.UserPreferenceChanged += OnUserPreferenceChanged;
             }
             catch
             {
             }
+        }
+
+        void OnDisplaySettingsChanged(object sender, EventArgs e)
+        {
+            try { Dispatcher.BeginInvoke(new Action(ClampToWorkArea)); } catch { }
+        }
+
+        void OnUserPreferenceChanged(object sender, Microsoft.Win32.UserPreferenceChangedEventArgs e)
+        {
+            // DPI / desktop changes can also move the work area on us.
+            if (e.Category == Microsoft.Win32.UserPreferenceCategory.Desktop ||
+                e.Category == Microsoft.Win32.UserPreferenceCategory.General)
+            {
+                try { Dispatcher.BeginInvoke(new Action(ClampToWorkArea)); } catch { }
+            }
+        }
+
+        void ClampToWorkArea()
+        {
+            try
+            {
+                var wa = SystemParameters.WorkArea;
+                double w = ActualWidth > 0 ? ActualWidth : Width;
+                double h = ActualHeight > 0 ? ActualHeight : Height;
+                if (double.IsNaN(w) || w <= 0) w = 280;
+                if (double.IsNaN(h) || h <= 0) h = 36;
+                double left = Left;
+                double top = Top;
+                bool offscreen = double.IsNaN(left) || double.IsNaN(top)
+                    || left + w <= wa.Left + 8 || left >= wa.Right - 8
+                    || top + h <= wa.Top + 8  || top >= wa.Bottom - 8;
+                if (offscreen)
+                {
+                    // Lost display – snap back to the top-right of the new primary work area.
+                    Left = wa.Right - w - 20;
+                    Top  = wa.Top + 20;
+                    return;
+                }
+                if (left + w > wa.Right)  left = wa.Right - w;
+                if (top  + h > wa.Bottom) top  = wa.Bottom - h;
+                if (left < wa.Left) left = wa.Left;
+                if (top  < wa.Top)  top  = wa.Top;
+                if (left != Left) Left = left;
+                if (top  != Top)  Top  = top;
+            }
+            catch { }
         }
 
         void BuildUI()
@@ -997,6 +1048,8 @@ namespace PowerAudioManager
                         (ss, ee) => { ShowWindow(); CleanerSettingsDialog.Show(this); }));
                 _trayMenu.Items.Add("退出", null, (s, e) => {
                     if (_deviceWatcher != null) _deviceWatcher.Stop();
+                    try { Microsoft.Win32.SystemEvents.DisplaySettingsChanged -= OnDisplaySettingsChanged; } catch { }
+                    try { Microsoft.Win32.SystemEvents.UserPreferenceChanged -= OnUserPreferenceChanged; } catch { }
                     if (_winFormsTray != null) { _winFormsTray.Visible = false; _winFormsTray.Dispose(); }
                     Application.Current.Shutdown();
                 });

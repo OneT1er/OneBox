@@ -60,7 +60,7 @@ namespace PowerAudioManager
         #region Hot-plug notifications
 
         [ComImport, Guid("A95664D2-9614-4F35-A746-DE8DB63617E6"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-        interface IMMDeviceEnumerator2
+        public interface IMMDeviceEnumerator2
         {
             int EnumAudioEndpoints(int dataFlow, int stateMask, out IntPtr devices);
             int GetDefaultAudioEndpoint(int dataFlow, int role, out IntPtr device);
@@ -70,7 +70,7 @@ namespace PowerAudioManager
         }
 
         [ComImport, Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")]
-        class MMDeviceEnumerator2 { }
+        public class MMDeviceEnumerator2 { }
 
         [ComImport, Guid("7991EEC9-7E89-4D85-8390-6C703CEC60C0"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
         public interface IMMNotificationClient
@@ -89,13 +89,36 @@ namespace PowerAudioManager
         {
             public Action OnChange;
             IMMDeviceEnumerator2 _enumerator;
+            DispatcherTimer _pollTimer;
+            string _lastDefaultId = "";
             public DeviceWatcher()
             {
-                _enumerator = (IMMDeviceEnumerator2)new MMDeviceEnumerator2();
-                _enumerator.RegisterEndpointNotificationCallback(this);
+                try
+                {
+                    _enumerator = (IMMDeviceEnumerator2)new MMDeviceEnumerator2();
+                    _enumerator.RegisterEndpointNotificationCallback(this);
+                }
+                catch { }
+
+                // Belt-and-suspenders: COM callbacks can be flaky across STA boundaries.
+                // Poll the default device id every second; if it changed, fire OnChange.
+                _lastDefaultId = GetCurrentDefaultId();
+                _pollTimer = new DispatcherTimer(DispatcherPriority.Background)
+                { Interval = TimeSpan.FromSeconds(1) };
+                _pollTimer.Tick += (s, e) =>
+                {
+                    string cur = GetCurrentDefaultId();
+                    if (cur != _lastDefaultId)
+                    {
+                        _lastDefaultId = cur;
+                        Fire();
+                    }
+                };
+                _pollTimer.Start();
             }
             public void Stop()
             {
+                try { if (_pollTimer != null) _pollTimer.Stop(); } catch { }
                 try { _enumerator.UnregisterEndpointNotificationCallback(this); } catch { }
             }
             public void OnDeviceStateChanged(string deviceId, int newState) { Fire(); }
@@ -103,7 +126,26 @@ namespace PowerAudioManager
             public void OnDeviceRemoved(string deviceId) { Fire(); }
             public void OnDefaultDeviceChanged(int dataFlow, int role, string defaultDeviceId) { Fire(); }
             public void OnPropertyValueChanged(string deviceId, PROPERTYKEY key) { }
-            void Fire() { if (OnChange != null) OnChange(); }
+            void Fire() { try { if (OnChange != null) OnChange(); } catch { } }
+
+            static string GetCurrentDefaultId()
+            {
+                try
+                {
+                    var im = (IMMDeviceEnumerator2)new MMDeviceEnumerator2();
+                    IntPtr pDev;
+                    if (im.GetDefaultAudioEndpoint(0, 0, out pDev) != 0 || pDev == IntPtr.Zero)
+                        return "";
+                    var dev = (IMMDeviceForId)Marshal.GetObjectForIUnknown(pDev);
+                    string id;
+                    dev.GetId(out id);
+                    Marshal.ReleaseComObject(dev);
+                    Marshal.Release(pDev);
+                    Marshal.ReleaseComObject(im);
+                    return id ?? "";
+                }
+                catch { return ""; }
+            }
         }
 
         #endregion
@@ -170,11 +212,7 @@ namespace PowerAudioManager
         {
             try
             {
-                // HKEY_CURRENT_USER\\Software\\Microsoft\\Multimedia\\Sound Mapper\\Playback (Vista+) has nothing; the modern way is the Render subkey "Role:0" (eConsole). Actually MMDevices uses a hidden HKLM key. Use COM as fallback.
-                var enumType = Type.GetTypeFromCLSID(new Guid("BCDE0395-E52F-467C-8E3D-C4579291692E"));
-                if (enumType == null) return null;
-                object enumObj = Activator.CreateInstance(enumType);
-                var im = (IMMDeviceEnumerator2)enumObj;
+                var im = (IMMDeviceEnumerator2)new MMDeviceEnumerator2();
                 IntPtr pDev;
                 if (im.GetDefaultAudioEndpoint(0, 0, out pDev) != 0) return null;
                 if (pDev == IntPtr.Zero) return null;
@@ -183,7 +221,7 @@ namespace PowerAudioManager
                 dev.GetId(out id);
                 Marshal.ReleaseComObject(dev);
                 Marshal.Release(pDev);
-                Marshal.ReleaseComObject(enumObj);
+                Marshal.ReleaseComObject(im);
                 if (string.IsNullOrEmpty(id)) return null;
                 // id looks like "{0.0.0.00000000}.{guid}" — return only the guid portion
                 int dot = id.IndexOf("}.");
