@@ -130,21 +130,28 @@ namespace PowerAudioManager
 
             static string GetCurrentDefaultId()
             {
+                object im = null;
                 try
                 {
-                    var im = (IMMDeviceEnumerator2)new MMDeviceEnumerator2();
+                    im = (IMMDeviceEnumerator2)new MMDeviceEnumerator2();
                     IntPtr pDev;
-                    if (im.GetDefaultAudioEndpoint(0, 0, out pDev) != 0 || pDev == IntPtr.Zero)
+                    if (((IMMDeviceEnumerator2)im).GetDefaultAudioEndpoint(0, 0, out pDev) != 0 || pDev == IntPtr.Zero)
                         return "";
                     var dev = (IMMDeviceForId)Marshal.GetObjectForIUnknown(pDev);
-                    string id;
-                    dev.GetId(out id);
-                    Marshal.ReleaseComObject(dev);
-                    Marshal.Release(pDev);
-                    Marshal.ReleaseComObject(im);
-                    return id ?? "";
+                    try
+                    {
+                        string id;
+                        dev.GetId(out id);
+                        return id ?? "";
+                    }
+                    finally
+                    {
+                        Marshal.ReleaseComObject(dev);
+                        Marshal.Release(pDev);
+                    }
                 }
                 catch { return ""; }
+                finally { if (im != null) try { Marshal.ReleaseComObject(im); } catch { } }
             }
         }
 
@@ -210,25 +217,32 @@ namespace PowerAudioManager
         // The default endpoint is the one whose Role->0 value matches; simpler approach: query via MMDeviceEnumerator? we already have COM but want avoid heavy use. Use registry: there is "DefaultEndpointId" under HKEY_CURRENT_USER\\Software\\Microsoft\\Multimedia\\Audio\\.. but most reliable is reading from each device's Properties\\\"{....1da5d803-d492-4edd-8c23-e0c0ffee7f0e}\\\\,7"=1 means active default? That field is unreliable. Cleanest: enumerate active devices and check the user-level role registry under HKCU.
         static string FindDefaultRenderId()
         {
+            object im = null;
             try
             {
-                var im = (IMMDeviceEnumerator2)new MMDeviceEnumerator2();
+                im = (IMMDeviceEnumerator2)new MMDeviceEnumerator2();
                 IntPtr pDev;
-                if (im.GetDefaultAudioEndpoint(0, 0, out pDev) != 0) return null;
+                if (((IMMDeviceEnumerator2)im).GetDefaultAudioEndpoint(0, 0, out pDev) != 0) return null;
                 if (pDev == IntPtr.Zero) return null;
                 var dev = (IMMDeviceForId)Marshal.GetObjectForIUnknown(pDev);
-                string id;
-                dev.GetId(out id);
-                Marshal.ReleaseComObject(dev);
-                Marshal.Release(pDev);
-                Marshal.ReleaseComObject(im);
-                if (string.IsNullOrEmpty(id)) return null;
-                // id looks like "{0.0.0.00000000}.{guid}" — return only the guid portion
-                int dot = id.IndexOf("}.");
-                if (dot >= 0 && dot + 2 < id.Length) return id.Substring(dot + 2);
-                return id;
+                try
+                {
+                    string id;
+                    dev.GetId(out id);
+                    if (string.IsNullOrEmpty(id)) return null;
+                    // id looks like "{0.0.0.00000000}.{guid}" — return only the guid portion
+                    int dot = id.IndexOf("}.");
+                    if (dot >= 0 && dot + 2 < id.Length) return id.Substring(dot + 2);
+                    return id;
+                }
+                finally
+                {
+                    Marshal.ReleaseComObject(dev);
+                    Marshal.Release(pDev);
+                }
             }
             catch { return null; }
+            finally { if (im != null) try { Marshal.ReleaseComObject(im); } catch { } }
         }
 
         [ComImport, Guid("D666063F-1587-4E43-81F1-B948E807363F"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]

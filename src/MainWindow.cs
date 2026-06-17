@@ -30,7 +30,7 @@ namespace PowerAudioManager
         private bool _isExpanded = true;
         private double _expandedHeight = 520;
         private System.Windows.Forms.NotifyIcon _winFormsTray;
-        private bool _topmost = true;
+        private bool _topmost = false;
         private Button _pinBtn;
         private System.Windows.Forms.ToolStripMenuItem _topmostMenuItem;
         private System.Windows.Forms.ToolStripMenuItem _lockMenuItem;
@@ -89,7 +89,7 @@ namespace PowerAudioManager
 
         public MainWindow()
         {
-            _topmost = AppPrefs.GetBool("Topmost", true);
+            _topmost = AppPrefs.GetBool("Topmost", false);
             _lockPosition = AppPrefs.GetBool("LockPosition", false);
             Title = "OneBox";
             FontFamily = AppFont;
@@ -104,7 +104,29 @@ namespace PowerAudioManager
             var screen = SystemParameters.WorkArea;
             double sl, st;
             if (AppPrefs.GetDouble("Left", out sl) && AppPrefs.GetDouble("Top", out st))
-            { Left = sl; Top = st; }
+            {
+                // If the saved position lands outside the current work area (e.g. user dragged
+                // the window on a 4K monitor and is now booting on 1080p), snap back to the
+                // top-right corner of the new work area so the window is actually visible.
+                double estW = Width;       // SizeToContent.Height -> Width is fixed at 280
+                double estH = 200;         // upper bound estimate before layout runs
+                bool offscreen =
+                    sl + estW <= screen.Left + 8 || sl >= screen.Right - 8 ||
+                    st + 36   <= screen.Top  + 8 || st >= screen.Bottom - 8;
+                if (offscreen)
+                {
+                    Left = screen.Right - estW - 20;
+                    Top  = screen.Top + 20;
+                }
+                else
+                {
+                    if (sl + estW > screen.Right)  sl = screen.Right - estW;
+                    if (st + estH > screen.Bottom) st = screen.Bottom - estH;
+                    if (sl < screen.Left) sl = screen.Left;
+                    if (st < screen.Top)  st = screen.Top;
+                    Left = sl; Top = st;
+                }
+            }
             else { Left = screen.Right - Width - 20; Top = screen.Top + 20; }
             BuildUI();
             MouseWheel += (s, e) => { VolumeControl.SetVolume(VolumeControl.GetVolume() + (e.Delta > 0 ? 0.02f : -0.02f)); UpdateVolumeUI(); };
@@ -126,7 +148,9 @@ namespace PowerAudioManager
                 try { Native.DwmSetWindowAttribute(hwnd, Native.DWMWA_USE_IMMERSIVE_DARK_MODE, ref darkMode, sizeof(int)); } catch { }
                 int exStyle = Native.GetWindowLong(hwnd, Native.GWL_EXSTYLE);
                 Native.SetWindowLong(hwnd, Native.GWL_EXSTYLE, exStyle | Native.WS_EX_TOOLWINDOW);
-                Native.SetWindowPos(hwnd, Native.HWND_TOPMOST, 0, 0, 0, 0,
+                Native.SetWindowPos(hwnd,
+                    _topmost ? Native.HWND_TOPMOST : Native.HWND_NOTOPMOST,
+                    0, 0, 0, 0,
                     Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE);
                 try { InitTrayIcon(); } catch { }
                 try { RestartAutoCleanTimer(); } catch { }
@@ -143,6 +167,9 @@ namespace PowerAudioManager
                 // worker thread, so always hop back to the UI dispatcher.
                 Microsoft.Win32.SystemEvents.DisplaySettingsChanged += OnDisplaySettingsChanged;
                 Microsoft.Win32.SystemEvents.UserPreferenceChanged += OnUserPreferenceChanged;
+                // Final safety: after the first layout pass, ActualWidth/ActualHeight are real –
+                // re-clamp once so a 4K-saved position never leaves the window off-screen on 1080p.
+                Dispatcher.BeginInvoke(new Action(ClampToWorkArea), DispatcherPriority.Loaded);
             }
             catch
             {
@@ -512,18 +539,44 @@ namespace PowerAudioManager
             };
             return dock;
         }
+        // True while a background data load is pending. Prevents overlapping powercfg
+        // invocations when several callers (device watcher, refresh timer, clicks) fire
+        // LoadData in quick succession.
+        bool _loading;
+
         void LoadData()
         {
             try { UpdateVolumeUI(); } catch { }
             try { UpdateMemoryUI(); } catch { }
             try { UpdateTrayTooltip(); } catch { }
+            if (_loading) return;
+            _loading = true;
+            // powercfg (/list + /getactivescheme) can take 1-3s during a policy refresh —
+            // never run it on the UI dispatcher. Gather on a threadpool thread, render on UI.
+            System.Threading.ThreadPool.QueueUserWorkItem(_ =>
+            {
+                List<PowerPlanInfo> plans = null;
+                List<AudioDeviceInfo> devices = null;
+                try { plans = PowerPlanService.GetPowerPlans(); } catch { }
+                try { devices = AudioDevices.GetOutputDevices(); } catch { }
+                Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    _loading = false;
+                    RenderPlans(plans);
+                    RenderDevices(devices);
+                }));
+            });
+        }
+
+        void RenderPlans(List<PowerPlanInfo> plans)
+        {
             try
             {
-                _powerPlans = PowerPlanService.GetPowerPlans();
+                _powerPlans = plans ?? new List<PowerPlanInfo>();
                 var active = _powerPlans.Find(p => p.IsActive);
                 if (active != null) _currentPlanId = active.Guid;
                 _powerSection.Children.Clear();
-                if (_powerPlans == null || _powerPlans.Count == 0)
+                if (_powerPlans.Count == 0)
                 {
                     _powerSection.Children.Add(new TextBlock
                     {
@@ -539,11 +592,13 @@ namespace PowerAudioManager
                 }
             }
             catch { }
+        }
 
+        void RenderDevices(List<AudioDeviceInfo> devices)
+        {
             try
             {
-                _audioDevices = AudioDevices.GetOutputDevices();
-                if (_audioDevices == null) _audioDevices = new List<AudioDeviceInfo>();
+                _audioDevices = devices ?? new List<AudioDeviceInfo>();
                 var defaultDev = _audioDevices.Find(d => d.IsDefault);
                 if (defaultDev != null) _currentDeviceId = defaultDev.Id;
                 _audioSection.Children.Clear();
@@ -582,11 +637,14 @@ namespace PowerAudioManager
             btn.MouseDoubleClick += (s, e) => { try { System.Diagnostics.Process.Start("control.exe", "powercfg.cpl"); } catch { } e.Handled = true; };
             btn.Click += (s, e) =>
             {
-                if (PowerPlanService.SetActivePlan(plan.Guid))
-                {
-                    _currentPlanId = plan.Guid;
-                    LoadData();
-                }
+                // Optimistically mark the chosen plan active so the UI reflects the tap
+                // instantly, then switch on a background thread (avoids a 1-3s UI freeze
+                // during the system policy refresh) and refresh once it's done.
+                _currentPlanId = plan.Guid;
+                foreach (var p in _powerPlans) p.IsActive = p.Guid == plan.Guid;
+                _powerSection.Children.Clear();
+                foreach (var p in _powerPlans) _powerSection.Children.Add(CreatePlanButton(p));
+                PowerPlanService.SetActivePlanAsync(plan.Guid, Dispatcher, ok => { if (ok) LoadData(); });
             };
             return btn;
         }
@@ -914,7 +972,8 @@ namespace PowerAudioManager
             if (!IsVisible) Show();
             if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
             Activate();
-            Topmost = false; Topmost = true;
+            // Honor the user's topmost preference – do NOT force-pin every time we show.
+            if (_topmost) { Topmost = false; Topmost = true; }
         }
 
 
@@ -949,58 +1008,6 @@ namespace PowerAudioManager
         }
 
         #region Native Tray Icon
-
-
-
-
-        [DllImport("shell32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-        static extern bool Shell_NotifyIcon(uint dwMessage, ref NOTIFYICONDATA lpData);
-
-        [DllImport("user32.dll", CharSet = CharSet.Auto)]
-        static extern IntPtr LoadImage(IntPtr hInst, string name, uint type, int cx, int cy, uint fuLoad);
-
-        [DllImport("user32.dll")]
-        static extern bool DestroyIcon(IntPtr hIcon);
-
-        [DllImport("user32.dll")]
-        static extern bool IsWindow(IntPtr hWnd);
-
-        [DllImport("kernel32.dll", CharSet = CharSet.Auto)]
-        static extern IntPtr GetModuleHandle(string name);
-
-        const uint NIM_ADD = 0;
-        const uint NIM_MODIFY = 1;
-        const uint NIM_DELETE = 2;
-        const uint NIF_MESSAGE = 1;
-        const uint NIF_ICON = 2;
-        const uint NIF_TIP = 4;
-        const uint IMAGE_ICON = 1;
-        const uint LR_LOADFROMFILE = 0x10;
-        const uint LR_DEFAULTSIZE = 0x40;
-        const int WM_TRAYICON = 0x8001;
-
-        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-        struct NOTIFYICONDATA
-        {
-            public int cbSize;
-            public IntPtr hWnd;
-            public uint uID;
-            public uint uFlags;
-            public uint uCallbackMessage;
-            public IntPtr hIcon;
-            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)]
-            public string szTip;
-            public uint dwState;
-            public uint dwStateMask;
-            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 256)]
-            public string szInfo;
-            public uint uVersion;
-            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 64)]
-            public string szInfoTitle;
-            public uint dwInfoFlags;
-            public Guid guidItem;
-            public IntPtr hBalloonIcon;
-        }
 
         void InitTrayIcon()
         {
@@ -1083,10 +1090,10 @@ namespace PowerAudioManager
 
         IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
         {
-            if (msg == WM_HOTKEY)
+            if (msg == Native.WM_HOTKEY)
             {
                 int id = wParam.ToInt32();
-                if (id == HOTKEY_ID_TRANSLATE)
+                if (id == Native.HOTKEY_ID_TRANSLATE)
                 {
                     TranslateFromClipboard();
                     handled = true;
@@ -1105,7 +1112,7 @@ namespace PowerAudioManager
                     handled = true;
                 }
             }
-            if (msg == WM_TRAYICON)
+            if (msg == Native.WM_TRAYICON)
             {
                 int evt = lParam.ToInt32();
                 if (evt == 0x0202 || evt == 0x0203) ShowWindow(); // L-click or dblclk
@@ -1117,45 +1124,35 @@ namespace PowerAudioManager
 
         #endregion
 
-        [DllImport("kernel32.dll")]
-        static extern bool SetProcessWorkingSetSize(IntPtr hProcess, int min, int max);
-
         void TrimWorkingSet()
         {
             GC.Collect();
             GC.WaitForPendingFinalizers();
             GC.Collect();
-            SetProcessWorkingSetSize(Process.GetCurrentProcess().Handle, -1, -1);
+            Native.SetProcessWorkingSetSize(Process.GetCurrentProcess().Handle, -1, -1);
         }
-        [DllImport("user32.dll")]
-        static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
-        [DllImport("user32.dll")]
-        static extern bool UnregisterHotKey(IntPtr hWnd, int id);
-        const uint MOD_ALT = 0x1, MOD_CONTROL = 0x2;
-        const int WM_HOTKEY = 0x0312;
-        const int HOTKEY_ID_BASE = 0xB000;
-        const int HOTKEY_ID_TRANSLATE = 0xBFFF;
+
         Dictionary<int, string> _hotkeyMap = new Dictionary<int, string>();
         IntPtr _hotkeyHwnd = IntPtr.Zero;
 
         void UnregisterAllHotkeys()
         {
             if (_hotkeyHwnd == IntPtr.Zero) return;
-            foreach (var id in _hotkeyMap.Keys) UnregisterHotKey(_hotkeyHwnd, id);
+            foreach (var id in _hotkeyMap.Keys) Native.UnregisterHotKey(_hotkeyHwnd, id);
             _hotkeyMap.Clear();
-            UnregisterHotKey(_hotkeyHwnd, HOTKEY_ID_TRANSLATE);
+            Native.UnregisterHotKey(_hotkeyHwnd, Native.HOTKEY_ID_TRANSLATE);
         }
 
         void RefreshHotkeys()
         {
             if (_hotkeyHwnd == IntPtr.Zero) return;
             // Unregister all known IDs
-            foreach (var id in _hotkeyMap.Keys) UnregisterHotKey(_hotkeyHwnd, id);
+            foreach (var id in _hotkeyMap.Keys) Native.UnregisterHotKey(_hotkeyHwnd, id);
             _hotkeyMap.Clear();
             // Translate hotkey: Ctrl+Shift+T (VK_T = 0x54)
-            UnregisterHotKey(_hotkeyHwnd, HOTKEY_ID_TRANSLATE);
-            RegisterHotKey(_hotkeyHwnd, HOTKEY_ID_TRANSLATE, MOD_CONTROL | 0x4, 0x54);
-            int nextId = HOTKEY_ID_BASE;
+            Native.UnregisterHotKey(_hotkeyHwnd, Native.HOTKEY_ID_TRANSLATE);
+            Native.RegisterHotKey(_hotkeyHwnd, Native.HOTKEY_ID_TRANSLATE, Native.MOD_CONTROL | Native.MOD_SHIFT, 0x54);
+            int nextId = Native.HOTKEY_ID_BASE;
             foreach (var kv in DevicePrefs.GetAllHotkeys())
             {
                 int encoded = kv.Value;
@@ -1163,12 +1160,12 @@ namespace PowerAudioManager
                 int mods = (encoded >> 16) & 0xFFFF;
                 uint vk = (uint)(encoded & 0xFFFF);
                 uint winMods = 0;
-                if ((mods & 1) != 0) winMods |= MOD_ALT;
-                if ((mods & 2) != 0) winMods |= MOD_CONTROL;
-                if ((mods & 4) != 0) winMods |= 0x4; // MOD_SHIFT
-                if ((mods & 8) != 0) winMods |= 0x8; // MOD_WIN
+                if ((mods & 1) != 0) winMods |= Native.MOD_ALT;
+                if ((mods & 2) != 0) winMods |= Native.MOD_CONTROL;
+                if ((mods & 4) != 0) winMods |= Native.MOD_SHIFT;
+                if ((mods & 8) != 0) winMods |= Native.MOD_WIN;
                 int id = nextId++;
-                if (RegisterHotKey(_hotkeyHwnd, id, winMods, vk))
+                if (Native.RegisterHotKey(_hotkeyHwnd, id, winMods, vk))
                     _hotkeyMap[id] = kv.Key;
             }
         }

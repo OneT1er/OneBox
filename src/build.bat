@@ -9,6 +9,11 @@ if not exist "%OUTDIR%" mkdir "%OUTDIR%"
 
 echo Compiling OneBox...
 
+rem Force a fresh CreationTime: NTFS file tunneling otherwise keeps the original
+rem timestamp on overwrite, which makes the Explorer "Date created" column look
+rem stale even though /out: just rewrote the file. Deleting first sidesteps it.
+if exist "%OUTDIR%\OneBox.exe" del /f /q "%OUTDIR%\OneBox.exe"
+
 "%CSC%" /nologo /target:winexe /out:"%OUTDIR%\OneBox.exe" /codepage:65001 ^
   /win32icon:"%SRC%app.ico" ^
   /reference:"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\WPF\PresentationCore.dll" ^
@@ -19,6 +24,8 @@ echo Compiling OneBox...
   /reference:"System.Core.dll" ^
   /reference:"System.Drawing.dll" ^
   /reference:"System.Windows.Forms.dll" ^
+  /reference:"System.Security.dll" ^
+  /reference:"System.Web.Extensions.dll" ^
   "%SRC%App.cs" ^
   "%SRC%Native.cs" ^
   "%SRC%Models.cs" ^
@@ -38,6 +45,9 @@ if %ERRORLEVEL% EQU 0 (
     copy /Y "%SRC%app.png" "%OUTDIR%\app.png" >nul
     copy /Y "%SRC%icon-power.png" "%OUTDIR%\icon-power.png" >nul
     copy /Y "%SRC%icon-audio.png" "%OUTDIR%\icon-audio.png" >nul
+    rem NTFS "file tunneling" can preserve the original CreationTime when the
+    rem same filename is rewritten within ~15s. Force-stamp it to "now".
+    powershell -NoProfile -Command "$f=Get-Item -LiteralPath '%OUTDIR%\OneBox.exe'; $n=Get-Date; $f.CreationTime=$n; $f.LastWriteTime=$n" >nul 2>&1
 ) else (
     echo Build failed!
 )

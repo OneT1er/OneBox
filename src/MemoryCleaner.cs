@@ -50,6 +50,8 @@ namespace PowerAudioManager
         static extern int NtSetSystemInformation(int infoClass, ref int data, int size);
         [DllImport("ntdll.dll")]
         static extern int NtSetSystemInformation(int infoClass, ref SYSTEM_FILECACHE_INFORMATION info, int size);
+        [DllImport("ntdll.dll")]
+        static extern int NtSetSystemInformation(int infoClass, ref MEMORY_COMBINE_INFORMATION_EX info, int size);
 
         [StructLayout(LayoutKind.Sequential)]
         struct SYSTEM_FILECACHE_INFORMATION
@@ -62,6 +64,18 @@ namespace PowerAudioManager
             public IntPtr CurrentSizeIncludingTransitionInPages;
             public IntPtr PeakSizeIncludingTransitionInPages;
             public uint TransitionRePurposeCount;
+            public uint Flags;
+        }
+
+        // SystemCombinePhysicalMemoryInformation (130) input struct:
+        // { HANDLE RegionHandle; ULONG Flags; } — zeroed here to ask the kernel to combine
+        // all physical memory lists. Marshalled by ref with its real size so we never hand
+        // the kernel a too-large size for a too-small buffer (the old code passed a 4-byte
+        // stack int but claimed size 16, over-reading 12 bytes of stack).
+        [StructLayout(LayoutKind.Sequential)]
+        struct MEMORY_COMBINE_INFORMATION_EX
+        {
+            public IntPtr RegionHandle;
             public uint Flags;
         }
 
@@ -233,18 +247,8 @@ namespace PowerAudioManager
             {
                 try
                 {
-                    // Pass MEMORY_COMBINE_INFORMATION_EX with Flags=0
-                    long zero = 0;
-                    var ptr = Marshal.AllocHGlobal(16);
-                    try
-                    {
-                        Marshal.WriteInt64(ptr, 0, 0);
-                        Marshal.WriteInt64(ptr, 8, 0);
-                        // The 130 path needs a struct, but reusing the int signature with size 16 works for triggering the operation when the kernel only checks Size.
-                        int dummy = 0;
-                        NtSetSystemInformation(130, ref dummy, 16);
-                    }
-                    finally { Marshal.FreeHGlobal(ptr); }
+                    var info = new MEMORY_COMBINE_INFORMATION_EX(); // zeroed: combine all lists
+                    NtSetSystemInformation(SystemCombinePhysicalMemoryInformation, ref info, Marshal.SizeOf(typeof(MEMORY_COMBINE_INFORMATION_EX)));
                 }
                 catch { }
             }

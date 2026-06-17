@@ -27,10 +27,32 @@ namespace PowerAudioManager
         public const int GWL_EXSTYLE = -20;
         public const int WS_EX_TOOLWINDOW = 0x00000080;
         public static readonly IntPtr HWND_TOPMOST = new IntPtr(-1);
+        public static readonly IntPtr HWND_NOTOPMOST = new IntPtr(-2);
         public const uint SWP_NOMOVE = 0x0002;
         public const uint SWP_NOSIZE = 0x0001;
         public const uint SWP_NOACTIVATE = 0x0010;
         public const int DWMWA_USE_IMMERSIVE_DARK_MODE = 20;
+
+        // ---- Global hotkeys (RegisterHotKey / UnregisterHotKey) -----------------
+        [DllImport("user32.dll")]
+        public static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
+        [DllImport("user32.dll")]
+        public static extern bool UnregisterHotKey(IntPtr hWnd, int id);
+        public const uint MOD_ALT = 0x1;
+        public const uint MOD_CONTROL = 0x2;
+        public const uint MOD_SHIFT = 0x4;
+        public const uint MOD_WIN = 0x8;
+        public const int WM_HOTKEY = 0x0312;
+        public const int HOTKEY_ID_BASE = 0xB000;
+        public const int HOTKEY_ID_TRANSLATE = 0xBFFF;
+
+        // ---- Working-set trim ---------------------------------------------------
+        [DllImport("kernel32.dll")]
+        public static extern bool SetProcessWorkingSetSize(IntPtr hProcess, int min, int max);
+
+        // ---- Tray window message (WinForms NotifyIcon posts to its own hidden
+        //      window, but we still check this id in WndProc for legacy callers) ---
+        public const int WM_TRAYICON = 0x8001;
     }
 
 }

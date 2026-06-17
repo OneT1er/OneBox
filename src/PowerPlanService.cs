@@ -102,6 +102,20 @@ namespace PowerAudioManager
             }
             catch { return false; }
         }
+
+        // Offload the (potentially 1-3s) powercfg call to a threadpool thread so the UI
+        // dispatcher isn't frozen during the system-wide policy refresh. `onDone` runs on
+        // the calling (UI) thread via dispatcher if one is supplied, otherwise inline.
+        public static void SetActivePlanAsync(string planGuid, System.Windows.Threading.Dispatcher dispatcher, Action<bool> onDone)
+        {
+            System.Threading.ThreadPool.QueueUserWorkItem(_ =>
+            {
+                bool ok = SetActivePlan(planGuid);
+                if (onDone == null) return;
+                if (dispatcher == null) { onDone(ok); return; }
+                dispatcher.BeginInvoke(new Action(() => onDone(ok)));
+            });
+        }
     }
 
 }

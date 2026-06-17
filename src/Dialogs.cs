@@ -539,12 +539,16 @@ namespace PowerAudioManager
             _output.Text = "";
             System.Threading.ThreadPool.QueueUserWorkItem(state =>
             {
-                var r = TranslateService.Translate(text, from, to);
+                TranslateService.Result r = null;
+                Exception err = null;
+                try { r = TranslateService.Translate(text, from, to); }
+                catch (Exception ex) { err = ex; }
                 Dispatcher.BeginInvoke(new Action(() =>
                 {
                     _btnGo.IsEnabled = true;
-                    if (!string.IsNullOrEmpty(r.Error)) { _output.Text = ""; _statusBlock.Text = "失败: " + r.Error; }
-                    else { _output.Text = r.Translation ?? ""; _statusBlock.Text = "完成" + (string.IsNullOrEmpty(r.DetectedFrom) ? "" : " · 检测到 " + r.DetectedFrom); }
+                    if (err != null) { _output.Text = ""; _statusBlock.Text = "失败: " + err.Message; return; }
+                    if (r != null && !string.IsNullOrEmpty(r.Error)) { _output.Text = ""; _statusBlock.Text = "失败: " + r.Error; }
+                    else { _output.Text = r == null ? "" : (r.Translation ?? ""); _statusBlock.Text = "完成" + (r == null || string.IsNullOrEmpty(r.DetectedFrom) ? "" : " · 检测到 " + r.DetectedFrom); }
                 }));
             });
         }

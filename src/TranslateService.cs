@@ -10,6 +10,11 @@ namespace PowerAudioManager
         const string EndpointAi = "https://fanyi-api.baidu.com/ait/api/aiTextTranslate";
         const string KeyPath = @"Software\PowerAudioManager\App";
 
+        // DPAPI entropy binds the encrypted blob to this app. Values are stored as
+        // "DP1:" + Base64(ProtectedData(...)) so encrypted and legacy-plaintext values are
+        // unambiguous; GetKey transparently reads either.
+        static readonly byte[] KeyEntropy = System.Text.Encoding.UTF8.GetBytes("OneBox.Translate.Key.v1");
+
         public static string GetAppId()
         {
             try { using (var k = Registry.CurrentUser.OpenSubKey(KeyPath)) return k == null ? "" : (k.GetValue("Translate.AppId") as string ?? ""); }
@@ -18,7 +23,7 @@ namespace PowerAudioManager
 
         public static string GetKey()
         {
-            try { using (var k = Registry.CurrentUser.OpenSubKey(KeyPath)) return k == null ? "" : (k.GetValue("Translate.Key") as string ?? ""); }
+            try { using (var k = Registry.CurrentUser.OpenSubKey(KeyPath)) return UnprotectKey(k == null ? "" : (k.GetValue("Translate.Key") as string ?? "")); }
             catch { return ""; }
         }
 
@@ -35,11 +40,41 @@ namespace PowerAudioManager
                 using (var k = Registry.CurrentUser.CreateSubKey(KeyPath))
                 {
                     k.SetValue("Translate.AppId", appId ?? "");
-                    k.SetValue("Translate.Key", key ?? "");
+                    k.SetValue("Translate.Key", ProtectKey(key ?? ""));
                     k.SetValue("Translate.Instruction", instruction ?? "");
                 }
             }
             catch { }
+        }
+
+        static string ProtectKey(string plain)
+        {
+            if (string.IsNullOrEmpty(plain)) return "";
+            try
+            {
+                var enc = System.Security.Cryptography.ProtectedData.Protect(
+                    System.Text.Encoding.UTF8.GetBytes(plain), KeyEntropy,
+                    System.Security.Cryptography.DataProtectionScope.CurrentUser);
+                return "DP1:" + Convert.ToBase64String(enc);
+            }
+            catch { return plain; } // DPAPI unavailable — store plaintext rather than losing the key
+        }
+
+        static string UnprotectKey(string stored)
+        {
+            if (string.IsNullOrEmpty(stored)) return "";
+            if (stored.StartsWith("DP1:"))
+            {
+                try
+                {
+                    var enc = Convert.FromBase64String(stored.Substring(4));
+                    return System.Text.Encoding.UTF8.GetString(
+                        System.Security.Cryptography.ProtectedData.Unprotect(enc, KeyEntropy,
+                            System.Security.Cryptography.DataProtectionScope.CurrentUser));
+                }
+                catch { return ""; } // corrupt encrypted blob — don't fall back to garbage
+            }
+            return stored; // legacy plaintext value saved before DPAPI encryption
         }
 
         public class Result
@@ -273,26 +308,28 @@ namespace PowerAudioManager
                 using (var rd = new StreamReader(rs, System.Text.Encoding.UTF8))
                 {
                     var json = rd.ReadToEnd();
-                    string err = ExtractJson(json, "error_code");
+                    var root = ParseJson(json);
+
+                    string err = root == null ? null : AsString(root, "error_code");
                     if (!string.IsNullOrEmpty(err) && err != "0" && err != "52000")
                     {
-                        r.Error = "百度: " + err + " " + ExtractJson(json, "error_msg");
+                        r.Error = "百度: " + err + " " + AsString(root, "error_msg");
                         return r;
                     }
 
-                    string result = ExtractJson(json, "result");
+                    string result = root == null ? null : ExtractResult(root);
                     if (!string.IsNullOrEmpty(result))
                     {
                         r.Translation = result;
-                        r.DetectedFrom = ExtractJson(json, "from");
+                        r.DetectedFrom = root == null ? null : AsString(root, "from");
                         return r;
                     }
 
-                    var dst = ExtractAllDst(json);
-                    if (dst.Count > 0)
+                    var dst = root == null ? null : ExtractDstList(root);
+                    if (dst != null && dst.Count > 0)
                     {
                         r.Translation = string.Join(System.Environment.NewLine, dst.ToArray());
-                        r.DetectedFrom = ExtractJson(json, "from");
+                        r.DetectedFrom = root == null ? null : AsString(root, "from");
                         return r;
                     }
 
@@ -350,63 +387,67 @@ namespace PowerAudioManager
             return sb.ToString();
         }
 
-        static string ExtractJson(string json, string field)
+        // Real JSON parsing via the in-box JavaScriptSerializer (System.Web.Extensions) —
+        // replaces the fragile IndexOf-based scanner, which mis-decoded escapes (\r, \b, \f,
+        // surrogate pairs) and couldn't handle nesting. JavaScriptSerializer decodes all
+        // standard escapes, nested objects and arrays correctly.
+        static System.Collections.Generic.Dictionary<string, object> ParseJson(string json)
         {
-            int idx = json.IndexOf("\"" + field + "\"");
-            if (idx < 0) return null;
-            int colon = json.IndexOf(":", idx);
-            if (colon < 0) return null;
-            int i = colon + 1;
-            while (i < json.Length && (json[i] == ' ' || json[i] == '\t')) i++;
-            if (i >= json.Length) return null;
-            if (json[i] == '\"')
+            if (string.IsNullOrEmpty(json)) return null;
+            try
             {
-                i++;
-                int end = i;
+                return new System.Web.Script.Serialization.JavaScriptSerializer()
+                    .Deserialize<System.Collections.Generic.Dictionary<string, object>>(json);
+            }
+            catch { return null; }
+        }
+
+        static string AsString(System.Collections.Generic.Dictionary<string, object> d, string key)
+        {
+            object v;
+            if (d == null || !d.TryGetValue(key, out v) || v == null) return null;
+            return v.ToString();
+        }
+
+        // `result` is a single translated string in the AI translate response, but accept an
+        // array of strings (one per input line) and join them on newlines as a safety net.
+        static string ExtractResult(System.Collections.Generic.Dictionary<string, object> d)
+        {
+            object v;
+            if (d == null || !d.TryGetValue("result", out v) || v == null) return null;
+            var s = v as string;
+            if (s != null) return s;
+            var arr = v as System.Collections.IEnumerable;
+            if (arr != null)
+            {
                 var sb = new System.Text.StringBuilder();
-                while (end < json.Length && json[end] != '\"')
+                bool first = true;
+                foreach (var item in arr)
                 {
-                    if (json[end] == '\\' && end + 1 < json.Length)
-                    {
-                        char nx = json[end + 1];
-                        if (nx == 'n') sb.Append('\n');
-                        else if (nx == 'r') sb.Append('\r');
-                        else if (nx == 't') sb.Append('\t');
-                        else if (nx == '\"') sb.Append('\"');
-                        else if (nx == '\\') sb.Append('\\');
-                        else if (nx == 'u' && end + 5 < json.Length)
-                        {
-                            int code;
-                            if (int.TryParse(json.Substring(end + 2, 4), System.Globalization.NumberStyles.HexNumber, null, out code))
-                                sb.Append((char)code);
-                            end += 4;
-                        }
-                        else sb.Append(nx);
-                        end += 2;
-                    }
-                    else { sb.Append(json[end]); end++; }
+                    if (item == null) continue;
+                    if (!first) sb.Append(System.Environment.NewLine);
+                    sb.Append(item.ToString());
+                    first = false;
                 }
                 return sb.ToString();
             }
-            else
-            {
-                int end = i;
-                while (end < json.Length && json[end] != ',' && json[end] != '}') end++;
-                return json.Substring(i, end - i).Trim();
-            }
+            return v.ToString();
         }
 
-        static List<string> ExtractAllDst(string json)
+        // Classic trans_result fallback: [{"src":"...","dst":"..."}, ...]
+        static List<string> ExtractDstList(System.Collections.Generic.Dictionary<string, object> d)
         {
             var list = new List<string>();
-            int from = 0;
-            while (true)
+            object v;
+            if (d == null || !d.TryGetValue("trans_result", out v)) return list;
+            var arr = v as System.Collections.IEnumerable;
+            if (arr == null) return list;
+            foreach (var item in arr)
             {
-                int idx = json.IndexOf("\"dst\"", from);
-                if (idx < 0) break;
-                from = idx + 5;
-                string s = ExtractJson(json.Substring(idx), "dst");
-                if (s != null) list.Add(s);
+                var dict = item as System.Collections.Generic.Dictionary<string, object>;
+                if (dict == null) continue;
+                object dst;
+                if (dict.TryGetValue("dst", out dst) && dst != null) list.Add(dst.ToString());
             }
             return list;
         }
