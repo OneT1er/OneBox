@@ -49,9 +49,17 @@ namespace PowerAudioManager
             public string DetectedFrom;
         }
 
-        // Baidu AI text translate (aiTextTranslate) rejects q longer than 6000 chars with error 59002.
-        // Keep each chunk comfortably under the limit.
-        const int MaxChunkChars = 5000;
+        // Baidu AI text translate (aiTextTranslate) enforces a limit on the size of q
+        // counted in UTF-8 BYTES (not characters). Exceeding it returns 59003 请求文本太长.
+        // CJK chars are 3 bytes each in UTF-8, so a char-based cap is unsafe — we budget
+        // by bytes. 4000 bytes/chunk stays well under the limit across endpoints.
+        const int MaxChunkBytes = 4000;
+        static readonly System.Text.Encoding Utf8 = System.Text.Encoding.UTF8;
+
+        static int ByteLen(string s)
+        {
+            return s == null ? 0 : Utf8.GetByteCount(s);
+        }
 
         public static Result Translate(string text, string from, string to)
         {
@@ -67,7 +75,7 @@ namespace PowerAudioManager
             }
             if (string.IsNullOrEmpty(text)) { r.Translation = ""; return r; }
 
-            var chunks = SplitIntoChunks(text, MaxChunkChars);
+            var chunks = SplitIntoChunks(text, MaxChunkBytes);
             if (chunks.Count == 1)
             {
                 return TranslateOnce(chunks[0], from, to, appId, key, instruction);
@@ -92,63 +100,89 @@ namespace PowerAudioManager
             return r;
         }
 
-        // Split text into chunks each <= maxChars, preferring to break on newlines,
-        // then on sentence punctuation, then hard-wrapping as a last resort.
-        static List<string> SplitIntoChunks(string text, int maxChars)
+        // Split text into chunks whose UTF-8 byte length is <= maxBytes, preferring to
+        // break on newlines, then on sentence punctuation, then hard-wrapping as a last
+        // resort. Never splits a surrogate pair.
+        static List<string> SplitIntoChunks(string text, int maxBytes)
         {
             var chunks = new List<string>();
-            if (string.IsNullOrEmpty(text) || text.Length <= maxChars)
+            if (string.IsNullOrEmpty(text) || ByteLen(text) <= maxBytes)
             {
                 chunks.Add(text ?? "");
                 return chunks;
             }
 
-            // First split on newlines so structure is preserved across chunks.
+            // Split on newlines first so paragraph structure is preserved.
             var lines = text.Split('\n');
             var cur = new System.Text.StringBuilder();
-            foreach (var rawLine in lines)
-            {
-                // Restore the newline boundary between accumulated segments.
-                string line = (cur.Length > 0 ? "\n" : "") + rawLine;
 
-                // A single line may itself exceed the limit — sub-split it on sentence
-                // punctuation, then hard-wrap whatever remains.
-                if (cur.Length + line.Length > maxChars)
-                {
-                    var sub = SplitLongLine((cur.ToString() + line), maxChars);
-                    // SplitLongLine returns N complete chunks + possibly a trailing remainder.
-                    for (int i = 0; i < sub.Count - 1; i++) chunks.Add(sub[i]);
-                    cur.Length = 0;
-                    if (sub.Count > 0) cur.Append(sub[sub.Count - 1]);
-                }
-                else
+            for (int li = 0; li < lines.Length; li++)
+            {
+                string rawLine = lines[li];
+                string sep = (cur.Length > 0) ? "\n" : "";
+                string line = sep + rawLine;
+
+                // If appending this line fits, accumulate and continue.
+                if (ByteLen(cur.ToString()) + ByteLen(line) <= maxBytes)
                 {
                     cur.Append(line);
+                    continue;
                 }
 
-                // Flush whenever the accumulator reaches the limit.
-                while (cur.Length > maxChars)
+                // This line won't fit alongside the current accumulator. Flush the
+                // accumulator first, then place the line (which may itself need splitting).
+                if (cur.Length > 0)
                 {
-                    chunks.Add(cur.ToString(0, maxChars));
-                    cur.Remove(0, maxChars);
+                    chunks.Add(cur.ToString());
+                    cur.Length = 0;
                 }
+                // Now the line stands alone; strip the leading separator we added.
+                string standalone = rawLine;
+
+                if (ByteLen(standalone) <= maxBytes)
+                {
+                    cur.Append(standalone);
+                    continue;
+                }
+
+                // Single line exceeds the byte budget — break it on punctuation, then
+                // hard-wrap. Emit complete pieces directly; keep the trailing remainder
+                // in `cur` so the next line can join it if it fits.
+                var pieces = SplitLongString(standalone, maxBytes);
+                for (int i = 0; i < pieces.Count - 1; i++) chunks.Add(pieces[i]);
+                cur.Append(pieces[pieces.Count - 1]);
             }
             if (cur.Length > 0) chunks.Add(cur.ToString());
             return chunks;
         }
 
-        static List<string> SplitLongLine(string s, int maxChars)
+        // Break a single long string (no newlines) into pieces each <= maxBytes UTF-8.
+        // Prefers cutting after sentence-ending punctuation (incl. CJK marks); hard-wraps
+        // otherwise. Never cuts inside a UTF-16 surrogate pair.
+        static List<string> SplitLongString(string s, int maxBytes)
         {
             var result = new List<string>();
             int start = 0;
             while (start < s.Length)
             {
-                if (s.Length - start <= maxChars) { result.Add(s.Substring(start)); break; }
-                int end = start + maxChars;
-                // Try to break after sentence-ending punctuation (incl. CJK marks).
-                int cut = s.LastIndexOfAny(new[] { '.', '!', '?', '。', '！', '？', ';', '；', '\n' }, end - 1, maxChars);
-                if (cut <= start) cut = end; // hard wrap
-                else cut++; // include the punctuation
+                if (ByteLen(s.Substring(start)) <= maxBytes) { result.Add(s.Substring(start)); break; }
+
+                // Walk forward accumulating bytes until we hit the budget.
+                int i = start;
+                int bytes = 0;
+                while (i < s.Length)
+                {
+                    int c = char.IsSurrogatePair(s, i) ? 2 : 1;
+                    int add = ByteLen(s.Substring(i, c));
+                    if (bytes + add > maxBytes) break;
+                    bytes += add;
+                    i += c;
+                }
+                // `i` is the first index that would exceed the budget; search back from
+                // there for a sentence boundary to cut cleanly after.
+                int cut = s.LastIndexOfAny(new[] { '.', '!', '?', '。', '！', '？', ';', '；', '，', ',', ' ' }, i - 1, i - start);
+                if (cut < start) cut = i; // hard wrap at the byte boundary
+                else cut++; // include the punctuation/separator in this chunk
                 result.Add(s.Substring(start, cut - start));
                 start = cut;
             }
