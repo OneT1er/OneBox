@@ -49,6 +49,10 @@ namespace PowerAudioManager
             public string DetectedFrom;
         }
 
+        // Baidu AI text translate (aiTextTranslate) rejects q longer than 6000 chars with error 59002.
+        // Keep each chunk comfortably under the limit.
+        const int MaxChunkChars = 5000;
+
         public static Result Translate(string text, string from, string to)
         {
             var r = new Result();
@@ -63,6 +67,98 @@ namespace PowerAudioManager
             }
             if (string.IsNullOrEmpty(text)) { r.Translation = ""; return r; }
 
+            var chunks = SplitIntoChunks(text, MaxChunkChars);
+            if (chunks.Count == 1)
+            {
+                return TranslateOnce(chunks[0], from, to, appId, key, instruction);
+            }
+
+            // Translate each chunk and concatenate. Stop on first hard error.
+            var parts = new List<string>();
+            string detected = null;
+            for (int i = 0; i < chunks.Count; i++)
+            {
+                var cr = TranslateOnce(chunks[i], from, to, appId, key, instruction);
+                if (!string.IsNullOrEmpty(cr.Error))
+                {
+                    r.Error = "第 " + (i + 1) + "/" + chunks.Count + " 段失败: " + cr.Error;
+                    return r;
+                }
+                if (detected == null) detected = cr.DetectedFrom;
+                parts.Add(cr.Translation ?? "");
+            }
+            r.Translation = string.Join(System.Environment.NewLine, parts.ToArray());
+            r.DetectedFrom = detected;
+            return r;
+        }
+
+        // Split text into chunks each <= maxChars, preferring to break on newlines,
+        // then on sentence punctuation, then hard-wrapping as a last resort.
+        static List<string> SplitIntoChunks(string text, int maxChars)
+        {
+            var chunks = new List<string>();
+            if (string.IsNullOrEmpty(text) || text.Length <= maxChars)
+            {
+                chunks.Add(text ?? "");
+                return chunks;
+            }
+
+            // First split on newlines so structure is preserved across chunks.
+            var lines = text.Split('\n');
+            var cur = new System.Text.StringBuilder();
+            foreach (var rawLine in lines)
+            {
+                // Restore the newline boundary between accumulated segments.
+                string line = (cur.Length > 0 ? "\n" : "") + rawLine;
+
+                // A single line may itself exceed the limit — sub-split it on sentence
+                // punctuation, then hard-wrap whatever remains.
+                if (cur.Length + line.Length > maxChars)
+                {
+                    var sub = SplitLongLine((cur.ToString() + line), maxChars);
+                    // SplitLongLine returns N complete chunks + possibly a trailing remainder.
+                    for (int i = 0; i < sub.Count - 1; i++) chunks.Add(sub[i]);
+                    cur.Length = 0;
+                    if (sub.Count > 0) cur.Append(sub[sub.Count - 1]);
+                }
+                else
+                {
+                    cur.Append(line);
+                }
+
+                // Flush whenever the accumulator reaches the limit.
+                while (cur.Length > maxChars)
+                {
+                    chunks.Add(cur.ToString(0, maxChars));
+                    cur.Remove(0, maxChars);
+                }
+            }
+            if (cur.Length > 0) chunks.Add(cur.ToString());
+            return chunks;
+        }
+
+        static List<string> SplitLongLine(string s, int maxChars)
+        {
+            var result = new List<string>();
+            int start = 0;
+            while (start < s.Length)
+            {
+                if (s.Length - start <= maxChars) { result.Add(s.Substring(start)); break; }
+                int end = start + maxChars;
+                // Try to break after sentence-ending punctuation (incl. CJK marks).
+                int cut = s.LastIndexOfAny(new[] { '.', '!', '?', '。', '！', '？', ';', '；', '\n' }, end - 1, maxChars);
+                if (cut <= start) cut = end; // hard wrap
+                else cut++; // include the punctuation
+                result.Add(s.Substring(start, cut - start));
+                start = cut;
+            }
+            return result;
+        }
+
+        static Result TranslateOnce(string text, string from, string to, string appId, string key, string instruction)
+        {
+            var r = new Result();
+            if (string.IsNullOrEmpty(text)) { r.Translation = ""; return r; }
             try
             {
                 System.Net.ServicePointManager.SecurityProtocol =
