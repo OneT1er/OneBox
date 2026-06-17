@@ -555,6 +555,70 @@ namespace PowerAudioManager
     }
 
 
+    public static class ModulesSettingsDialog
+    {
+        static CheckBox MakeCb(string label, string key)
+        {
+            return new CheckBox {
+                Content = label, Foreground = Brushes.White, FontSize = 12,
+                Margin = new Thickness(0, 6, 0, 0),
+                IsChecked = MainWindow.ModuleVisible(key)
+            };
+        }
+
+        // Settings dialog for showing/hiding floating-window modules. On OK, writes
+        // UI.Show{Power,Audio,Mem,Translate} prefs and rebuilds the calling window.
+        public static void Show(Window owner)
+        {
+            var dlg = new Window {
+                Title = "板块设置",
+                Width = 340, Height = 320,
+                Owner = owner,
+                WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                ResizeMode = ResizeMode.NoResize,
+                FontFamily = owner.FontFamily,
+                Background = new SolidColorBrush(Color.FromRgb(28, 26, 40))
+            };
+            var stack = new StackPanel { Margin = new Thickness(20) };
+            var fg = new SolidColorBrush(Color.FromRgb(190, 188, 220));
+            stack.Children.Add(new TextBlock {
+                Text = "勾选要在悬浮窗中显示的板块：",
+                Foreground = Brushes.White, FontSize = 13, Margin = new Thickness(0, 0, 0, 12) });
+
+            var cbPower = MakeCb("电源计划", "Power");
+            var cbAudio = MakeCb("音频控制", "Audio");
+            var cbMem   = MakeCb("内存清理", "Mem");
+            var cbTr    = MakeCb("翻译", "Translate");
+            stack.Children.Add(cbPower);
+            stack.Children.Add(cbAudio);
+            stack.Children.Add(cbMem);
+            stack.Children.Add(cbTr);
+            stack.Children.Add(new TextBlock {
+                Text = "隐藏后悬浮窗立即刷新；托盘菜单与全局快捷键不受影响。",
+                Foreground = fg, FontSize = 10, Margin = new Thickness(0, 14, 0, 0),
+                TextWrapping = TextWrapping.Wrap });
+
+            var btns = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 16, 0, 0) };
+            var ok = new Button { Content = "确定", Width = 64, Height = 28, Margin = new Thickness(0, 0, 8, 0) };
+            var cancel = new Button { Content = "取消", Width = 64, Height = 28 };
+            btns.Children.Add(ok); btns.Children.Add(cancel);
+            stack.Children.Add(btns);
+            dlg.Content = stack;
+
+            ok.Click += (s, e) => {
+                AppPrefs.SetBool("UI.ShowPower",     cbPower.IsChecked == true);
+                AppPrefs.SetBool("UI.ShowAudio",     cbAudio.IsChecked == true);
+                AppPrefs.SetBool("UI.ShowMem",       cbMem.IsChecked == true);
+                AppPrefs.SetBool("UI.ShowTranslate", cbTr.IsChecked == true);
+                if (owner is MainWindow) ((MainWindow)owner).RebuildUI();
+                dlg.DialogResult = true; dlg.Close();
+            };
+            cancel.Click += (s, e) => { dlg.DialogResult = false; dlg.Close(); };
+            dlg.ShowDialog();
+        }
+    }
+
+
         public static class TranslateSettingsDialog
     {
         public static bool Show(Window owner)

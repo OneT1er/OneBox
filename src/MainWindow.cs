@@ -175,7 +175,7 @@ namespace PowerAudioManager
             MouseWheel += (s, e) => { VolumeControl.SetVolume(VolumeControl.GetVolume() + (e.Delta > 0 ? 0.02f : -0.02f)); UpdateVolumeUI(); };
             LoadData();
             _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(30) };
-            _refreshTimer.Tick += (s, e) => LoadData();
+            _refreshTimer.Tick += (s, e) => { LoadData(); UpdateTrayIcon(); };
             _refreshTimer.Start();
             Closing += (s, ev) => { ev.Cancel = true; Hide(); };
             Loaded += OnLoaded;
@@ -196,6 +196,8 @@ namespace PowerAudioManager
                     0, 0, 0, 0,
                     Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE);
                 try { InitTrayIcon(); } catch { }
+                try { UpdateTrayIcon(); } catch { }
+                try { ClipboardHistory.Start(); } catch { }
                 try { RestartAutoCleanTimer(); } catch { }
                 // Register hotkey window hook
                 _hotkeyHwnd = hwnd;
@@ -410,12 +412,25 @@ namespace PowerAudioManager
             var contentPanel = new StackPanel { Margin = new Thickness(14, 10, 14, 14) };
             _contentPanel = contentPanel;
 
+            // Module visibility (用户可在设置里隐藏不需要的板块). Each section adds
+            // its own leading divider (except the first) so hiding one leaves no
+            // orphan divider.
+            bool showPower = ModuleVisible("Power");
+            bool showAudio = ModuleVisible("Audio");
+            bool showMem   = ModuleVisible("Mem");
+            bool showTr    = ModuleVisible("Translate");
+
+            if (showPower)
+            {
             var powerHeader = MakeCollapsibleHeader("电源计划", "icon-power.png", () => _powerSection, AppPrefs.GetBool("UI.PowerCollapsed", false));
             contentPanel.Children.Add(powerHeader);
             _powerSection = new StackPanel { Margin = new Thickness(0, 0, 0, 4) };
             contentPanel.Children.Add(_powerSection);
+            }
 
-            contentPanel.Children.Add(MakeDivider());
+            if (showAudio)
+            {
+            if (contentPanel.Children.Count > 0) contentPanel.Children.Add(MakeDivider());
 
             var audioHeader = MakeCollapsibleHeader("音频输出", "icon-audio.png", () => _audioSection, AppPrefs.GetBool("UI.AudioCollapsed", false));
             contentPanel.Children.Add(audioHeader);
@@ -462,9 +477,12 @@ namespace PowerAudioManager
             };
             volRow.Children.Add(_volSlider);
             contentPanel.Children.Add(volRow);
+            }
 
+            if (showMem)
+            {
+            if (contentPanel.Children.Count > 0) contentPanel.Children.Add(MakeDivider());
             // Memory section
-            contentPanel.Children.Add(MakeDivider());
             var memHeader = new TextBlock {
                 Foreground = new SolidColorBrush(AccentColor),
                 FontSize = 12,
@@ -505,9 +523,12 @@ namespace PowerAudioManager
                 elevateBtn.Click += (s, e) => AdminUtils.RestartAsAdmin();
                 contentPanel.Children.Add(elevateBtn);
             }
+            }
 
+            if (showTr)
+            {
+            if (contentPanel.Children.Count > 0) contentPanel.Children.Add(MakeDivider());
             // Translate section
-            contentPanel.Children.Add(MakeDivider());
             var trContent = new TextBlock {
                 FontSize = 12,
                 Foreground = new SolidColorBrush(TextSecondary)
@@ -523,10 +544,206 @@ namespace PowerAudioManager
             StyleButton(trBtn, false);
             trBtn.Click += (s, e) => OpenTranslateWindow(null);
             contentPanel.Children.Add(trBtn);
+            }
+
+            // ---- Launcher bar (4 quick-launch slots) ------------------------------
+            BuildLauncherBar(contentPanel);
+
+            // ---- Clipboard-history button -----------------------------------------
+            BuildClipboardButton(contentPanel);
 
             _root.Children.Add(contentPanel);
             mainBorder.Child = _root;
             Content = mainBorder;
+        }
+
+        // Module visibility defaults: all on. Keys: UI.ShowPower / UI.ShowAudio /
+        // UI.ShowMem / UI.ShowTranslate. Reads the registry directly (returns true
+        // when the key is absent) so the first run shows everything.
+        public static bool ModuleVisible(string module)
+        {
+            try
+            {
+                using (var k = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\PowerAudioManager\App"))
+                {
+                    if (k != null)
+                    {
+                        var s = k.GetValue("UI.Show" + module) as string;
+                        if (s == "0") return false;
+                        if (s == "1") return true;
+                    }
+                }
+            }
+            catch { }
+            return true;
+        }
+
+        // Rebuild the whole floating window after module-visibility changes.
+        // Preserves position; SizeToContent recomputes height after BuildUI.
+        public void RebuildUI()
+        {
+            double left = Left, top = Top;
+            _contentPanel = null;
+            _powerSection = null;
+            _audioSection = null;
+            _memStatusLabel = null;
+            _root = null;
+            BuildUI();
+            LoadData();
+            Left = left; Top = top;
+        }
+
+        // ---- Launcher bar ------------------------------------------------------
+        const int LauncherSlots = 4;
+        const string LauncherPrefKey = "Launcher.Paths";
+
+        static List<string> LoadLauncherPaths()
+        {
+            var list = new List<string>();
+            try
+            {
+                using (var k = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\PowerAudioManager\App"))
+                {
+                    if (k != null)
+                    {
+                        var s = k.GetValue(LauncherPrefKey) as string;
+                        if (!string.IsNullOrEmpty(s))
+                            foreach (var p in s.Split('|')) if (p.Length > 0) list.Add(p);
+                    }
+                }
+            }
+            catch { }
+            return list;
+        }
+
+        static void SaveLauncherPaths(List<string> paths)
+        {
+            try
+            {
+                using (var k = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(@"Software\PowerAudioManager\App"))
+                {
+                    var sb = new System.Text.StringBuilder();
+                    for (int i = 0; i < paths.Count; i++) { if (i > 0) sb.Append('|'); sb.Append(paths[i]); }
+                    k.SetValue(LauncherPrefKey, sb.ToString());
+                }
+            }
+            catch { }
+        }
+
+        // Extract a small icon from an exe/dll/lnk for the launcher slot.
+        static System.Windows.Media.ImageSource ExtractIcon(string path)
+        {
+            try
+            {
+                var ico = System.Drawing.Icon.ExtractAssociatedIcon(path);
+                if (ico != null)
+                {
+                    var bmp = System.Windows.Interop.Imaging.CreateBitmapSourceFromHIcon(
+                        ico.Handle, Int32Rect.Empty,
+                        System.Windows.Media.Imaging.BitmapSizeOptions.FromEmptyOptions());
+                    bmp.Freeze();
+                    return bmp;
+                }
+            }
+            catch { }
+            return null;
+        }
+
+        void BuildLauncherBar(StackPanel contentPanel)
+        {
+            if (contentPanel.Children.Count > 0) contentPanel.Children.Add(MakeDivider());
+            var header = new TextBlock {
+                Foreground = new SolidColorBrush(AccentColor), FontSize = 12,
+                FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 0, 0, 6) };
+            header.Inlines.Add(new Run("🚀") { FontFamily = EmojiFont });
+            header.Inlines.Add(new Run(" 快捷启动"));
+            contentPanel.Children.Add(header);
+            var row = new StackPanel { Orientation = Orientation.Horizontal };
+            var paths = LoadLauncherPaths();
+            for (int i = 0; i < LauncherSlots; i++)
+            {
+                string p = i < paths.Count ? paths[i] : null;
+                row.Children.Add(MakeLauncherSlot(i, p, paths));
+            }
+            contentPanel.Children.Add(row);
+        }
+
+        Button MakeLauncherSlot(int index, string path, List<string> paths)
+        {
+            var btn = new Button {
+                Width = 44, Height = 44,
+                Margin = new Thickness(0, 0, 6, 0),
+                Cursor = Cursors.Hand,
+                Background = new SolidColorBrush(CardColor),
+                BorderBrush = new SolidColorBrush(BorderColor),
+                ToolTip = string.IsNullOrEmpty(path) ? "点击添加程序" : path
+            };
+            if (!string.IsNullOrEmpty(path))
+            {
+                var img = ExtractIcon(path);
+                if (img != null)
+                    btn.Content = new System.Windows.Controls.Image { Source = img, Width = 24, Height = 24 };
+                else
+                    btn.Content = "•";
+            }
+            else
+            {
+                btn.Content = "+";
+                btn.FontSize = 18;
+                btn.Foreground = new SolidColorBrush(TextSecondary);
+            }
+            btn.Click += (s, e) =>
+            {
+                if (string.IsNullOrEmpty(path))
+                {
+                    // Pick an executable
+                    var dlg = new Microsoft.Win32.OpenFileDialog {
+                        Filter = "程序|*.exe;*.lnk|所有文件|*.*",
+                        Title = "选择要添加的程序" };
+                    if (dlg.ShowDialog() == true)
+                    {
+                        while (paths.Count <= index) paths.Add("");
+                        if (paths.Count > index) paths[index] = dlg.FileName; else paths.Add(dlg.FileName);
+                        SaveLauncherPaths(paths);
+                        RebuildUI();
+                    }
+                }
+                else
+                {
+                    try { System.Diagnostics.Process.Start(path); }
+                    catch (Exception ex) { AppLog.Log("Launch " + path, ex); }
+                }
+            };
+            btn.MouseRightButtonUp += (s, e) =>
+            {
+                // Right-click clears the slot
+                if (!string.IsNullOrEmpty(path))
+                {
+                    if (index < paths.Count) paths[index] = "";
+                    SaveLauncherPaths(paths);
+                    RebuildUI();
+                    e.Handled = true;
+                }
+            };
+            return btn;
+        }
+
+        // ---- Clipboard history button ------------------------------------------
+        void BuildClipboardButton(StackPanel contentPanel)
+        {
+            var cbContent = new TextBlock { FontSize = 12, Foreground = new SolidColorBrush(TextSecondary) };
+            cbContent.Inlines.Add(new Run("📋") { FontFamily = EmojiFont });
+            cbContent.Inlines.Add(new Run("  剪贴板历史"));
+            var cbBtn = new Button {
+                Content = cbContent,
+                Padding = new Thickness(10, 6, 10, 6),
+                Cursor = Cursors.Hand,
+                Margin = new Thickness(0, 6, 0, 0),
+                ToolTip = "查看最近复制的内容"
+            };
+            StyleButton(cbBtn, false);
+            cbBtn.Click += (s, e) => ClipboardHistoryPanel.Show(this);
+            contentPanel.Children.Add(cbBtn);
         }
 
 
@@ -624,6 +841,7 @@ namespace PowerAudioManager
                 _powerPlans = plans ?? new List<PowerPlanInfo>();
                 var active = _powerPlans.Find(p => p.IsActive);
                 if (active != null) _currentPlanId = active.Guid;
+                if (_powerSection == null) return; // module hidden
                 _powerSection.Children.Clear();
                 if (_powerPlans.Count == 0)
                 {
@@ -650,6 +868,7 @@ namespace PowerAudioManager
                 _audioDevices = devices ?? new List<AudioDeviceInfo>();
                 var defaultDev = _audioDevices.Find(d => d.IsDefault);
                 if (defaultDev != null) _currentDeviceId = defaultDev.Id;
+                if (_audioSection == null) return; // module hidden
                 _audioSection.Children.Clear();
                 if (_audioDevices.Count == 0)
                 {
@@ -691,6 +910,7 @@ namespace PowerAudioManager
                 // during the system policy refresh) and refresh once it's done.
                 _currentPlanId = plan.Guid;
                 foreach (var p in _powerPlans) p.IsActive = p.Guid == plan.Guid;
+                if (_powerSection == null) return;
                 _powerSection.Children.Clear();
                 foreach (var p in _powerPlans) _powerSection.Children.Add(CreatePlanButton(p));
                 PowerPlanService.SetActivePlanAsync(plan.Guid, Dispatcher, ok => { if (ok) LoadData(); });
@@ -1159,6 +1379,9 @@ namespace PowerAudioManager
                 _trayMenu.Items.Insert(_trayMenu.Items.Count - 1,
                     new System.Windows.Forms.ToolStripMenuItem("内存清理设置...", null,
                         (ss, ee) => { ShowWindow(); CleanerSettingsDialog.Show(this); }));
+                _trayMenu.Items.Insert(_trayMenu.Items.Count - 1,
+                    new System.Windows.Forms.ToolStripMenuItem("板块设置...", null,
+                        (ss, ee) => { ShowWindow(); ModulesSettingsDialog.Show(this); }));
                 _trayMenu.Items.Add("退出", null, (s, e) => {
                     if (_deviceWatcher != null) _deviceWatcher.Stop();
                     try { Microsoft.Win32.SystemEvents.DisplaySettingsChanged -= OnDisplaySettingsChanged; } catch { }
@@ -1177,20 +1400,76 @@ namespace PowerAudioManager
             }
         }
 
-        IntPtr CreateTrayIconHandle()
+        // ---- Dynamic tray icon --------------------------------------------------
+        // Renders the "闪电" (bolt) logo as a 32x32 bitmap, recoloured by current
+        // memory load: green < 60%, amber 60–80%, red > 80%. Called on every refresh
+        // tick so the tray reflects live system pressure.
+        System.Drawing.Icon _dynIcon;
+        int _lastLoadBucket = -1; // -1 forces a redraw on first call
+
+        static System.Drawing.Color LoadColor(uint load)
+        {
+            if (load >= 80) return System.Drawing.Color.FromArgb(232, 93, 93);   // red
+            if (load >= 60) return System.Drawing.Color.FromArgb(240, 180, 80);  // amber
+            return System.Drawing.Color.FromArgb(120, 200, 130);                 // green
+        }
+
+        System.Drawing.Icon BuildDynamicIcon(uint load)
+        {
+            var bmp = new System.Drawing.Bitmap(32, 32, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+            using (var g = System.Drawing.Graphics.FromImage(bmp))
+            {
+                g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                g.Clear(System.Drawing.Color.Transparent);
+                var color = LoadColor(load);
+                // Bolt polygon, centred in 32x32.
+                var pts = new System.Drawing.PointF[] {
+                    new System.Drawing.PointF(19f, 3f),
+                    new System.Drawing.PointF(8f, 18f),
+                    new System.Drawing.PointF(15f, 18f),
+                    new System.Drawing.PointF(13f, 29f),
+                    new System.Drawing.PointF(24f, 13f),
+                    new System.Drawing.PointF(17f, 13f)
+                };
+                using (var brush = new System.Drawing.SolidBrush(color))
+                    g.FillPolygon(brush, pts);
+                using (var pen = new System.Drawing.Pen(System.Drawing.Color.FromArgb(255, 255, 255), 1.2f))
+                    g.DrawPolygon(pen, pts);
+            }
+            var hicon = bmp.GetHicon();
+            var icon = System.Drawing.Icon.FromHandle(hicon);
+            return icon;
+        }
+
+        void UpdateTrayIcon()
         {
             try
             {
-                var dir = System.IO.Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
-                var icoPath = System.IO.Path.Combine(dir, "app.ico");
-                if (System.IO.File.Exists(icoPath))
-                    return new System.Drawing.Icon(icoPath, 32, 32).Handle;
-                var pngPath = System.IO.Path.Combine(dir, "app.png");
-                if (System.IO.File.Exists(pngPath))
-                    return new System.Drawing.Bitmap(pngPath).GetHicon();
+                if (_winFormsTray == null) return;
+                uint load = 0;
+                var s = MemoryCleaner.GetStatus();
+                if (s != null) load = s.MemoryLoadPercent;
+                int bucket = load >= 80 ? 2 : (load >= 60 ? 1 : 0);
+                if (bucket == _lastLoadBucket && _dynIcon != null) return; // unchanged
+                _lastLoadBucket = bucket;
+                var old = _dynIcon;
+                _dynIcon = BuildDynamicIcon(load);
+                _winFormsTray.Icon = _dynIcon;
+                if (old != null) { try { old.Dispose(); } catch { } }
+                UpdateTrayTooltip();
+            }
+            catch (Exception ex) { AppLog.Log("UpdateTrayIcon", ex); }
+        }
+
+        IntPtr CreateTrayIconHandle()
+        {
+            // Initial icon (green bucket). Subsequent updates go through UpdateTrayIcon.
+            try
+            {
+                if (_dynIcon == null) _dynIcon = BuildDynamicIcon(0);
+                return _dynIcon.Handle;
             }
             catch { }
-            // Fallback: blank icon
             return new System.Drawing.Bitmap(32, 32).GetHicon();
         }
 

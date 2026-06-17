@@ -38,6 +38,7 @@ if exist "%OUTDIR%\OneBox.exe" del /f /q "%OUTDIR%\OneBox.exe"
   "%SRC%TranslateService.cs" ^
   "%SRC%AdminUtils.cs" ^
   "%SRC%Dialogs.cs" ^
+  "%SRC%ClipboardHistory.cs" ^
   "%SRC%MainWindow.cs"
 
 if %ERRORLEVEL% EQU 0 (
