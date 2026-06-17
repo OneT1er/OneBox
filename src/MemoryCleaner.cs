@@ -96,7 +96,10 @@ namespace PowerAudioManager
 
         public static long GetTotalPhysicalKb()
         {
-            try { var c = new System.Diagnostics.PerformanceCounter("Memory", "Available KBytes"); return (long)c.NextValue(); } catch { return 0; }
+            // Use GlobalMemoryStatusEx (allocation-free) instead of a PerformanceCounter,
+            // which leaks a kernel perf-counter mapping when never disposed.
+            var s = GetStatus();
+            return s == null ? 0 : (long)(s.AvailableBytes / 1024);
         }
 
         public class MemoryStatus

@@ -28,7 +28,6 @@ namespace PowerAudioManager
         private StackPanel _powerSection;
         private StackPanel _audioSection;
         private bool _isExpanded = true;
-        private double _expandedHeight = 520;
         private System.Windows.Forms.NotifyIcon _winFormsTray;
         private bool _topmost = false;
         private Button _pinBtn;
@@ -57,16 +56,60 @@ namespace PowerAudioManager
         public static readonly System.Windows.Media.FontFamily EmojiFont =
             new System.Windows.Media.FontFamily("Segoe UI Symbol, Segoe UI Emoji");
 
+        const string HarmonyFontDir = @"C:\Users\LIUxy\OneDrive\Documents\tools\美化与字体\HarmonyOS-Sans\HarmonyOS Sans\HarmonyOS_Sans_SC\";
+        const string FontFileName = "HarmonyOS_Sans_SC_Regular.ttf";
+
+        // Resolve the font directory: prefer a ttf shipped next to the exe (portable),
+        // fall back to the developer machine path. Returns null if neither exists.
+        static string ResolveFontDir()
+        {
+            try
+            {
+                var exeDir = System.IO.Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
+                if (!string.IsNullOrEmpty(exeDir) && System.IO.File.Exists(System.IO.Path.Combine(exeDir, FontFileName)))
+                    return exeDir + System.IO.Path.DirectorySeparatorChar;
+            }
+            catch { }
+            if (System.IO.Directory.Exists(HarmonyFontDir)) return HarmonyFontDir;
+            return null;
+        }
+
         static System.Windows.Media.FontFamily LoadAppFont()
         {
             try
             {
-                var path = @"C:\Users\LIUxy\OneDrive\Documents\tools\美化与字体\HarmonyOS-Sans\HarmonyOS Sans\HarmonyOS_Sans_SC\";
-                if (System.IO.Directory.Exists(path))
-                    return new System.Windows.Media.FontFamily(new Uri(path), "./#HarmonyOS Sans SC");
+                var dir = ResolveFontDir();
+                if (dir != null)
+                    return new System.Windows.Media.FontFamily(new Uri(dir), "./#HarmonyOS Sans SC");
             }
             catch { }
             return new System.Windows.Media.FontFamily("Microsoft YaHei UI");
+        }
+
+        // WinForms (tray menu) counterpart of AppFont: load the same HarmonyOS ttf into a
+        // System.Drawing.Font so the right-click menu matches the window font.
+        static System.Drawing.Font _trayFont;
+        static System.Drawing.Font TrayFont()
+        {
+            if (_trayFont != null) return _trayFont;
+            try
+            {
+                var dir = ResolveFontDir();
+                if (dir != null)
+                {
+                    var ttf = System.IO.Path.Combine(dir, FontFileName);
+                    if (System.IO.File.Exists(ttf))
+                    {
+                        var pfc = new System.Drawing.Text.PrivateFontCollection();
+                        pfc.AddFontFile(ttf);
+                        _trayFont = new System.Drawing.Font(pfc.Families[0], 9f, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point);
+                        return _trayFont;
+                    }
+                }
+            }
+            catch { }
+            _trayFont = new System.Drawing.Font("Microsoft YaHei UI", 9f);
+            return _trayFont;
         }
 
         static System.Windows.Media.Imaging.BitmapImage LoadAppImage(string fileName)
@@ -171,9 +214,7 @@ namespace PowerAudioManager
                 // re-clamp once so a 4K-saved position never leaves the window off-screen on 1080p.
                 Dispatcher.BeginInvoke(new Action(ClampToWorkArea), DispatcherPriority.Loaded);
             }
-            catch
-            {
-            }
+            catch (Exception ex) { AppLog.Log("OnLoaded", ex); }
         }
 
         void OnDisplaySettingsChanged(object sender, EventArgs e)
@@ -226,15 +267,24 @@ namespace PowerAudioManager
         {
             var mainBorder = new Border
             {
-                CornerRadius = new CornerRadius(8),
+                CornerRadius = new CornerRadius(10),
                 Background = new SolidColorBrush(BgColor),
                 BorderBrush = new SolidColorBrush(BorderColor),
-                BorderThickness = new Thickness(1)
+                BorderThickness = new Thickness(1),
+                // Fluent elevation: a soft, depth-less shadow gives the floating card lift
+                // without introducing any new palette colour.
+                Effect = new System.Windows.Media.Effects.DropShadowEffect
+                {
+                    BlurRadius = 28,
+                    ShadowDepth = 0,
+                    Opacity = 0.45,
+                    Color = Colors.Black
+                }
             };
             _root = new StackPanel();
             var titleBar = new DockPanel
             {
-                Background = new SolidColorBrush(Color.FromRgb(34, 32, 50)),
+                Background = Brushes.Transparent, // bg lives on the rounded wrapper below
                 Height = 36,
                 LastChildFill = true
             };
@@ -343,22 +393,29 @@ namespace PowerAudioManager
                 tipBlock.Text = "电源计划: " + plan + System.Environment.NewLine + "音频设备: " + dev + mem;
             };
             titleBar.MouseLeftButtonDown += (s, e) => { if (!_lockPosition) try { DragMove(); } catch { } };
-            _root.Children.Add(titleBar);
+            // Wrap the title bar in a Border whose top corners round to match the
+            // outer card (CornerRadius 10). Previously the title bar's own opaque
+            // #222132 background had square top corners that poked past the card's
+            // r=10 arc and showed as "尖尖" spikes. Rounding the wrapper means the
+            // title bar fill follows the arc; bottom corners stay square where it
+            // meets the content. This replaces the old _root.Clip workaround.
+            var titleBarBorder = new Border
+            {
+                CornerRadius = new CornerRadius(10, 10, 0, 0),
+                Background = new SolidColorBrush(Color.FromRgb(34, 32, 50)),
+                Child = titleBar
+            };
+            _root.Children.Add(titleBarBorder);
 
-            var contentPanel = new StackPanel { Margin = new Thickness(12, 8, 12, 12) };
+            var contentPanel = new StackPanel { Margin = new Thickness(14, 10, 14, 14) };
             _contentPanel = contentPanel;
 
             var powerHeader = MakeCollapsibleHeader("电源计划", "icon-power.png", () => _powerSection, AppPrefs.GetBool("UI.PowerCollapsed", false));
             contentPanel.Children.Add(powerHeader);
-            _powerSection = new StackPanel { Margin = new Thickness(0, 0, 0, 12) };
+            _powerSection = new StackPanel { Margin = new Thickness(0, 0, 0, 4) };
             contentPanel.Children.Add(_powerSection);
 
-            contentPanel.Children.Add(new Border
-            {
-                Height = 1,
-                Background = new SolidColorBrush(BorderColor),
-                Margin = new Thickness(0, 0, 0, 12)
-            });
+            contentPanel.Children.Add(MakeDivider());
 
             var audioHeader = MakeCollapsibleHeader("音频输出", "icon-audio.png", () => _audioSection, AppPrefs.GetBool("UI.AudioCollapsed", false));
             contentPanel.Children.Add(audioHeader);
@@ -366,7 +423,7 @@ namespace PowerAudioManager
             contentPanel.Children.Add(_audioSection);
 
             // Volume row
-            var volRow = new DockPanel { Margin = new Thickness(0, 8, 0, 0), LastChildFill = true };
+            var volRow = new DockPanel { Margin = new Thickness(0, 10, 0, 0), LastChildFill = true };
             _muteBtn = new Button {
                 Content = "\uD83D\uDD0A", FontFamily = EmojiFont,
                 Width = 28, Height = 28,
@@ -407,11 +464,7 @@ namespace PowerAudioManager
             contentPanel.Children.Add(volRow);
 
             // Memory section
-            contentPanel.Children.Add(new Border {
-                Height = 1,
-                Background = new SolidColorBrush(BorderColor),
-                Margin = new Thickness(0, 12, 0, 12)
-            });
+            contentPanel.Children.Add(MakeDivider());
             var memHeader = new TextBlock {
                 Foreground = new SolidColorBrush(AccentColor),
                 FontSize = 12,
@@ -454,11 +507,7 @@ namespace PowerAudioManager
             }
 
             // Translate section
-            contentPanel.Children.Add(new Border {
-                Height = 1,
-                Background = new SolidColorBrush(BorderColor),
-                Margin = new Thickness(0, 12, 0, 12)
-            });
+            contentPanel.Children.Add(MakeDivider());
             var trContent = new TextBlock {
                 FontSize = 12,
                 Foreground = new SolidColorBrush(TextSecondary)
@@ -721,10 +770,12 @@ namespace PowerAudioManager
 
         ControlTemplate BuildVolumeSliderTemplate()
         {
-            string xaml = 
+            // Fluent slider: thin 3px pill track, a larger 14px round thumb with a subtle
+            // dark ring so it reads against the accent fill.
+            string xaml =
 @"<ControlTemplate TargetType='Slider' xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation' xmlns:x='http://schemas.microsoft.com/winfx/2006/xaml'>
   <Grid VerticalAlignment='Center' Height='20'>
-    <Border Height='4' VerticalAlignment='Center' CornerRadius='2'
+    <Border Height='3' VerticalAlignment='Center' CornerRadius='2'
             Background='{TemplateBinding Background}'/>
     <Track x:Name='PART_Track'>
       <Track.DecreaseRepeatButton>
@@ -732,7 +783,7 @@ namespace PowerAudioManager
           Command='{x:Static Slider.DecreaseLarge}'>
           <RepeatButton.Template>
             <ControlTemplate TargetType='RepeatButton'>
-              <Border Height='4' VerticalAlignment='Center' CornerRadius='2'
+              <Border Height='3' VerticalAlignment='Center' CornerRadius='2'
                 Background='{Binding Foreground, RelativeSource={RelativeSource AncestorType=Slider}}'/>
             </ControlTemplate>
           </RepeatButton.Template>
@@ -752,7 +803,10 @@ namespace PowerAudioManager
         <Thumb>
           <Thumb.Template>
             <ControlTemplate TargetType='Thumb'>
-              <Ellipse Width='12' Height='12' Fill='White'/>
+              <Grid>
+                <Ellipse Width='16' Height='16' Fill='#00000000'/>
+                <Ellipse Width='14' Height='14' Fill='White' Stroke='#33000000' StrokeThickness='1'/>
+              </Grid>
             </ControlTemplate>
           </Thumb.Template>
         </Thumb>
@@ -761,6 +815,45 @@ namespace PowerAudioManager
   </Grid>
 </ControlTemplate>";
             return (ControlTemplate)System.Windows.Markup.XamlReader.Parse(xaml);
+        }
+
+        // A soft Fluent separator: the existing BorderColor, but inset from the edges so it
+        // reads as a divider between sections rather than a full-bleed line. No new colour.
+        Border MakeDivider()
+        {
+            return new Border
+            {
+                Height = 1,
+                Background = new SolidColorBrush(BorderColor),
+                Margin = new Thickness(2, 12, 2, 12),
+                Opacity = 0.6
+            };
+        }
+
+        // Rounded button template (corner radius 6) — the single source of the Fluent pill
+        // shape for every action button. Background/Border/Content/Padding all bind through.
+        static ControlTemplate _roundedBtn;
+        static ControlTemplate RoundedButtonTemplate()
+        {
+            if (_roundedBtn != null) return _roundedBtn;
+            string xaml =
+@"<ControlTemplate TargetType='Button' xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'>
+  <Border CornerRadius='6' Background='{TemplateBinding Background}' BorderBrush='{TemplateBinding BorderBrush}' BorderThickness='{TemplateBinding BorderThickness}'>
+    <ContentPresenter Margin='{TemplateBinding Padding}' HorizontalAlignment='{TemplateBinding HorizontalContentAlignment}' VerticalAlignment='Center' RecognizesAccessKey='True'/>
+  </Border>
+</ControlTemplate>";
+            _roundedBtn = (ControlTemplate)System.Windows.Markup.XamlReader.Parse(xaml);
+            return _roundedBtn;
+        }
+
+        // Smooth Fluent hover: animate the Background brush colour instead of swapping it
+        // instantly. Only applied to inactive buttons (active ones keep their accent fill).
+        static void AnimateButtonBg(Button btn, Color to)
+        {
+            var b = btn.Background as SolidColorBrush;
+            if (b == null) { btn.Background = new SolidColorBrush(to); return; }
+            b.BeginAnimation(SolidColorBrush.ColorProperty,
+                new System.Windows.Media.Animation.ColorAnimation(to, TimeSpan.FromMilliseconds(120)));
         }
 
         void UpdateVolumeUI()
@@ -942,6 +1035,7 @@ namespace PowerAudioManager
 
         void StyleButton(Button btn, bool isActive)
         {
+            btn.Template = RoundedButtonTemplate();
             if (isActive)
             {
                 btn.Background = new SolidColorBrush(ActiveBg);
@@ -958,12 +1052,11 @@ namespace PowerAudioManager
                 btn.BorderBrush = new SolidColorBrush(BorderColor);
                 btn.BorderThickness = new Thickness(1);
             }
-            btn.MouseEnter += (s, e) => {
-                if (!isActive) btn.Background = new SolidColorBrush(HoverColor);
-            };
-            btn.MouseLeave += (s, e) => {
-                if (!isActive) btn.Background = new SolidColorBrush(CardColor);
-            };
+            if (!isActive)
+            {
+                btn.MouseEnter += (s, e) => AnimateButtonBg(btn, HoverColor);
+                btn.MouseLeave += (s, e) => AnimateButtonBg(btn, CardColor);
+            }
         }
 
 
@@ -1020,6 +1113,14 @@ namespace PowerAudioManager
                     Visible = true
                 };
                 _trayMenu = new System.Windows.Forms.ContextMenuStrip();
+                _trayMenu.Font = TrayFont(); // HarmonyOS Sans SC — match the window font
+                // Match the floating window's dark-purple theme on the WinForms tray menu.
+                _trayMenu.RenderMode = System.Windows.Forms.ToolStripRenderMode.ManagerRenderMode;
+                _trayMenu.Renderer = new System.Windows.Forms.ToolStripProfessionalRenderer(new OneBoxMenuColorTable());
+                _trayMenu.BackColor = System.Drawing.Color.FromArgb(28, 26, 40);   // BgColor
+                _trayMenu.ForeColor = System.Drawing.Color.White;                    // TextPrimary
+                _trayMenu.ShowImageMargin = false;
+                _trayMenu.Padding = new System.Windows.Forms.Padding(2, 4, 2, 4);
                 _trayMenu.Items.Add("显示窗口", null, (s, e) => ShowWindow());
                 var autoItem = new System.Windows.Forms.ToolStripMenuItem("开机自启") { CheckOnClick = true, Checked = IsAutoStartEnabled() };
                 autoItem.Click += (s, e) => ToggleAutoStart(autoItem.Checked);
@@ -1033,6 +1134,10 @@ namespace PowerAudioManager
                 _lockMenuItem.Click += (s, e) => { _lockPosition = _lockMenuItem.Checked; AppPrefs.SetBool("LockPosition", _lockPosition); if (_pinBtn != null) { _pinBtn.Content = _lockPosition ? "\uD83D\uDD12" : "\uD83D\uDD13"; _pinBtn.Foreground = new SolidColorBrush(_lockPosition ? AccentColor : TextSecondary); } };
                 _trayMenu.Items.Insert(_trayMenu.Items.Count - 1, _lockMenuItem);
                 var hiddenSub = new System.Windows.Forms.ToolStripMenuItem("显示已隐藏设备");
+                // Force the submenu drop-down to inherit the dark theme (it does not
+                // pick up BackColor/ForeColor from the parent ContextMenuStrip).
+                hiddenSub.DropDown.BackColor = System.Drawing.Color.FromArgb(28, 26, 40);
+                hiddenSub.DropDown.ForeColor = System.Drawing.Color.White;
                 _trayMenu.Items.Insert(_trayMenu.Items.Count - 1, hiddenSub);
                 _trayMenu.Opening += (s, e) => {
                     hiddenSub.DropDownItems.Clear();
@@ -1042,6 +1147,7 @@ namespace PowerAudioManager
                         any = true;
                         var copy = d;
                         var mi = new System.Windows.Forms.ToolStripMenuItem(d.Name);
+                        mi.ForeColor = System.Drawing.Color.White;
                         mi.Click += (ss, ee) => { DevicePrefs.SetHidden(copy.Name, false); LoadData(); };
                         hiddenSub.DropDownItems.Add(mi);
                     }
@@ -1088,6 +1194,50 @@ namespace PowerAudioManager
             return new System.Drawing.Bitmap(32, 32).GetHicon();
         }
 
+        // WinForms ProfessionalColorTable that mirrors the WPF floating window's
+        // dark-purple palette (BgColor/CardColor/Hover/Accent/Border) so the tray
+        // right-click menu looks like the window, not the default light OS menu.
+        class OneBoxMenuColorTable : System.Windows.Forms.ProfessionalColorTable
+        {
+            static readonly System.Drawing.Color Bg     = System.Drawing.Color.FromArgb(28, 26, 40);   // BgColor #1C1A28
+            static readonly System.Drawing.Color Title  = System.Drawing.Color.FromArgb(34, 32, 50);   // title bar #222132
+            static readonly System.Drawing.Color Card   = System.Drawing.Color.FromArgb(42, 39, 60);   // CardColor #2A273C
+            static readonly System.Drawing.Color Hover  = System.Drawing.Color.FromArgb(58, 54, 84);   // HoverColor #3A3654
+            static readonly System.Drawing.Color Active = System.Drawing.Color.FromArgb(110, 105, 200);// ActiveBg #6E69C8
+            static readonly System.Drawing.Color Accent = System.Drawing.Color.FromArgb(142, 140, 216);// Accent #8E8CD8
+            static readonly System.Drawing.Color Border = System.Drawing.Color.FromArgb(80, 75, 120);  // BorderColor #504F78
+
+            public override System.Drawing.Color MenuBorder { get { return Border; } }
+            public override System.Drawing.Color MenuItemBorder { get { return Accent; } }
+            public override System.Drawing.Color MenuItemSelected { get { return Hover; } }
+            public override System.Drawing.Color MenuItemSelectedGradientBegin { get { return Hover; } }
+            public override System.Drawing.Color MenuItemSelectedGradientEnd { get { return Hover; } }
+            public override System.Drawing.Color MenuItemPressedGradientBegin { get { return Active; } }
+            public override System.Drawing.Color MenuItemPressedGradientMiddle { get { return Active; } }
+            public override System.Drawing.Color MenuItemPressedGradientEnd { get { return Active; } }
+            public override System.Drawing.Color MenuStripGradientBegin { get { return Bg; } }
+            public override System.Drawing.Color MenuStripGradientEnd { get { return Bg; } }
+            public override System.Drawing.Color ToolStripGradientBegin { get { return Title; } }
+            public override System.Drawing.Color ToolStripGradientMiddle { get { return Title; } }
+            public override System.Drawing.Color ToolStripGradientEnd { get { return Bg; } }
+            public override System.Drawing.Color ImageMarginGradientBegin { get { return Card; } }
+            public override System.Drawing.Color ImageMarginGradientMiddle { get { return Card; } }
+            public override System.Drawing.Color ImageMarginGradientEnd { get { return Card; } }
+            public override System.Drawing.Color SeparatorDark { get { return Border; } }
+            public override System.Drawing.Color SeparatorLight { get { return Card; } }
+            public override System.Drawing.Color CheckBackground { get { return Active; } }
+            public override System.Drawing.Color CheckPressedBackground { get { return Active; } }
+            public override System.Drawing.Color CheckSelectedBackground { get { return Hover; } }
+            public override System.Drawing.Color ButtonSelectedHighlight { get { return Hover; } }
+            public override System.Drawing.Color ButtonSelectedGradientBegin { get { return Hover; } }
+            public override System.Drawing.Color ButtonSelectedGradientEnd { get { return Hover; } }
+            public override System.Drawing.Color ButtonPressedGradientBegin { get { return Active; } }
+            public override System.Drawing.Color ButtonPressedGradientMiddle { get { return Active; } }
+            public override System.Drawing.Color ButtonPressedGradientEnd { get { return Active; } }
+            public override System.Drawing.Color StatusStripGradientBegin { get { return Bg; } }
+            public override System.Drawing.Color StatusStripGradientEnd { get { return Bg; } }
+        }
+
         IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
         {
             if (msg == Native.WM_HOTKEY)
@@ -1111,12 +1261,6 @@ namespace PowerAudioManager
                     }
                     handled = true;
                 }
-            }
-            if (msg == Native.WM_TRAYICON)
-            {
-                int evt = lParam.ToInt32();
-                if (evt == 0x0202 || evt == 0x0203) ShowWindow(); // L-click or dblclk
-                handled = true;
             }
             return IntPtr.Zero;
         }

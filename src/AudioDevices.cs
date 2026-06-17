@@ -120,6 +120,8 @@ namespace PowerAudioManager
             {
                 try { if (_pollTimer != null) _pollTimer.Stop(); } catch { }
                 try { _enumerator.UnregisterEndpointNotificationCallback(this); } catch { }
+                // Release the COM enumerator RCW so it doesn't linger until GC.
+                try { if (_enumerator != null) { Marshal.ReleaseComObject(_enumerator); _enumerator = null; } } catch { }
             }
             public void OnDeviceStateChanged(string deviceId, int newState) { Fire(); }
             public void OnDeviceAdded(string deviceId) { Fire(); }
@@ -150,7 +152,7 @@ namespace PowerAudioManager
                         Marshal.Release(pDev);
                     }
                 }
-                catch { return ""; }
+                catch (Exception ex) { AppLog.Log("GetCurrentDefaultId", ex); return ""; }
                 finally { if (im != null) try { Marshal.ReleaseComObject(im); } catch { } }
             }
         }
@@ -204,7 +206,7 @@ namespace PowerAudioManager
                     }
                 }
             }
-            catch { }
+            catch (Exception ex) { AppLog.Log("GetOutputDevices", ex); }
             if (result.Count == 0)
             {
                 result.Add(new AudioDeviceInfo { Id = "default", Name = "默认音频输出", IsDefault = true });
@@ -271,7 +273,7 @@ namespace PowerAudioManager
                 Marshal.ReleaseComObject(config);
                 return true;
             }
-            catch { }
+            catch (Exception ex) { AppLog.Log("SetDefaultDevice(" + (deviceNameOrId ?? "") + ")", ex); }
             return false;
         }
 
@@ -333,7 +335,7 @@ namespace PowerAudioManager
                     return bestMatchId;
                 }
             }
-            catch { }
+            catch (Exception ex) { AppLog.Log("FindEndpointIdByName(" + (deviceName ?? "") + ")", ex); }
             return null;
         }
     }

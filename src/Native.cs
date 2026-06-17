@@ -49,10 +49,6 @@ namespace PowerAudioManager
         // ---- Working-set trim ---------------------------------------------------
         [DllImport("kernel32.dll")]
         public static extern bool SetProcessWorkingSetSize(IntPtr hProcess, int min, int max);
-
-        // ---- Tray window message (WinForms NotifyIcon posts to its own hidden
-        //      window, but we still check this id in WndProc for legacy callers) ---
-        public const int WM_TRAYICON = 0x8001;
     }
 
 }
