@@ -25,7 +25,7 @@ namespace PowerAudioManager
     public static class UpdateChecker
     {
         // === Configure these for your repo ===
-        public const string Owner = "YOUR_GITHUB_USERNAME";
+        public const string Owner = "OneT1er";
         public const string Repo = "OneBox";
         // Bump this when you cut a new release. Must match the GitHub release tag
         // (e.g. tag "v1.2.0" -> CurrentVersion 1.2.0).

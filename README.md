@@ -162,4 +162,10 @@ public static readonly Version CurrentVersion = new Version(1, 0, 0);
 
 ## 📄 许可证
 
-本项目代码仅供学习交流使用。HarmonyOS Sans SC 字体版权归华为所有，按其原始许可使用。
+本项目代码采用 [MIT 许可证](LICENSE) 开源。
+
+HarmonyOS Sans SC 字体（`src/HarmonyOS_Sans_SC_Regular.ttf`）版权归华为所有，按其原始许可使用，不包含在本项目的 MIT 许可范围内。
+
+## 🤝 贡献
+
+欢迎提 Issue 反馈 bug 或建议功能，也欢迎 Pull Request。请先阅读[贡献指南](CONTRIBUTING.md)。
