@@ -1,0 +1,15 @@
+上传准备: 清理硬编码路径 + GitHub 自动更新 + README + 字体随仓库分发
+
+- 清理公开仓库隐私: 移除 MainWindow.cs 与 build.bat 中硬编码的个人 OneDrive 字体路径,
+  改为从 exe 同目录或 src 目录加载 ttf; 缺失时回退微软雅黑
+- 新增 UpdateChecker.cs: 启动时后台检查 GitHub Release 最新版本, 对比版本号;
+  托盘菜单加"检查更新", 有新版弹窗显示更新内容并打开下载页;
+  HttpWebRequest + JavaScriptSerializer 解析 GitHub API, 无需新增引用
+- MainWindow.cs: OnLoaded 启动静默检查, 托盘菜单加"检查更新"入口
+- build.bat: 加入 UpdateChecker.cs 编译
+- HarmonyOS Sans SC 字体随仓库分发 (src\HarmonyOS_Sans_SC_Regular.ttf),
+  构建时自动复制到输出目录, clone 后开箱即用
+- .gitignore: 完善(排除 output/exe/IDE/日志/提交脚本), 不排除字体
+- README.md: 项目说明、构建、自动更新配置、开发约束
+
+注意: UpdateChecker.cs 顶部的 Owner/Repo 需改成你的 GitHub 仓库地址

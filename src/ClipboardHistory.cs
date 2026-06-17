@@ -102,14 +102,6 @@ namespace PowerAudioManager
     {
         public static void Show(Window owner)
         {
-            var dlg = new Window {
-                Title = "剪贴板历史",
-                Width = 360, Height = 420,
-                Owner = owner,
-                WindowStartupLocation = WindowStartupLocation.CenterOwner,
-                Background = new SolidColorBrush(Color.FromRgb(28, 26, 40)),
-                FontFamily = owner.FontFamily
-            };
             var outer = new DockPanel { Margin = new Thickness(12) };
 
             var header = new TextBlock {
@@ -126,6 +118,8 @@ namespace PowerAudioManager
             var scroller = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
             var list = new StackPanel();
             scroller.Content = list;
+
+            var dlg = OneBoxWindow.Create(owner, "剪贴板历史", 360, 420, outer, true);
 
             Action render = null;
             render = () =>
@@ -168,7 +162,6 @@ namespace PowerAudioManager
             clearBtn.Click += (s, e) => { ClipboardHistory.Clear(); render(); };
 
             outer.Children.Add(scroller);
-            dlg.Content = outer;
 
             // Refresh once when shown so freshly-copied items appear.
             dlg.Loaded += (s, e) => render();

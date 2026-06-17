@@ -1,4 +1,27 @@
 src/output/
+output/
 *.log
 *.user
 onebox-emoji-test.png
+
+# Binaries / packages
+*.exe
+*.pdb
+*.dll
+
+# Visual Studio / Rider
+.vs/
+.idea/
+*.suo
+*.userprefs
+
+# OS junk
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# Commit helper scripts (optional — delete these lines if you want to keep them)
+commit.bat
+commit_msg.txt
+commit_ui.bat
+commit_ui.txt

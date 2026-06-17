@@ -56,11 +56,10 @@ namespace PowerAudioManager
         public static readonly System.Windows.Media.FontFamily EmojiFont =
             new System.Windows.Media.FontFamily("Segoe UI Symbol, Segoe UI Emoji");
 
-        const string HarmonyFontDir = @"C:\Users\LIUxy\OneDrive\Documents\tools\美化与字体\HarmonyOS-Sans\HarmonyOS Sans\HarmonyOS_Sans_SC\";
         const string FontFileName = "HarmonyOS_Sans_SC_Regular.ttf";
 
         // Resolve the font directory: prefer a ttf shipped next to the exe (portable),
-        // fall back to the developer machine path. Returns null if neither exists.
+        // fall back to a ttf placed in the build source folder. Returns null if none.
         static string ResolveFontDir()
         {
             try
@@ -70,7 +69,6 @@ namespace PowerAudioManager
                     return exeDir + System.IO.Path.DirectorySeparatorChar;
             }
             catch { }
-            if (System.IO.Directory.Exists(HarmonyFontDir)) return HarmonyFontDir;
             return null;
         }
 
@@ -198,6 +196,7 @@ namespace PowerAudioManager
                 try { InitTrayIcon(); } catch { }
                 try { UpdateTrayIcon(); } catch { }
                 try { ClipboardHistory.Start(); } catch { }
+                try { UpdateChecker.CheckAsync(this, false); } catch { }
                 try { RestartAutoCleanTimer(); } catch { }
                 // Register hotkey window hook
                 _hotkeyHwnd = hwnd;
@@ -547,10 +546,10 @@ namespace PowerAudioManager
             }
 
             // ---- Launcher bar (4 quick-launch slots) ------------------------------
-            BuildLauncherBar(contentPanel);
+            if (ModuleVisible("Launcher")) BuildLauncherBar(contentPanel);
 
             // ---- Clipboard-history button -----------------------------------------
-            BuildClipboardButton(contentPanel);
+            if (ModuleVisible("Clipboard")) BuildClipboardButton(contentPanel);
 
             _root.Children.Add(contentPanel);
             mainBorder.Child = _root;
@@ -1382,6 +1381,10 @@ namespace PowerAudioManager
                 _trayMenu.Items.Insert(_trayMenu.Items.Count - 1,
                     new System.Windows.Forms.ToolStripMenuItem("板块设置...", null,
                         (ss, ee) => { ShowWindow(); ModulesSettingsDialog.Show(this); }));
+                _trayMenu.Items.Insert(_trayMenu.Items.Count - 1,
+                    new System.Windows.Forms.ToolStripMenuItem("检查更新...", null,
+                        (ss, ee) => { UpdateChecker.CheckAsync(this, true); }));
+                _trayMenu.Items.Insert(_trayMenu.Items.Count - 1, new System.Windows.Forms.ToolStripSeparator());
                 _trayMenu.Items.Add("退出", null, (s, e) => {
                     if (_deviceWatcher != null) _deviceWatcher.Stop();
                     try { Microsoft.Win32.SystemEvents.DisplaySettingsChanged -= OnDisplaySettingsChanged; } catch { }

@@ -5,6 +5,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
@@ -109,16 +110,8 @@ namespace PowerAudioManager
 
         public static void Show(Window owner)
         {
-            var dlg = new Window {
-                Title = "内存清理设置",
-                Width = 420, Height = 600,
-                Owner = owner,
-                WindowStartupLocation = WindowStartupLocation.CenterOwner,
-                ResizeMode = ResizeMode.NoResize,
-                FontFamily = owner.FontFamily,
-                Background = new SolidColorBrush(Color.FromRgb(28, 26, 40))
-            };
             var scroller = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
+            var dlg = OneBoxWindow.Create(owner, "内存清理设置", 420, 600, scroller, false);
             var stack = new StackPanel { Margin = new Thickness(20) };
             scroller.Content = stack;
             var fg = new SolidColorBrush(Color.FromRgb(190, 188, 220));
@@ -219,7 +212,6 @@ namespace PowerAudioManager
             var cancel = new Button { Content = "取消", Width = 64, Height = 28 };
             btns.Children.Add(ok); btns.Children.Add(cancel);
             stack.Children.Add(btns);
-            dlg.Content = scroller;
 
             ok.Click += (s, e) => {
                 AppPrefs.SetBool("AutoCleanEnabled", enableCb.IsChecked == true);
@@ -450,19 +442,124 @@ namespace PowerAudioManager
             };
         }
 
+        // A minimal dark ComboBox control template built with FrameworkElementFactory.
+        // Replaces the default (light) template so the selected-item display area and
+        // the toggle button both render on the dark card background, with light text.
+        static System.Windows.Controls.ControlTemplate DarkComboBoxTemplate()
+        {
+            var template = new System.Windows.Controls.ControlTemplate(typeof(ComboBox));
+
+            // Root: a grid holding the content presenter (selected item) + a toggle button.
+            var root = new FrameworkElementFactory(typeof(Grid));
+
+            // Content presenter for the selected item, left-aligned, vertically centred.
+            var cp = new FrameworkElementFactory(typeof(ContentPresenter));
+            cp.SetValue(ContentPresenter.ContentSourceProperty, "SelectionBoxItem");
+            cp.SetValue(ContentPresenter.HorizontalAlignmentProperty, HorizontalAlignment.Stretch);
+            cp.SetValue(ContentPresenter.VerticalAlignmentProperty, VerticalAlignment.Center);
+            cp.SetValue(ContentPresenter.MarginProperty, new Thickness(6, 0, 22, 0));
+            cp.SetValue(ContentPresenter.SnapsToDevicePixelsProperty, true);
+            root.AppendChild(cp);
+
+            // Toggle button: transparent overlay that fills the whole box and toggles
+            // IsDropDownOpen on click. It sits above the content presenter so it
+            // captures the mouse for the whole combo area.
+            var toggle = new FrameworkElementFactory(typeof(ToggleButton));
+            toggle.SetValue(ToggleButton.FocusableProperty, false);
+            toggle.SetValue(ToggleButton.IsTabStopProperty, false);
+            toggle.SetValue(ToggleButton.HorizontalAlignmentProperty, HorizontalAlignment.Stretch);
+            toggle.SetValue(ToggleButton.VerticalAlignmentProperty, VerticalAlignment.Stretch);
+            // Two-way bind IsChecked <-> IsDropDownOpen. Inside a control template the
+            // binding source must be the templated parent (the ComboBox) — without
+            // RelativeSource it binds to DataContext (null) and clicks never reach
+            // IsDropDownOpen, so the popup never opens.
+            var isOpenCheckBinding = new System.Windows.Data.Binding("IsDropDownOpen") {
+                Mode = System.Windows.Data.BindingMode.TwoWay,
+                RelativeSource = new System.Windows.Data.RelativeSource(System.Windows.Data.RelativeSourceMode.TemplatedParent)
+            };
+            toggle.SetBinding(ToggleButton.IsCheckedProperty, isOpenCheckBinding);
+            // Transparent button template: a Border that stretches and has a real
+            // (transparent) brush so it participates in hit-testing. A null background
+            // would make it ignore clicks.
+            var tbTemplate = new System.Windows.Controls.ControlTemplate(typeof(ToggleButton));
+            var tbRoot = new FrameworkElementFactory(typeof(Border));
+            tbRoot.SetValue(Border.BackgroundProperty, Brushes.Transparent);
+            tbRoot.SetValue(Border.HorizontalAlignmentProperty, HorizontalAlignment.Stretch);
+            tbRoot.SetValue(Border.VerticalAlignmentProperty, VerticalAlignment.Stretch);
+            tbTemplate.VisualTree = tbRoot;
+            toggle.SetValue(ToggleButton.TemplateProperty, tbTemplate);
+            root.AppendChild(toggle);
+
+            // Dropdown arrow glyph on the right.
+            var arrow = new FrameworkElementFactory(typeof(TextBlock));
+            arrow.SetValue(TextBlock.TextProperty, "▾");
+            arrow.SetValue(TextBlock.FontSizeProperty, 10.0);
+            arrow.SetValue(TextBlock.ForegroundProperty, new SolidColorBrush(Color.FromRgb(190, 188, 220)));
+            arrow.SetValue(TextBlock.HorizontalAlignmentProperty, HorizontalAlignment.Right);
+            arrow.SetValue(TextBlock.VerticalAlignmentProperty, VerticalAlignment.Center);
+            arrow.SetValue(TextBlock.MarginProperty, new Thickness(0, 0, 6, 0));
+            arrow.SetValue(TextBlock.IsHitTestVisibleProperty, false);
+            root.AppendChild(arrow);
+
+            // Popup hosting the items (dark background).
+            var popup = new FrameworkElementFactory(typeof(Popup));
+            popup.SetValue(Popup.NameProperty, "PART_Popup");
+            popup.SetValue(Popup.AllowsTransparencyProperty, true);
+            popup.SetValue(Popup.PlacementProperty, PlacementMode.Bottom);
+            popup.SetValue(Popup.PopupAnimationProperty, PopupAnimation.None);
+            var isOpenBinding = new System.Windows.Data.Binding("IsDropDownOpen") {
+                RelativeSource = new System.Windows.Data.RelativeSource(System.Windows.Data.RelativeSourceMode.TemplatedParent)
+            };
+            popup.SetBinding(Popup.IsOpenProperty, isOpenBinding);
+            popup.SetValue(Popup.FocusableProperty, false);
+
+            var dropBorder = new FrameworkElementFactory(typeof(Border));
+            dropBorder.SetValue(Border.BackgroundProperty, new SolidColorBrush(Color.FromRgb(34, 32, 50)));
+            dropBorder.SetValue(Border.BorderBrushProperty, new SolidColorBrush(Color.FromRgb(80, 75, 120)));
+            dropBorder.SetValue(Border.BorderThicknessProperty, new Thickness(1));
+            dropBorder.SetValue(Border.CornerRadiusProperty, new CornerRadius(6));
+
+            var scroller = new FrameworkElementFactory(typeof(ScrollViewer));
+            scroller.SetValue(ScrollViewer.VerticalScrollBarVisibilityProperty, ScrollBarVisibility.Auto);
+            scroller.SetValue(ScrollViewer.MaxHeightProperty, 300.0);
+            var itemsHost = new FrameworkElementFactory(typeof(ItemsPresenter));
+            itemsHost.SetValue(KeyboardNavigation.DirectionalNavigationProperty, KeyboardNavigationMode.Cycle);
+            scroller.AppendChild(itemsHost);
+            dropBorder.AppendChild(scroller);
+            popup.AppendChild(dropBorder);
+            root.AppendChild(popup);
+
+            template.VisualTree = root;
+            return template;
+        }
+
         ComboBox MakeLangBox(bool isFrom)
         {
             var cb = new ComboBox {
                 Width = 110, Height = 28,
                 FontSize = 12,
-                Background = Brushes.White,
-                Foreground = Brushes.Black,
-                BorderBrush = new SolidColorBrush(Color.FromRgb(80, 75, 120))
+                Background = new SolidColorBrush(Color.FromRgb(42, 39, 60)),
+                Foreground = new SolidColorBrush(Color.FromRgb(220, 218, 245)),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(80, 75, 120)),
+                Padding = new Thickness(6, 0, 0, 0),
+                VerticalContentAlignment = VerticalAlignment.Center
             };
-            // Force any TextBlock inside the ComboBox (selected-display + popup items) to black on white.
+            // Dark theme: force every TextBlock inside (selected-display + popup) to
+            // light text, and give the dropdown popup a dark background.
+            var lightText = new SolidColorBrush(Color.FromRgb(220, 218, 245));
             var tbStyle = new Style(typeof(TextBlock));
-            tbStyle.Setters.Add(new Setter(TextBlock.ForegroundProperty, Brushes.Black));
+            tbStyle.Setters.Add(new Setter(TextBlock.ForegroundProperty, lightText));
             cb.Resources.Add(typeof(TextBlock), tbStyle);
+            cb.Resources.Add(System.Windows.SystemColors.WindowBrushKey, new SolidColorBrush(Color.FromRgb(34, 32, 50)));
+            cb.Resources.Add(System.Windows.SystemColors.WindowTextBrushKey, lightText);
+            cb.Resources.Add(System.Windows.SystemColors.HighlightBrushKey, new SolidColorBrush(Color.FromRgb(110, 105, 200)));
+            cb.Resources.Add(System.Windows.SystemColors.HighlightTextBrushKey, Brushes.White);
+            cb.Resources.Add(System.Windows.SystemColors.ControlBrushKey, new SolidColorBrush(Color.FromRgb(42, 39, 60)));
+            cb.Resources.Add(System.Windows.SystemColors.ControlTextBrushKey, lightText);
+            // Replace the default (light) ComboBox control template with a dark one,
+            // otherwise the selected-item display area keeps the system light
+            // background and the text becomes unreadable (白字灰底).
+            cb.Template = DarkComboBoxTemplate();
             string[][] codes = isFrom
                 ? new[] { new[] { "auto","自动检测" }, new[] { "zh","中文" }, new[] { "en","英语" }, new[] { "jp","日语" }, new[] { "kor","韩语" }, new[] { "fra","法语" }, new[] { "de","德语" }, new[] { "ru","俄语" }, new[] { "spa","西班牙语" }, new[] { "ara","阿拉伯语" } }
                 : new[] { new[] { "zh","中文" }, new[] { "en","英语" }, new[] { "jp","日语" }, new[] { "kor","韩语" }, new[] { "fra","法语" }, new[] { "de","德语" }, new[] { "ru","俄语" }, new[] { "spa","西班牙语" }, new[] { "ara","阿拉伯语" } };
@@ -472,21 +569,20 @@ namespace PowerAudioManager
                 {
                     Content = p[1],
                     Tag = p[0],
-                    Foreground = Brushes.Black,
-                    Background = Brushes.White,
+                    Foreground = new SolidColorBrush(Color.FromRgb(220, 218, 245)),
+                    Background = new SolidColorBrush(Color.FromRgb(34, 32, 50)),
                     Padding = new Thickness(8, 4, 8, 4)
                 });
             }
-            // Make sure the dropdown popup itself has a dark background and visible items.
-            // WPF defaults paint items on system white, ignoring item.Background. We override the
-            // hosted ItemsPresenter via a Style with template trigger.
+            // Dark item container style with a purple hover, matching the app accent.
             var itemStyle = new Style(typeof(ComboBoxItem));
-            itemStyle.Setters.Add(new Setter(ComboBoxItem.BackgroundProperty, Brushes.White));
-            itemStyle.Setters.Add(new Setter(ComboBoxItem.ForegroundProperty, Brushes.Black));
+            itemStyle.Setters.Add(new Setter(ComboBoxItem.BackgroundProperty, new SolidColorBrush(Color.FromRgb(34, 32, 50))));
+            itemStyle.Setters.Add(new Setter(ComboBoxItem.ForegroundProperty, new SolidColorBrush(Color.FromRgb(220, 218, 245))));
             itemStyle.Setters.Add(new Setter(ComboBoxItem.PaddingProperty, new Thickness(8, 4, 8, 4)));
+            itemStyle.Setters.Add(new Setter(ComboBoxItem.BorderBrushProperty, Brushes.Transparent));
             var hover = new Trigger { Property = ComboBoxItem.IsHighlightedProperty, Value = true };
-            hover.Setters.Add(new Setter(ComboBoxItem.BackgroundProperty, new SolidColorBrush(Color.FromRgb(220, 215, 245))));
-            hover.Setters.Add(new Setter(ComboBoxItem.ForegroundProperty, Brushes.Black));
+            hover.Setters.Add(new Setter(ComboBoxItem.BackgroundProperty, new SolidColorBrush(Color.FromRgb(58, 54, 84))));
+            hover.Setters.Add(new Setter(ComboBoxItem.ForegroundProperty, Brushes.White));
             itemStyle.Triggers.Add(hover);
             cb.ItemContainerStyle = itemStyle;
             string saved;
@@ -567,18 +663,9 @@ namespace PowerAudioManager
         }
 
         // Settings dialog for showing/hiding floating-window modules. On OK, writes
-        // UI.Show{Power,Audio,Mem,Translate} prefs and rebuilds the calling window.
+        // UI.Show* prefs and rebuilds the calling window.
         public static void Show(Window owner)
         {
-            var dlg = new Window {
-                Title = "板块设置",
-                Width = 340, Height = 320,
-                Owner = owner,
-                WindowStartupLocation = WindowStartupLocation.CenterOwner,
-                ResizeMode = ResizeMode.NoResize,
-                FontFamily = owner.FontFamily,
-                Background = new SolidColorBrush(Color.FromRgb(28, 26, 40))
-            };
             var stack = new StackPanel { Margin = new Thickness(20) };
             var fg = new SolidColorBrush(Color.FromRgb(190, 188, 220));
             stack.Children.Add(new TextBlock {
@@ -589,10 +676,14 @@ namespace PowerAudioManager
             var cbAudio = MakeCb("音频控制", "Audio");
             var cbMem   = MakeCb("内存清理", "Mem");
             var cbTr    = MakeCb("翻译", "Translate");
+            var cbLaunch = MakeCb("快捷启动栏", "Launcher");
+            var cbClip   = MakeCb("剪贴板历史", "Clipboard");
             stack.Children.Add(cbPower);
             stack.Children.Add(cbAudio);
             stack.Children.Add(cbMem);
             stack.Children.Add(cbTr);
+            stack.Children.Add(cbLaunch);
+            stack.Children.Add(cbClip);
             stack.Children.Add(new TextBlock {
                 Text = "隐藏后悬浮窗立即刷新；托盘菜单与全局快捷键不受影响。",
                 Foreground = fg, FontSize = 10, Margin = new Thickness(0, 14, 0, 0),
@@ -603,13 +694,15 @@ namespace PowerAudioManager
             var cancel = new Button { Content = "取消", Width = 64, Height = 28 };
             btns.Children.Add(ok); btns.Children.Add(cancel);
             stack.Children.Add(btns);
-            dlg.Content = stack;
 
+            var dlg = OneBoxWindow.Create(owner, "板块设置", 340, 340, stack, false);
             ok.Click += (s, e) => {
                 AppPrefs.SetBool("UI.ShowPower",     cbPower.IsChecked == true);
                 AppPrefs.SetBool("UI.ShowAudio",     cbAudio.IsChecked == true);
                 AppPrefs.SetBool("UI.ShowMem",       cbMem.IsChecked == true);
                 AppPrefs.SetBool("UI.ShowTranslate", cbTr.IsChecked == true);
+                AppPrefs.SetBool("UI.ShowLauncher",  cbLaunch.IsChecked == true);
+                AppPrefs.SetBool("UI.ShowClipboard", cbClip.IsChecked == true);
                 if (owner is MainWindow) ((MainWindow)owner).RebuildUI();
                 dlg.DialogResult = true; dlg.Close();
             };
@@ -687,6 +780,71 @@ namespace PowerAudioManager
         static TextBox MakeBox()
         {
             return new TextBox { FontSize = 12, Padding = new Thickness(8, 6, 8, 6), Background = new SolidColorBrush(Color.FromRgb(42, 39, 60)), Foreground = Brushes.White, BorderBrush = new SolidColorBrush(Color.FromRgb(80, 75, 120)), BorderThickness = new Thickness(1) };
+        }
+    }
+
+    // Shared OneBox-style window shell: borderless, rounded, dark, with a custom
+    // title bar (drag handle + ✕ close) matching the floating window. Callers pass
+    // their content + a title; they get back a ready-to-ShowDialog() Window.
+    static class OneBoxWindow
+    {
+        public static Window Create(Window owner, string title, double width, double height, UIElement body, bool resizable)
+        {
+            var dlg = new Window {
+                Title = title,
+                Width = width, Height = height,
+                Owner = owner,
+                WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                ResizeMode = resizable ? ResizeMode.CanResize : ResizeMode.NoResize,
+                WindowStyle = WindowStyle.None,
+                AllowsTransparency = true,
+                Background = Brushes.Transparent,
+                FontFamily = owner != null ? owner.FontFamily : null
+            };
+
+            var fg = new SolidColorBrush(Color.FromRgb(190, 188, 220));
+            var rootGrid = new Grid();
+            rootGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            rootGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+
+            // Rounded title bar matching the floating card (top corners r=10).
+            var titleBarBorder = new Border {
+                CornerRadius = new CornerRadius(10, 10, 0, 0),
+                Background = new SolidColorBrush(Color.FromRgb(34, 32, 50)),
+                Height = 36
+            };
+            var titleBar = new DockPanel { LastChildFill = true };
+            var titleText = new TextBlock {
+                Text = "  " + title,
+                Foreground = Brushes.White, FontSize = 13,
+                FontWeight = FontWeights.SemiBold,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            var closeBtn = new Button {
+                Content = "✕", Width = 36, Height = 36, FontSize = 12,
+                Foreground = fg, Background = Brushes.Transparent,
+                BorderBrush = Brushes.Transparent, Cursor = Cursors.Hand, ToolTip = "关闭"
+            };
+            closeBtn.Click += (s, e) => dlg.Close();
+            DockPanel.SetDock(closeBtn, Dock.Right);
+            titleBar.Children.Add(closeBtn);
+            titleBar.Children.Add(titleText);
+            titleBarBorder.Child = titleBar;
+            titleBar.MouseLeftButtonDown += (s, e) => { try { dlg.DragMove(); } catch { } };
+            Grid.SetRow(titleBarBorder, 0); rootGrid.Children.Add(titleBarBorder);
+
+            Grid.SetRow(body, 1); rootGrid.Children.Add(body);
+
+            // Outer rounded border + dark fill; bottom corners round to match.
+            var border = new Border {
+                CornerRadius = new CornerRadius(10),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(80, 75, 120)),
+                BorderThickness = new Thickness(1),
+                Background = new SolidColorBrush(Color.FromRgb(28, 26, 40)),
+                Child = rootGrid
+            };
+            dlg.Content = border;
+            return dlg;
         }
     }
 }
