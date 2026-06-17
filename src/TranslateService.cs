@@ -75,6 +75,12 @@ namespace PowerAudioManager
             }
             if (string.IsNullOrEmpty(text)) { r.Translation = ""; return r; }
 
+            // Normalize line endings to '\n' so Windows \r\n carriage returns never reach
+            // the API (and don't come back as '\r' in the JSON, which the hand-rolled
+            // decoder would otherwise render as a literal 'r' — the source of stray
+            // "r" / "-r" fragments on blank lines and lone "-" lines).
+            text = text.Replace("\r\n", "\n").Replace("\r", "\n");
+
             var chunks = SplitIntoChunks(text, MaxChunkBytes);
             if (chunks.Count == 1)
             {
@@ -364,6 +370,7 @@ namespace PowerAudioManager
                     {
                         char nx = json[end + 1];
                         if (nx == 'n') sb.Append('\n');
+                        else if (nx == 'r') sb.Append('\r');
                         else if (nx == 't') sb.Append('\t');
                         else if (nx == '\"') sb.Append('\"');
                         else if (nx == '\\') sb.Append('\\');
