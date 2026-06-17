@@ -77,6 +77,7 @@ namespace PowerAudioManager
             public string Name;
             public string Body;      // release notes (markdown)
             public string HtmlUrl;
+            public string ExeDownloadUrl; // direct URL to OneBox.exe asset, if present
         }
 
         static ReleaseInfo FetchLatest()
@@ -108,6 +109,24 @@ namespace PowerAudioManager
             info.Name = dict.ContainsKey("name") ? dict["name"] as string : null;
             info.Body = dict.ContainsKey("body") ? dict["body"] as string : null;
             info.HtmlUrl = dict.ContainsKey("html_url") ? dict["html_url"] as string : ReleasesPage;
+            // Find the OneBox.exe asset download URL among the release's assets.
+            object assetsObj;
+            if (dict.ContainsKey("assets")) assetsObj = dict["assets"]; else assetsObj = null;
+            var assets = assetsObj as System.Collections.ArrayList;
+            if (assets != null)
+            {
+                foreach (var a in assets)
+                {
+                    var adict = a as System.Collections.Generic.Dictionary<string, object>;
+                    if (adict == null) continue;
+                    string name = adict.ContainsKey("name") ? adict["name"] as string : null;
+                    if (name != null && name.ToLowerInvariant() == "onebox.exe")
+                    {
+                        info.ExeDownloadUrl = adict.ContainsKey("browser_download_url") ? adict["browser_download_url"] as string : null;
+                        break;
+                    }
+                }
+            }
             // Tag looks like "v1.2.0" or "1.2.0" — strip leading non-digits.
             if (!string.IsNullOrEmpty(info.TagName))
             {
@@ -159,7 +178,7 @@ namespace PowerAudioManager
                 VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
                 Text = string.IsNullOrEmpty(info.Body) ? (info.Name ?? "(无说明)") : info.Body,
                 FontSize = 11,
-                Height = 180,
+                Height = 150,
                 Margin = new Thickness(0, 0, 0, 12),
                 Background = new SolidColorBrush(Color.FromRgb(24, 22, 36)),
                 Foreground = new SolidColorBrush(Color.FromRgb(220, 218, 245)),
@@ -167,16 +186,151 @@ namespace PowerAudioManager
             };
             stack.Children.Add(notes);
 
+            var progress = new TextBlock
+            {
+                Foreground = fg, FontSize = 11, Margin = new Thickness(0, 0, 0, 8),
+                Text = string.IsNullOrEmpty(info.ExeDownloadUrl) ? "提示：此 Release 未附带 OneBox.exe，将打开网页手动下载。" : ""
+            };
+            stack.Children.Add(progress);
+
             var btns = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
-            var download = new Button { Content = "前往下载", Width = 88, Height = 28, FontSize = 12, Margin = new Thickness(0, 0, 8, 0) };
+            // If we have a direct exe download URL, offer in-app update; otherwise fall
+            // back to opening the release page in the browser.
+            string updateLabel = string.IsNullOrEmpty(info.ExeDownloadUrl) ? "前往下载" : "立即更新";
+            var download = new Button { Content = updateLabel, Width = 88, Height = 28, FontSize = 12, Margin = new Thickness(0, 0, 8, 0), IsEnabled = true };
             var later = new Button { Content = "以后再说", Width = 88, Height = 28, FontSize = 12 };
             btns.Children.Add(download); btns.Children.Add(later);
             stack.Children.Add(btns);
 
             dlg.Content = stack;
-            download.Click += (s, e) => { try { System.Diagnostics.Process.Start(info.HtmlUrl); } catch { } };
+            bool updateFailed = false; // set true if download fails -> button opens browser instead
+            download.Click += (s, e) =>
+            {
+                // After a failed download, the button becomes "前往下载" and opens the browser.
+                if (updateFailed || string.IsNullOrEmpty(info.ExeDownloadUrl))
+                {
+                    try { System.Diagnostics.Process.Start(info.HtmlUrl); } catch { }
+                    return;
+                }
+                // Disable buttons and run the download on a background thread.
+                download.IsEnabled = false;
+                later.IsEnabled = false;
+                progress.Text = "正在下载...";
+                ThreadPool.QueueUserWorkItem(state =>
+                {
+                    string tmpExe = null;
+                    Exception err = null;
+                    try { tmpExe = DownloadExe(info.ExeDownloadUrl, bytes => {
+                        owner.Dispatcher.BeginInvoke(new Action(() => {
+                            progress.Text = "正在下载... " + (bytes / 1024) + " KB";
+                        }));
+                    }); }
+                    catch (Exception ex) { err = ex; }
+
+                    owner.Dispatcher.BeginInvoke(new Action(() =>
+                    {
+                        if (err != null)
+                        {
+                            AppLog.Log("UpdateChecker download", err);
+                            progress.Text = "下载失败：" + err.Message + "。可点“前往下载”用浏览器下载。";
+                            download.Content = "前往下载";
+                            download.IsEnabled = true;
+                            later.IsEnabled = true;
+                            updateFailed = true; // next click opens the browser
+                            return;
+                        }
+                        progress.Text = "下载完成，即将安装并重启...";
+                        // Hand off to the updater batch and exit.
+                        try { LaunchUpdaterAndExit(tmpExe); }
+                        catch (Exception ex2) { AppLog.Log("UpdateChecker install", ex2); progress.Text = "安装失败：" + ex2.Message; }
+                    }));
+                });
+            };
             later.Click += (s, e) => dlg.Close();
             dlg.ShowDialog();
+        }
+
+        // Downloads the new exe to a temp file. progressCallback receives byte count
+        // as it streams. Returns the temp file path.
+        static string DownloadExe(string url, Action<long> progressCallback)
+        {
+            try { ServicePointManager.SecurityProtocol = (SecurityProtocolType)3072; } catch { }
+            var req = (HttpWebRequest)WebRequest.Create(url);
+            req.Method = "GET";
+            req.Timeout = 30000;
+            req.ReadWriteTimeout = 60000;
+            req.UserAgent = "OneBox-Updater";
+            req.AllowAutoRedirect = true; // GitHub asset URLs redirect to S3
+            string tmp = Path.Combine(Path.GetTempPath(), "OneBox_update.exe");
+            using (var resp = (HttpWebResponse)req.GetResponse())
+            using (var rs = resp.GetResponseStream())
+            using (var fs = new FileStream(tmp, FileMode.Create, FileAccess.Write))
+            {
+                var buf = new byte[8192];
+                long total = 0;
+                int n;
+                while ((n = rs.Read(buf, 0, buf.Length)) > 0)
+                {
+                    fs.Write(buf, 0, n);
+                    total += n;
+                    if (progressCallback != null) progressCallback(total);
+                }
+            }
+            return tmp;
+        }
+
+        // Writes a batch file that: waits for the current OneBox process to exit,
+        // copies the downloaded exe over the running one, then relaunches it.
+        // Then starts that batch and shuts the app down so the copy can succeed
+        // (a running exe is locked and cannot be overwritten).
+        static void LaunchUpdaterAndExit(string downloadedExePath)
+        {
+            string currentExe = System.Reflection.Assembly.GetExecutingAssembly().Location;
+            string currentDir = Path.GetDirectoryName(currentExe);
+            string batPath = Path.Combine(Path.GetTempPath(), "OneBox_updater.bat");
+            // PID list of the current process AND any child processes that might
+            // hold the exe open. We wait on the current PID at minimum.
+            int pid = System.Diagnostics.Process.GetCurrentProcess().Id;
+            var sb = new StringBuilder();
+            sb.AppendLine("@echo off");
+            sb.AppendLine("chcp 65001 >nul");
+            // Wait until the current OneBox exits (it holds a lock on the exe).
+            sb.AppendLine(":wait");
+            sb.AppendLine("tasklist /fi \"PID eq " + pid + "\" 2>nul | find \"" + pid + "\" >nul");
+            sb.AppendLine("if not errorlevel 1 (");
+            sb.AppendLine("  timeout /t 1 /nobreak >nul");
+            sb.AppendLine("  goto wait");
+            sb.AppendLine(")");
+            // Overwrite the exe. Retry a few times in case of a lingering lock.
+            sb.AppendLine("set /a tries=0");
+            sb.AppendLine(":copy");
+            sb.AppendLine("copy /Y \"" + downloadedExePath + "\" \"" + currentExe + "\" >nul 2>&1");
+            sb.AppendLine("if errorlevel 1 (");
+            sb.AppendLine("  set /a tries+=1");
+            sb.AppendLine("  if %tries% LSS 10 (");
+            sb.AppendLine("    timeout /t 1 /nobreak >nul");
+            sb.AppendLine("    goto copy");
+            sb.AppendLine("  )");
+            sb.AppendLine(")");
+            // Clean up the temp download.
+            sb.AppendLine("del /f /q \"" + downloadedExePath + "\" >nul 2>&1");
+            // Relaunch the new version.
+            sb.AppendLine("start \"\" \"" + currentExe + "\"");
+            // Self-delete this batch.
+            sb.AppendLine("(goto) 2>nul & del \"%~f0\"");
+            File.WriteAllText(batPath, sb.ToString(), Encoding.GetEncoding(936)); // GBK so cmd renders the chcp path fine; ASCII-safe regardless
+
+            var psi = new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = batPath,
+                WindowStyle = System.Diagnostics.ProcessWindowStyle.Hidden,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            System.Diagnostics.Process.Start(psi);
+
+            // Exit the app so the batch can replace the exe.
+            System.Windows.Application.Current.Shutdown();
         }
     }
 }
