@@ -82,6 +82,9 @@ namespace PowerAudioManager
             }
 
             // Translate each chunk and concatenate. Stop on first hard error.
+            // Chunks already carry their trailing separator (space/newline/punctuation),
+            // so the translated parts are concatenated directly — never forcing a newline
+            // where the original had a space (which produced stray fragments like "r -r r").
             var parts = new List<string>();
             string detected = null;
             for (int i = 0; i < chunks.Count; i++)
@@ -95,14 +98,18 @@ namespace PowerAudioManager
                 if (detected == null) detected = cr.DetectedFrom;
                 parts.Add(cr.Translation ?? "");
             }
-            r.Translation = string.Join(System.Environment.NewLine, parts.ToArray());
+            r.Translation = string.Join("", parts.ToArray());
             r.DetectedFrom = detected;
             return r;
         }
 
-        // Split text into chunks whose UTF-8 byte length is <= maxBytes, preferring to
-        // break on newlines, then on sentence punctuation, then hard-wrapping as a last
-        // resort. Never splits a surrogate pair.
+        // Split text into chunks whose UTF-8 byte length is <= maxBytes. Each emitted chunk
+        // keeps the separator that followed it in the source (space, newline, punctuation),
+        // so translated chunks can be concatenated with "" and the original spacing survives.
+        // Breaks are chosen so a chunk NEVER ends in the middle of a word/identifier — it
+        // cuts at a whitespace or word-boundary, hard-wrapping only on CJK runs (where every
+        // character is a standalone unit) or an unsplittable single token. Never splits a
+        // UTF-16 surrogate pair.
         static List<string> SplitIntoChunks(string text, int maxBytes)
         {
             var chunks = new List<string>();
@@ -112,43 +119,29 @@ namespace PowerAudioManager
                 return chunks;
             }
 
-            // Split on newlines first so paragraph structure is preserved.
-            var lines = text.Split('\n');
+            // Walk the whole text accumulating into `cur`; when adding the next token would
+            // exceed the byte budget, flush `cur` and start fresh. Tokens here are runs of
+            // non-newline characters; newlines are kept as their own tokens so paragraph
+            // structure is preserved across chunk boundaries.
             var cur = new System.Text.StringBuilder();
-
-            for (int li = 0; li < lines.Length; li++)
+            foreach (var tok in TokenizeKeepNewlines(text))
             {
-                string rawLine = lines[li];
-                string sep = (cur.Length > 0) ? "\n" : "";
-                string line = sep + rawLine;
-
-                // If appending this line fits, accumulate and continue.
-                if (ByteLen(cur.ToString()) + ByteLen(line) <= maxBytes)
-                {
-                    cur.Append(line);
-                    continue;
-                }
-
-                // This line won't fit alongside the current accumulator. Flush the
-                // accumulator first, then place the line (which may itself need splitting).
-                if (cur.Length > 0)
+                if (cur.Length > 0 && ByteLen(cur.ToString()) + ByteLen(tok) > maxBytes)
                 {
                     chunks.Add(cur.ToString());
                     cur.Length = 0;
                 }
-                // Now the line stands alone; strip the leading separator we added.
-                string standalone = rawLine;
 
-                if (ByteLen(standalone) <= maxBytes)
+                if (ByteLen(tok) <= maxBytes)
                 {
-                    cur.Append(standalone);
+                    cur.Append(tok);
                     continue;
                 }
 
-                // Single line exceeds the byte budget — break it on punctuation, then
-                // hard-wrap. Emit complete pieces directly; keep the trailing remainder
-                // in `cur` so the next line can join it if it fits.
-                var pieces = SplitLongString(standalone, maxBytes);
+                // A single token (e.g. one very long line) exceeds the budget on its own —
+                // break it into safe pieces. Emit complete pieces directly; keep the
+                // trailing remainder in `cur` so the next token can join it if it fits.
+                var pieces = SplitLongString(tok, maxBytes);
                 for (int i = 0; i < pieces.Count - 1; i++) chunks.Add(pieces[i]);
                 cur.Append(pieces[pieces.Count - 1]);
             }
@@ -156,9 +149,34 @@ namespace PowerAudioManager
             return chunks;
         }
 
-        // Break a single long string (no newlines) into pieces each <= maxBytes UTF-8.
-        // Prefers cutting after sentence-ending punctuation (incl. CJK marks); hard-wraps
-        // otherwise. Never cuts inside a UTF-16 surrogate pair.
+        // Yield tokens that are either a single newline (kept verbatim) or a run of
+        // non-newline characters up to the next newline.
+        static IEnumerable<string> TokenizeKeepNewlines(string text)
+        {
+            int start = 0;
+            for (int i = 0; i < text.Length; i++)
+            {
+                if (text[i] == '\n')
+                {
+                    if (i > start) yield return text.Substring(start, i - start);
+                    yield return "\n";
+                    start = i + 1;
+                }
+            }
+            if (start < text.Length) yield return text.Substring(start);
+        }
+
+        // A character that is part of an ascii word/identifier (letters, digits, hyphen,
+        // underscore, apostrophe). Used to avoid splitting a word/identifier in two.
+        static bool IsWordChar(char ch)
+        {
+            return char.IsLetterOrDigit(ch) || ch == '-' || ch == '_' || ch == '\'';
+        }
+
+        // Break a single long token (no newlines) into pieces each <= maxBytes UTF-8.
+        // Prefers cutting after whitespace, then after a word boundary, hard-wrapping only
+        // when the run is unsplittable (pure CJK or a single over-long token). Never cuts
+        // inside a UTF-16 surrogate pair.
         static List<string> SplitLongString(string s, int maxBytes)
         {
             var result = new List<string>();
@@ -167,7 +185,8 @@ namespace PowerAudioManager
             {
                 if (ByteLen(s.Substring(start)) <= maxBytes) { result.Add(s.Substring(start)); break; }
 
-                // Walk forward accumulating bytes until we hit the budget.
+                // Walk forward accumulating bytes until we hit the budget, never splitting a
+                // surrogate pair.
                 int i = start;
                 int bytes = 0;
                 while (i < s.Length)
@@ -178,15 +197,37 @@ namespace PowerAudioManager
                     bytes += add;
                     i += c;
                 }
-                // `i` is the first index that would exceed the budget; search back from
-                // there for a sentence boundary to cut cleanly after.
-                int cut = s.LastIndexOfAny(new[] { '.', '!', '?', '。', '！', '？', ';', '；', '，', ',', ' ' }, i - 1, i - start);
-                if (cut < start) cut = i; // hard wrap at the byte boundary
-                else cut++; // include the punctuation/separator in this chunk
+                // `i` is the first index that would overflow the budget. Choose a safe cut
+                // point `cut` in (start, i] so that we don't end mid-word.
+                int cut = ChooseSafeCut(s, start, i);
                 result.Add(s.Substring(start, cut - start));
                 start = cut;
             }
             return result;
+        }
+
+        // Pick the largest cut <= maxIdx that doesn't leave a word/identifier split in two.
+        // Preference: cut right after a whitespace char; otherwise cut at a word-boundary
+        // (where not both neighbours are word chars); otherwise hard-wrap at maxIdx (only
+        // happens for pure CJK runs or a single unsplittable token).
+        static int ChooseSafeCut(string s, int start, int maxIdx)
+        {
+            // 1) Last whitespace at or before maxIdx — cut just after it (keep the space).
+            for (int j = maxIdx; j > start; j--)
+            {
+                if (char.IsWhiteSpace(s[j - 1])) return j;
+            }
+            // 2) Last word-boundary at or before maxIdx: a position j where it is NOT the
+            //    case that both s[j-1] and s[j] are word chars (i.e. we're not slicing
+            //    through "over-r" -> "over" / "-r").
+            for (int j = maxIdx; j > start; j--)
+            {
+                bool left = j - 1 >= 0 && IsWordChar(s[j - 1]);
+                bool right = j < s.Length && IsWordChar(s[j]);
+                if (!(left && right)) return j;
+            }
+            // 3) No safe boundary (single unsplittable token / pure CJK) — hard wrap.
+            return maxIdx;
         }
 
         static Result TranslateOnce(string text, string from, string to, string appId, string key, string instruction)
