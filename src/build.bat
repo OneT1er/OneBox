@@ -27,6 +27,11 @@ if exist "%OUTDIR%\OneBox.exe" del /f /q "%OUTDIR%\OneBox.exe"
   /reference:"System.Windows.Forms.dll" ^
   /reference:"System.Security.dll" ^
   /reference:"System.Web.Extensions.dll" ^
+  /resource:"%SRC%HarmonyOS_Sans_SC_Regular.ttf",PowerAudioManager.HarmonyOS_Sans_SC_Regular.ttf ^
+  /resource:"%SRC%app.ico",PowerAudioManager.app.ico ^
+  /resource:"%SRC%app.png",PowerAudioManager.app.png ^
+  /resource:"%SRC%icon-power.png",PowerAudioManager.icon-power.png ^
+  /resource:"%SRC%icon-audio.png",PowerAudioManager.icon-audio.png ^
   "%SRC%App.cs" ^
   "%SRC%Native.cs" ^
   "%SRC%Models.cs" ^
@@ -44,17 +49,7 @@ if exist "%OUTDIR%\OneBox.exe" del /f /q "%OUTDIR%\OneBox.exe"
 
 if %ERRORLEVEL% EQU 0 (
     echo Build successful! Output: %OUTDIR%\OneBox.exe
-    copy /Y "%SRC%app.ico" "%OUTDIR%\app.ico" >nul
-    copy /Y "%SRC%app.png" "%OUTDIR%\app.png" >nul
-    copy /Y "%SRC%icon-power.png" "%OUTDIR%\icon-power.png" >nul
-    copy /Y "%SRC%icon-audio.png" "%OUTDIR%\icon-audio.png" >nul
-    rem Ship app.config as OneBox.exe.config so the .NET runtime reads the per-monitor
-    rem DPI AppContextSwitchOverrides (the config must sit next to the exe, named <exe>.config).
-    copy /Y "%SRC%app.config" "%OUTDIR%\OneBox.exe.config" >nul
-    rem Ship the HarmonyOS Sans SC font next to the exe so the app is portable.
-    rem Place the ttf in src\ (gitignored — see .gitignore) and it will be copied
-    rem to the output dir on build. If absent, the app falls back to Microsoft YaHei UI.
-    if exist "%SRC%HarmonyOS_Sans_SC_Regular.ttf" copy /Y "%SRC%HarmonyOS_Sans_SC_Regular.ttf" "%OUTDIR%\HarmonyOS_Sans_SC_Regular.ttf" >nul
+    rem All assets (font, icons) are embedded in the exe — no external files needed.
     rem NTFS "file tunneling" can preserve the original CreationTime when the
     rem same filename is rewritten within ~15s. Force-stamp it to "now".
     powershell -NoProfile -Command "$f=Get-Item -LiteralPath '%OUTDIR%\OneBox.exe'; $n=Get-Date; $f.CreationTime=$n; $f.LastWriteTime=$n" >nul 2>&1

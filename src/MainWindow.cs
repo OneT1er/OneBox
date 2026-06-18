@@ -22,6 +22,7 @@ namespace PowerAudioManager
         private string _currentPlanId;
         private string _currentDeviceId;
         private DispatcherTimer _refreshTimer;
+        private DispatcherTimer _screenPoll;
         private DispatcherTimer _autoCleanTimer;
         private DateTime _lastCleanTime = DateTime.MinValue;
         private StackPanel _root;
@@ -42,6 +43,7 @@ namespace PowerAudioManager
         private TextBlock _volLabel;
         private TextBlock _memStatusLabel;
         private StackPanel _contentPanel;
+        private Border _mainBorder;
 
         static readonly Color AccentColor = Color.FromRgb(142, 140, 216);   // 紫影 #8E8CD8
         static readonly Color BgColor = Color.FromRgb(28, 26, 40);          // 深底，与紫影协调
@@ -57,16 +59,49 @@ namespace PowerAudioManager
             new System.Windows.Media.FontFamily("Segoe UI Symbol, Segoe UI Emoji");
 
         const string FontFileName = "HarmonyOS_Sans_SC_Regular.ttf";
+        static string _extractedFontPath;
 
-        // Resolve the font directory: prefer a ttf shipped next to the exe (portable),
-        // fall back to a ttf placed in the build source folder. Returns null if none.
-        static string ResolveFontDir()
+        // Extract the embedded font (bundled in the exe as a manifest resource) to a
+        // temp file so both WPF (FontFamily from file URI) and WinForms
+        // (PrivateFontCollection.AddFontFile) can load it. Returns the temp path, or
+        // null if the resource is absent.
+        static string ExtractEmbeddedFont()
         {
+            if (_extractedFontPath != null) return _extractedFontPath;
+            try
+            {
+                var asm = System.Reflection.Assembly.GetExecutingAssembly();
+                using (var stream = asm.GetManifestResourceStream("PowerAudioManager." + FontFileName))
+                {
+                    if (stream == null) return null;
+                    string tmp = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "OneBox_" + FontFileName);
+                    using (var fs = new System.IO.FileStream(tmp, System.IO.FileMode.Create, System.IO.FileAccess.Write))
+                    {
+                        var buf = new byte[8192];
+                        int n;
+                        while ((n = stream.Read(buf, 0, buf.Length)) > 0) fs.Write(buf, 0, n);
+                    }
+                    _extractedFontPath = tmp;
+                    return tmp;
+                }
+            }
+            catch { return null; }
+        }
+
+        // Resolve the font file path: prefer an extracted embedded resource, fall back
+        // to a ttf shipped next to the exe. Returns null if none available.
+        static string ResolveFontFile()
+        {
+            string tmp = ExtractEmbeddedFont();
+            if (tmp != null && System.IO.File.Exists(tmp)) return tmp;
             try
             {
                 var exeDir = System.IO.Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
-                if (!string.IsNullOrEmpty(exeDir) && System.IO.File.Exists(System.IO.Path.Combine(exeDir, FontFileName)))
-                    return exeDir + System.IO.Path.DirectorySeparatorChar;
+                if (!string.IsNullOrEmpty(exeDir))
+                {
+                    string p = System.IO.Path.Combine(exeDir, FontFileName);
+                    if (System.IO.File.Exists(p)) return p;
+                }
             }
             catch { }
             return null;
@@ -76,9 +111,13 @@ namespace PowerAudioManager
         {
             try
             {
-                var dir = ResolveFontDir();
-                if (dir != null)
+                var ttf = ResolveFontFile();
+                if (ttf != null)
+                {
+                    string dir = System.IO.Path.GetDirectoryName(ttf) + System.IO.Path.DirectorySeparatorChar;
+                    // "#HarmonyOS Sans SC" is the font's internal family name (not the file name).
                     return new System.Windows.Media.FontFamily(new Uri(dir), "./#HarmonyOS Sans SC");
+                }
             }
             catch { }
             return new System.Windows.Media.FontFamily("Microsoft YaHei UI");
@@ -92,17 +131,13 @@ namespace PowerAudioManager
             if (_trayFont != null) return _trayFont;
             try
             {
-                var dir = ResolveFontDir();
-                if (dir != null)
+                var ttf = ResolveFontFile();
+                if (ttf != null)
                 {
-                    var ttf = System.IO.Path.Combine(dir, FontFileName);
-                    if (System.IO.File.Exists(ttf))
-                    {
-                        var pfc = new System.Drawing.Text.PrivateFontCollection();
-                        pfc.AddFontFile(ttf);
-                        _trayFont = new System.Drawing.Font(pfc.Families[0], 9f, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point);
-                        return _trayFont;
-                    }
+                    var pfc = new System.Drawing.Text.PrivateFontCollection();
+                    pfc.AddFontFile(ttf);
+                    _trayFont = new System.Drawing.Font(pfc.Families[0], 9f, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point);
+                    return _trayFont;
                 }
             }
             catch { }
@@ -114,18 +149,40 @@ namespace PowerAudioManager
         {
             try
             {
-                var dir = System.IO.Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
+                // Prefer embedded resource (bundled in the exe) so no external file is
+                // needed. Resource name is "<default namespace>.<fileName>" — csc with
+                // /resource embeds using the file name with default namespace prefix.
+                var asm = System.Reflection.Assembly.GetExecutingAssembly();
+                string resName = "PowerAudioManager." + fileName;
+                using (var stream = asm.GetManifestResourceStream(resName))
+                {
+                    if (stream != null)
+                    {
+                        var bmp = new System.Windows.Media.Imaging.BitmapImage();
+                        bmp.BeginInit();
+                        bmp.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad;
+                        bmp.StreamSource = stream;
+                        bmp.EndInit();
+                        bmp.Freeze();
+                        return bmp;
+                    }
+                }
+                // Fallback: external file next to the exe.
+                var dir = System.IO.Path.GetDirectoryName(asm.Location);
                 var path = System.IO.Path.Combine(dir, fileName);
-                if (!System.IO.File.Exists(path)) return null;
-                var bmp = new System.Windows.Media.Imaging.BitmapImage();
-                bmp.BeginInit();
-                bmp.UriSource = new Uri(path);
-                bmp.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad;
-                bmp.EndInit();
-                bmp.Freeze();
-                return bmp;
+                if (System.IO.File.Exists(path))
+                {
+                    var bmp = new System.Windows.Media.Imaging.BitmapImage();
+                    bmp.BeginInit();
+                    bmp.UriSource = new Uri(path);
+                    bmp.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad;
+                    bmp.EndInit();
+                    bmp.Freeze();
+                    return bmp;
+                }
             }
-            catch { return null; }
+            catch { }
+            return null;
         }
 
         public MainWindow()
@@ -173,8 +230,13 @@ namespace PowerAudioManager
             MouseWheel += (s, e) => { VolumeControl.SetVolume(VolumeControl.GetVolume() + (e.Delta > 0 ? 0.02f : -0.02f)); UpdateVolumeUI(); };
             LoadData();
             _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(30) };
-            _refreshTimer.Tick += (s, e) => { LoadData(); UpdateTrayIcon(); };
+            _refreshTimer.Tick += (s, e) => { LoadData(); UpdateTrayIcon(); try { ApplyScaling(); ClampToWorkArea(); } catch { } };
             _refreshTimer.Start();
+            // Quick poll (2s) for resolution/DPI changes: SystemEvents.DisplaySettingsChanged
+            // is unreliable across DPI switches, so we watch the live screen width directly.
+            _screenPoll = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
+            _screenPoll.Tick += (s, e) => { try { ApplyScaling(); } catch { } };
+            _screenPoll.Start();
             Closing += (s, ev) => { ev.Cancel = true; Hide(); };
             Loaded += OnLoaded;
             LocationChanged += (s, e) => { if (IsLoaded) { AppPrefs.SetDouble("Left", Left); AppPrefs.SetDouble("Top", Top); } };
@@ -211,8 +273,9 @@ namespace PowerAudioManager
                 // worker thread, so always hop back to the UI dispatcher.
                 Microsoft.Win32.SystemEvents.DisplaySettingsChanged += OnDisplaySettingsChanged;
                 Microsoft.Win32.SystemEvents.UserPreferenceChanged += OnUserPreferenceChanged;
-                // Final safety: after the first layout pass, ActualWidth/ActualHeight are real –
-                // re-clamp once so a 4K-saved position never leaves the window off-screen on 1080p.
+                // Scale to the screen resolution first, then re-clamp after the first
+                // layout pass so ActualWidth/ActualHeight are real.
+                ApplyScaling();
                 Dispatcher.BeginInvoke(new Action(ClampToWorkArea), DispatcherPriority.Loaded);
             }
             catch (Exception ex) { AppLog.Log("OnLoaded", ex); }
@@ -220,7 +283,35 @@ namespace PowerAudioManager
 
         void OnDisplaySettingsChanged(object sender, EventArgs e)
         {
-            try { Dispatcher.BeginInvoke(new Action(ClampToWorkArea)); } catch { }
+            try { Dispatcher.BeginInvoke(new Action(() => { ApplyScaling(); ClampToWorkArea(); })); } catch { }
+        }
+
+        // Scale the whole floating window to occupy a consistent fraction of the screen.
+        // Linear map from physical screen width to scale, calibrated so:
+        //   1080p (1920px) -> 1.0x,  4K (3840px) -> 1.5x.
+        // Uses physical pixels (Screen.Bounds) which update reliably across resolution
+        // switches, independent of process DPI (system-level awareness locks DPI at start).
+        const double BaseWindowWidth = 280.0;
+        double _currentScale = -1; // -1 forces first apply
+        void ApplyScaling()
+        {
+            try
+            {
+                double phys = 1920;
+                try { phys = System.Windows.Forms.Screen.PrimaryScreen.Bounds.Width; }
+                catch { }
+                if (phys <= 0) phys = 1920;
+                // scale = 1.0 at 1920px, 1.5 at 3840px (linear).
+                double scale = 0.5 + (phys - 1920.0) * (0.5 / 1920.0);
+                if (scale < 0.85) scale = 0.85;
+                if (scale > 2.0) scale = 2.0;
+                if (scale == _currentScale && _mainBorder != null && _mainBorder.LayoutTransform != null) return;
+                _currentScale = scale;
+                Width = BaseWindowWidth * scale;
+                if (_mainBorder != null)
+                    _mainBorder.LayoutTransform = new System.Windows.Media.ScaleTransform(scale, scale);
+            }
+            catch (Exception ex) { AppLog.Log("ApplyScaling", ex); }
         }
 
         void OnUserPreferenceChanged(object sender, Microsoft.Win32.UserPreferenceChangedEventArgs e)
@@ -229,7 +320,7 @@ namespace PowerAudioManager
             if (e.Category == Microsoft.Win32.UserPreferenceCategory.Desktop ||
                 e.Category == Microsoft.Win32.UserPreferenceCategory.General)
             {
-                try { Dispatcher.BeginInvoke(new Action(ClampToWorkArea)); } catch { }
+                try { Dispatcher.BeginInvoke(new Action(() => { ApplyScaling(); ClampToWorkArea(); })); } catch { }
             }
         }
 
@@ -237,7 +328,25 @@ namespace PowerAudioManager
         {
             try
             {
-                var wa = SystemParameters.WorkArea;
+                // SystemParameters.WorkArea can lag behind a resolution/DPI change.
+                // System.Windows.Forms.Screen reads the live display geometry instead.
+                var screen = System.Windows.Forms.Screen.PrimaryScreen;
+                double waLeft = screen.WorkingArea.Left;
+                double waTop = screen.WorkingArea.Top;
+                double waRight = screen.WorkingArea.Right;
+                double waBottom = screen.WorkingArea.Bottom;
+                // Convert device pixels (WinForms) to WPF DIPs using the current DPI.
+                double dpi = 96.0;
+                try
+                {
+                    var src = System.Windows.PresentationSource.FromVisual(this);
+                    if (src != null && src.CompositionTarget != null)
+                        dpi = 96.0 * src.CompositionTarget.TransformToDevice.M11;
+                }
+                catch { }
+                double scale = 96.0 / dpi;
+                waLeft *= scale; waTop *= scale; waRight *= scale; waBottom *= scale;
+
                 double w = ActualWidth > 0 ? ActualWidth : Width;
                 double h = ActualHeight > 0 ? ActualHeight : Height;
                 if (double.IsNaN(w) || w <= 0) w = 280;
@@ -245,33 +354,32 @@ namespace PowerAudioManager
                 double left = Left;
                 double top = Top;
                 bool offscreen = double.IsNaN(left) || double.IsNaN(top)
-                    || left + w <= wa.Left + 8 || left >= wa.Right - 8
-                    || top + h <= wa.Top + 8  || top >= wa.Bottom - 8;
+                    || left + w <= waLeft + 8 || left >= waRight - 8
+                    || top + h <= waTop + 8  || top >= waBottom - 8;
                 if (offscreen)
                 {
                     // Lost display – snap back to the top-right of the new primary work area.
-                    Left = wa.Right - w - 20;
-                    Top  = wa.Top + 20;
+                    Left = waRight - w - 20;
+                    Top  = waTop + 20;
                     return;
                 }
-                if (left + w > wa.Right)  left = wa.Right - w;
-                if (top  + h > wa.Bottom) top  = wa.Bottom - h;
-                if (left < wa.Left) left = wa.Left;
-                if (top  < wa.Top)  top  = wa.Top;
+                if (left + w > waRight)  left = waRight - w;
+                if (top  + h > waBottom) top  = waBottom - h;
+                if (left < waLeft) left = waLeft;
+                if (top  < waTop)  top  = waTop;
                 if (left != Left) Left = left;
                 if (top  != Top)  Top  = top;
             }
-            catch { }
+            catch (Exception ex) { AppLog.Log("ClampToWorkArea", ex); }
         }
 
         void BuildUI()
         {
-            var mainBorder = new Border
+            _mainBorder = new Border
             {
                 CornerRadius = new CornerRadius(10),
                 Background = new SolidColorBrush(BgColor),
-                BorderBrush = new SolidColorBrush(BorderColor),
-                BorderThickness = new Thickness(1),
+                BorderBrush = new SolidColorBrush(BorderColor),                BorderThickness = new Thickness(1),
                 // Fluent elevation: a soft, depth-less shadow gives the floating card lift
                 // without introducing any new palette colour.
                 Effect = new System.Windows.Media.Effects.DropShadowEffect
@@ -304,17 +412,9 @@ namespace PowerAudioManager
             };
             try
             {
-                var dir = System.IO.Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
-                var icoPath = System.IO.Path.Combine(dir, "app.ico");
-                if (System.IO.File.Exists(icoPath))
-                {
-                    var bmp = new System.Windows.Media.Imaging.BitmapImage();
-                    bmp.BeginInit();
-                    bmp.UriSource = new Uri(icoPath);
-                    bmp.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad;
-                    bmp.EndInit();
-                    titleIcon.Source = bmp;
-                }
+                // Prefer embedded resource, fall back to external app.ico.
+                var icoBmp = LoadAppImage("app.ico");
+                if (icoBmp != null) titleIcon.Source = icoBmp;
             }
             catch { }
             var titleLabel = new TextBlock
@@ -552,8 +652,8 @@ namespace PowerAudioManager
             if (ModuleVisible("Clipboard")) BuildClipboardButton(contentPanel);
 
             _root.Children.Add(contentPanel);
-            mainBorder.Child = _root;
-            Content = mainBorder;
+            _mainBorder.Child = _root;
+            Content = _mainBorder;
         }
 
         // Module visibility defaults: all on. Keys: UI.ShowPower / UI.ShowAudio /
@@ -587,7 +687,9 @@ namespace PowerAudioManager
             _audioSection = null;
             _memStatusLabel = null;
             _root = null;
+            _mainBorder = null;
             BuildUI();
+            ApplyScaling(); // re-apply scale to the freshly built _mainBorder
             LoadData();
             Left = left; Top = top;
         }
@@ -1338,7 +1440,10 @@ namespace PowerAudioManager
                 _trayMenu.Renderer = new System.Windows.Forms.ToolStripProfessionalRenderer(new OneBoxMenuColorTable());
                 _trayMenu.BackColor = System.Drawing.Color.FromArgb(28, 26, 40);   // BgColor
                 _trayMenu.ForeColor = System.Drawing.Color.White;                    // TextPrimary
-                _trayMenu.ShowImageMargin = false;
+                // Keep the image margin ON — WinForms draws checkmarks (for 开机自启 /
+                // 窗口置顶 / 锁定位置) in this margin. Hiding it makes the checks
+                // invisible. The OneBoxMenuColorTable already paints the margin dark.
+                _trayMenu.ShowImageMargin = true;
                 _trayMenu.Padding = new System.Windows.Forms.Padding(2, 4, 2, 4);
                 _trayMenu.Items.Add("显示窗口", null, (s, e) => ShowWindow());
                 var autoItem = new System.Windows.Forms.ToolStripMenuItem("开机自启") { CheckOnClick = true, Checked = IsAutoStartEnabled() };
