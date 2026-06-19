@@ -13,7 +13,7 @@ git status --short
 
 echo.
 echo [2/4] Committing...
-git commit -F "%~dp0\commit_v101.txt"
+git commit -F "%~dp0\commit_v110.txt"
 
 echo.
 echo [3/4] Setting proxy...
@@ -27,7 +27,7 @@ git push
 echo.
 if %ERRORLEVEL% EQU 0 (
     echo ============================================
-    echo SUCCESS. v1.0.1 changes pushed.
+    echo SUCCESS. v1.1.0 changes pushed.
     echo ============================================
 ) else (
     echo FAILED - check proxy / auth

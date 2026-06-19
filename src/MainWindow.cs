@@ -777,7 +777,8 @@ namespace PowerAudioManager
                 Cursor = Cursors.Hand,
                 Background = new SolidColorBrush(CardColor),
                 BorderBrush = new SolidColorBrush(BorderColor),
-                ToolTip = string.IsNullOrEmpty(path) ? "点击添加程序" : path
+                ToolTip = string.IsNullOrEmpty(path) ? "点击或拖入程序（exe / 快捷方式）" : path,
+                AllowDrop = true
             };
             if (!string.IsNullOrEmpty(path))
             {
@@ -802,12 +803,7 @@ namespace PowerAudioManager
                         Filter = "程序|*.exe;*.lnk|所有文件|*.*",
                         Title = "选择要添加的程序" };
                     if (dlg.ShowDialog() == true)
-                    {
-                        while (paths.Count <= index) paths.Add("");
-                        if (paths.Count > index) paths[index] = dlg.FileName; else paths.Add(dlg.FileName);
-                        SaveLauncherPaths(paths);
-                        RebuildUI();
-                    }
+                        SetLauncherSlotPath(index, dlg.FileName, paths);
                 }
                 else
                 {
@@ -826,7 +822,85 @@ namespace PowerAudioManager
                     e.Handled = true;
                 }
             };
+            // Drag-and-drop: drop an exe / shortcut onto the slot to assign it.
+            btn.DragEnter += (s, e) =>
+            {
+                if (e.Data.GetDataPresent(DataFormats.FileDrop))
+                {
+                    e.Effects = DragDropEffects.Copy;
+                    btn.BorderBrush = new SolidColorBrush(AccentColor);
+                    btn.BorderThickness = new Thickness(2);
+                }
+                else { e.Effects = DragDropEffects.None; }
+                e.Handled = true;
+            };
+            btn.DragLeave += (s, e) =>
+            {
+                btn.BorderBrush = new SolidColorBrush(BorderColor);
+                btn.BorderThickness = new Thickness(1);
+                e.Handled = true;
+            };
+            btn.Drop += (s, e) =>
+            {
+                btn.BorderBrush = new SolidColorBrush(BorderColor);
+                btn.BorderThickness = new Thickness(1);
+                if (e.Data.GetDataPresent(DataFormats.FileDrop))
+                {
+                    var files = (string[])e.Data.GetData(DataFormats.FileDrop);
+                    if (files != null && files.Length > 0)
+                    {
+                        string dropped = files[0];
+                        // Resolve .lnk shortcuts to their target so the icon/launch works.
+                        string resolved = ResolveShortcut(dropped);
+                        SetLauncherSlotPath(index, resolved, paths);
+                    }
+                }
+                e.Handled = true;
+            };
             return btn;
+        }
+
+        // Assign a path to a launcher slot (clamps the list, saves, rebuilds).
+        void SetLauncherSlotPath(int index, string path, List<string> paths)
+        {
+            if (string.IsNullOrEmpty(path)) return;
+            while (paths.Count <= index) paths.Add("");
+            if (paths.Count > index) paths[index] = path; else paths.Add(path);
+            SaveLauncherPaths(paths);
+            RebuildUI();
+        }
+
+        // Resolve a .lnk shortcut to its target path. Falls back to the original path
+        // if it's not a shortcut or resolution fails. Uses late binding via reflection
+        // (no dynamic / Microsoft.CSharp dependency).
+        static string ResolveShortcut(string path)
+        {
+            if (string.IsNullOrEmpty(path)) return path;
+            try
+            {
+                if (!path.EndsWith(".lnk", StringComparison.OrdinalIgnoreCase)) return path;
+                // WScript.Shell.CreateShortcut parses .lnk files via COM late-binding.
+                Type shellType = Type.GetTypeFromProgID("WScript.Shell");
+                if (shellType == null) return path;
+                object shell = Activator.CreateInstance(shellType);
+                try
+                {
+                    object sc = shellType.InvokeMember("CreateShortcut",
+                        System.Reflection.BindingFlags.InvokeMethod, null, shell, new object[] { path });
+                    if (sc == null) return path;
+                    try
+                    {
+                        object target = sc.GetType().InvokeMember("TargetPath",
+                            System.Reflection.BindingFlags.GetProperty, null, sc, null);
+                        string t = target as string;
+                        if (!string.IsNullOrEmpty(t)) return t;
+                    }
+                    finally { try { System.Runtime.InteropServices.Marshal.ReleaseComObject(sc); } catch { } }
+                }
+                finally { try { System.Runtime.InteropServices.Marshal.ReleaseComObject(shell); } catch { } }
+            }
+            catch (Exception ex) { AppLog.Log("ResolveShortcut " + path, ex); }
+            return path;
         }
 
         // ---- Clipboard history button ------------------------------------------
@@ -910,22 +984,28 @@ namespace PowerAudioManager
         // invocations when several callers (device watcher, refresh timer, clicks) fire
         // LoadData in quick succession.
         bool _loading;
+        DateTime _loadStartTime;
 
         void LoadData()
         {
             try { UpdateVolumeUI(); } catch { }
             try { UpdateMemoryUI(); } catch { }
             try { UpdateTrayTooltip(); } catch { }
-            if (_loading) return;
+            // Guard against a stuck background refresh (e.g. powercfg hanging during a
+            // policy refresh): if a previous load has been "in flight" for over 10s,
+            // assume it died and allow a new one.
+            if (_loading && (DateTime.Now - _loadStartTime).TotalSeconds < 10) return;
             _loading = true;
-            // powercfg (/list + /getactivescheme) can take 1-3s during a policy refresh —
-            // never run it on the UI dispatcher. Gather on a threadpool thread, render on UI.
+            _loadStartTime = DateTime.Now;
+            // Fetch plans and devices on a threadpool thread, render on the UI thread.
+            // These are gathered together but each is independently try/caught so a
+            // powercfg hiccup never blanks the audio list (devices come from the registry).
             System.Threading.ThreadPool.QueueUserWorkItem(_ =>
             {
                 List<PowerPlanInfo> plans = null;
                 List<AudioDeviceInfo> devices = null;
-                try { plans = PowerPlanService.GetPowerPlans(); } catch { }
-                try { devices = AudioDevices.GetOutputDevices(); } catch { }
+                try { plans = PowerPlanService.GetPowerPlans(); } catch (Exception ex) { AppLog.Log("LoadData plans", ex); }
+                try { devices = AudioDevices.GetOutputDevices(); } catch (Exception ex) { AppLog.Log("LoadData devices", ex); }
                 Dispatcher.BeginInvoke(new Action(() =>
                 {
                     _loading = false;
@@ -939,6 +1019,10 @@ namespace PowerAudioManager
         {
             try
             {
+                // If the fetch failed (plans == null), keep the last good list rather than
+                // blanking the section — a transient powercfg failure during plan add/remove
+                // shouldn't wipe the UI.
+                if (plans == null) plans = _powerPlans;
                 _powerPlans = plans ?? new List<PowerPlanInfo>();
                 var active = _powerPlans.Find(p => p.IsActive);
                 if (active != null) _currentPlanId = active.Guid;
@@ -966,6 +1050,9 @@ namespace PowerAudioManager
         {
             try
             {
+                // Keep the last good list if the fetch failed, so a transient error doesn't
+                // blank the audio device names.
+                if (devices == null) devices = _audioDevices;
                 _audioDevices = devices ?? new List<AudioDeviceInfo>();
                 var defaultDev = _audioDevices.Find(d => d.IsDefault);
                 if (defaultDev != null) _currentDeviceId = defaultDev.Id;
@@ -1037,9 +1124,10 @@ namespace PowerAudioManager
                 content.Children.Add(hkBlock);
             }
             var nameBlock = new TextBlock {
-                Text = dev.Name,
+                Text = string.IsNullOrEmpty(dev.Name) ? "(未命名设备)" : dev.Name,
                 TextTrimming = TextTrimming.CharacterEllipsis,
-                VerticalAlignment = VerticalAlignment.Center
+                VerticalAlignment = VerticalAlignment.Center,
+                Foreground = Brushes.White // explicit so it never inherits a hidden colour
             };
             content.Children.Add(nameBlock);
             var btn = new Button {

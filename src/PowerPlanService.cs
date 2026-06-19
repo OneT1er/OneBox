@@ -31,7 +31,7 @@ namespace PowerAudioManager
                 using (var proc = Process.Start(psi))
                 {
                     var output = proc.StandardOutput.ReadToEnd();
-                    proc.WaitForExit();
+                    if (!proc.WaitForExit(5000)) { try { proc.Kill(); } catch { } } // don't hang the refresher
                     var activeGuid = GetActivePlanGuid();
 
                     foreach (var line in output.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
@@ -72,7 +72,7 @@ namespace PowerAudioManager
                 using (var proc = Process.Start(psi))
                 {
                     var output = proc.StandardOutput.ReadToEnd();
-                    proc.WaitForExit();
+                    if (!proc.WaitForExit(5000)) { try { proc.Kill(); } catch { } }
                     var idx = output.IndexOf("GUID:");
                     if (idx >= 0)
                     {

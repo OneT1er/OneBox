@@ -29,7 +29,7 @@ namespace PowerAudioManager
         public const string Repo = "OneBox";
         // Bump this when you cut a new release. Must match the GitHub release tag
         // (e.g. tag "v1.2.0" -> CurrentVersion 1.2.0).
-        public static readonly Version CurrentVersion = new Version(1, 0, 1);
+        public static readonly Version CurrentVersion = new Version(1, 1, 0);
 
         const string ApiUrl = "https://api.github.com/repos/" + Owner + "/" + Repo + "/releases/latest";
         const string ReleasesPage = "https://github.com/" + Owner + "/" + Repo + "/releases/latest";
