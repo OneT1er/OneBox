@@ -229,9 +229,12 @@ namespace PowerAudioManager
             tc.Padding = new Thickness(0);
 
             // TabItem template: a rounded-top pill, accent-filled when selected.
+            // NOTE: XamlReader.Parse has no x: namespace mapped, so use Name (not
+            // x:Name) — x:Name throws XamlParseException "未找到前缀" and the whole
+            // settings window silently fails to open.
             const string itemXaml =
 @"<ControlTemplate TargetType='TabItem' xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'>
-  <Border x:Name='bd' CornerRadius='8,8,0,0' Background='Transparent' BorderBrush='Transparent' BorderThickness='1,1,1,0' Padding='14,6,14,6' Margin='2,0,2,0'>
+  <Border Name='bd' CornerRadius='8,8,0,0' Background='Transparent' BorderBrush='Transparent' BorderThickness='1,1,1,0' Padding='14,6,14,6' Margin='2,0,2,0'>
     <ContentPresenter ContentSource='Header' HorizontalAlignment='Center' VerticalAlignment='Center'/>
   </Border>
   <ControlTemplate.Triggers>
@@ -270,7 +273,7 @@ namespace PowerAudioManager
     </Grid.RowDefinitions>
     <Grid>
       <Border Background='#222132' CornerRadius='8,8,0,0'/>
-      <TabPanel x:Name='HeaderPanel' IsItemsHost='True' Margin='6,6,6,0'/>
+      <TabPanel Name='HeaderPanel' IsItemsHost='True' Margin='6,6,6,0'/>
     </Grid>
     <Border Grid.Row='1' Background='#1C1A28' BorderBrush='#504F78' BorderThickness='1,0,1,1' CornerRadius='0,0,8,8'>
       <ContentPresenter ContentSource='SelectedContent'/>
