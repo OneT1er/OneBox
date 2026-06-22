@@ -80,7 +80,7 @@ namespace PowerAudioManager
             {
                 // If the saved position lands outside the current work area (e.g. user dragged
                 // the window on a 4K monitor and is now booting on 1080p), snap back to the
-                // top-right corner of the new work area so the window is actually visible.
+                // bottom-right corner of the new work area so the window is actually visible.
                 double estW = Width;       // SizeToContent.Height -> Width is fixed at 280
                 double estH = 200;         // upper bound estimate before layout runs
                 bool offscreen =
@@ -89,7 +89,7 @@ namespace PowerAudioManager
                 if (offscreen)
                 {
                     Left = screen.Right - estW - 20;
-                    Top  = screen.Top + 20;
+                    Top  = screen.Bottom - estH - 20;
                 }
                 else
                 {
@@ -100,7 +100,7 @@ namespace PowerAudioManager
                     Left = sl; Top = st;
                 }
             }
-            else { Left = screen.Right - Width - 20; Top = screen.Top + 20; }
+            else { Left = screen.Right - Width - 20; Top = screen.Bottom - 200 - 20; }
             BuildUI();
             MouseWheel += (s, e) => { VolumeControl.SetVolume(VolumeControl.GetVolume() + (e.Delta > 0 ? 0.02f : -0.02f)); UpdateVolumeUI(); };
             LoadData();

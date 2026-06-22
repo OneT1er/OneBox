@@ -40,16 +40,33 @@ namespace PowerAudioManager
                 try { phys = System.Windows.Forms.Screen.PrimaryScreen.Bounds.Width; }
                 catch { }
                 if (phys <= 0) phys = 1920;
-                // scale = 1.0 at 1920px, 1.5 at 3840px (linear).
+                // scale = 1.0 at 1920px, 1.5 at 3840px (linear) — the TOTAL physical
+                // magnification we want vs the 1080p baseline.
                 double scale = 0.5 + (phys - 1920.0) * (0.5 / 1920.0);
                 if (scale < 0.85) scale = 0.85;
                 if (scale > 2.0) scale = 2.0;
+                // Under Per-Monitor V2 the DIP->pixel DPI scaling already magnifies
+                // the window (e.g. 1.5x on 4K @150%). Divide it out so the
+                // LayoutTransform only adds the magnification DPI doesn't already
+                // provide — otherwise the window ends up double-scaled (too big).
+                double dpiScale = 1.0;
+                try
+                {
+                    var src = PresentationSource.FromVisual(_window);
+                    if (src != null && src.CompositionTarget != null)
+                        dpiScale = src.CompositionTarget.TransformToDevice.M11;
+                }
+                catch { }
+                if (dpiScale <= 0) dpiScale = 1.0;
+                double layoutScale = scale / dpiScale;
+                if (layoutScale < 0.85) layoutScale = 0.85;
+                if (layoutScale > 2.0) layoutScale = 2.0;
                 var mainBorder = _getMainBorder();
-                if (scale == _currentScale && mainBorder != null && mainBorder.LayoutTransform != null) return;
-                _currentScale = scale;
-                _window.Width = BaseWindowWidth * scale;
+                if (layoutScale == _currentScale && mainBorder != null && mainBorder.LayoutTransform != null) return;
+                _currentScale = layoutScale;
+                _window.Width = BaseWindowWidth * layoutScale;
                 if (mainBorder != null)
-                    mainBorder.LayoutTransform = new ScaleTransform(scale, scale);
+                    mainBorder.LayoutTransform = new ScaleTransform(layoutScale, layoutScale);
             }
             catch (Exception ex) { AppLog.Log("ApplyScaling", ex); }
         }
