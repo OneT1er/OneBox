@@ -20,17 +20,12 @@ namespace PowerAudioManager
         // openTab: 0=常规 1=板块 2=内存 3=翻译
         public static void Show(Window owner, int openTab)
         {
-            var dlg = OneBoxWindow.Create(owner, "设置", 460, 560, new Grid(), true);
-            var grid = (Grid)dlg.Content;
-
             // Dark font for tab headers / content.
             var fg = new SolidColorBrush(Color.FromRgb(190, 188, 220));
             var lightText = new SolidColorBrush(Color.FromRgb(220, 218, 245));
 
-            // Row 0: tab strip; Row 1: content host.
-            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
-
+            // The TabControl is the body OneBoxWindow.Create wraps (title bar +
+            // rounded border). Build it first, then create the window around it.
             var tabs = new TabControl
             {
                 Margin = new Thickness(0),
@@ -38,8 +33,8 @@ namespace PowerAudioManager
                 BorderBrush = Brushes.Transparent,
                 Padding = new Thickness(0)
             };
-            Grid.SetRow(tabs, 0); Grid.SetRowSpan(tabs, 2);
-            grid.Children.Add(tabs);
+
+            var dlg = OneBoxWindow.Create(owner, "设置", 460, 560, tabs, true);
 
             tabs.Items.Add(BuildGeneralTab(owner, dlg, fg, lightText));
             tabs.Items.Add(BuildModulesTab(owner, dlg, fg, lightText));

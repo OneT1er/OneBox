@@ -41,6 +41,7 @@ namespace PowerAudioManager
         private TextBlock _volLabel;
         private TextBlock _memStatusLabel;
         private StackPanel _contentPanel;
+        private Border _titleBarBorder;
         private Border _mainBorder;
 
         // Shared palette — internal so the extracted helper classes (LauncherBar,
@@ -307,6 +308,7 @@ namespace PowerAudioManager
                 Background = new SolidColorBrush(Color.FromRgb(34, 32, 50)),
                 Child = titleBar
             };
+            _titleBarBorder = titleBarBorder;
             _root.Children.Add(titleBarBorder);
 
             var contentPanel = new StackPanel { Margin = new Thickness(14, 10, 14, 14) };
@@ -1167,11 +1169,17 @@ namespace PowerAudioManager
             if (_isExpanded)
             {
                 if (_contentPanel != null) _contentPanel.Visibility = Visibility.Visible;
+                // Title bar's bottom corners stay square where it meets the content.
+                if (_titleBarBorder != null) _titleBarBorder.CornerRadius = new CornerRadius(10, 10, 0, 0);
                 SizeToContent = SizeToContent.Height;
             }
             else
             {
                 if (_contentPanel != null) _contentPanel.Visibility = Visibility.Collapsed;
+                // Collapsed: only the title bar is visible, so round its bottom
+                // corners too — otherwise the square bottom pokes past the outer
+                // card's rounded corners and looks like flat bottom corners.
+                if (_titleBarBorder != null) _titleBarBorder.CornerRadius = new CornerRadius(10);
                 SizeToContent = SizeToContent.Height; // let WPF compute exact title-bar height
                 MinHeight = 36;
             }
