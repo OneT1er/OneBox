@@ -17,25 +17,23 @@ namespace PowerAudioManager
 {
     public class MainWindow : Window
     {
-        private List<PowerPlanInfo> _powerPlans;
-        private List<AudioDeviceInfo> _audioDevices;
-        private string _currentPlanId;
+        internal List<PowerPlanInfo> _powerPlans;
+        internal List<AudioDeviceInfo> _audioDevices;
+        internal string _currentPlanId;
         private string _currentDeviceId;
         private DispatcherTimer _refreshTimer;
         private DispatcherTimer _screenPoll;
         private DispatcherTimer _autoCleanTimer;
         private DateTime _lastCleanTime = DateTime.MinValue;
+        private WindowScaling _scaling;
         private StackPanel _root;
         private StackPanel _powerSection;
         private StackPanel _audioSection;
         private bool _isExpanded = true;
-        private System.Windows.Forms.NotifyIcon _winFormsTray;
-        private bool _topmost = false;
-        private Button _pinBtn;
-        private System.Windows.Forms.ToolStripMenuItem _topmostMenuItem;
-        private System.Windows.Forms.ToolStripMenuItem _lockMenuItem;
-        private bool _lockPosition;
-        private System.Windows.Forms.ContextMenuStrip _trayMenu;
+        internal bool _topmost = false;
+        internal Button _pinBtn;
+        internal bool _lockPosition;
+        internal TrayController _tray;
         private AudioDevices.DeviceWatcher _deviceWatcher;
         private Slider _volSlider;
         private Button _muteBtn;
@@ -45,145 +43,21 @@ namespace PowerAudioManager
         private StackPanel _contentPanel;
         private Border _mainBorder;
 
-        static readonly Color AccentColor = Color.FromRgb(142, 140, 216);   // 紫影 #8E8CD8
-        static readonly Color BgColor = Color.FromRgb(28, 26, 40);          // 深底，与紫影协调
-        static readonly Color CardColor = Color.FromRgb(42, 39, 60);        // 卡片
-        static readonly Color TextPrimary = Colors.White;
-        static readonly Color TextSecondary = Color.FromRgb(190, 188, 220); // 次要文字
-        static readonly Color HoverColor = Color.FromRgb(58, 54, 84);       // 悬停
-        static readonly Color ActiveBg = Color.FromRgb(110, 105, 200);      // 激活态（紫影偏深）
-        static readonly Color BorderColor = Color.FromRgb(80, 75, 120);     // 边框
+        // Shared palette — internal so the extracted helper classes (LauncherBar,
+        // TrayController, etc.) can reuse the exact same colours.
+        internal static readonly Color AccentColor = Color.FromRgb(142, 140, 216);   // 紫影 #8E8CD8
+        internal static readonly Color BgColor = Color.FromRgb(28, 26, 40);          // 深底，与紫影协调
+        internal static readonly Color CardColor = Color.FromRgb(42, 39, 60);        // 卡片
+        internal static readonly Color TextPrimary = Colors.White;
+        internal static readonly Color TextSecondary = Color.FromRgb(190, 188, 220); // 次要文字
+        internal static readonly Color HoverColor = Color.FromRgb(58, 54, 84);       // 悬停
+        internal static readonly Color ActiveBg = Color.FromRgb(110, 105, 200);      // 激活态（紫影偏深）
+        internal static readonly Color BorderColor = Color.FromRgb(80, 75, 120);     // 边框
 
-        static readonly System.Windows.Media.FontFamily AppFont = LoadAppFont();
-        public static readonly System.Windows.Media.FontFamily EmojiFont =
-            new System.Windows.Media.FontFamily("Segoe UI Symbol, Segoe UI Emoji");
-
-        const string FontFileName = "HarmonyOS_Sans_SC_Regular.ttf";
-        static string _extractedFontPath;
-
-        // Extract the embedded font (bundled in the exe as a manifest resource) to a
-        // temp file so both WPF (FontFamily from file URI) and WinForms
-        // (PrivateFontCollection.AddFontFile) can load it. Returns the temp path, or
-        // null if the resource is absent.
-        static string ExtractEmbeddedFont()
-        {
-            if (_extractedFontPath != null) return _extractedFontPath;
-            try
-            {
-                var asm = System.Reflection.Assembly.GetExecutingAssembly();
-                using (var stream = asm.GetManifestResourceStream("PowerAudioManager." + FontFileName))
-                {
-                    if (stream == null) return null;
-                    string tmp = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "OneBox_" + FontFileName);
-                    using (var fs = new System.IO.FileStream(tmp, System.IO.FileMode.Create, System.IO.FileAccess.Write))
-                    {
-                        var buf = new byte[8192];
-                        int n;
-                        while ((n = stream.Read(buf, 0, buf.Length)) > 0) fs.Write(buf, 0, n);
-                    }
-                    _extractedFontPath = tmp;
-                    return tmp;
-                }
-            }
-            catch { return null; }
-        }
-
-        // Resolve the font file path: prefer an extracted embedded resource, fall back
-        // to a ttf shipped next to the exe. Returns null if none available.
-        static string ResolveFontFile()
-        {
-            string tmp = ExtractEmbeddedFont();
-            if (tmp != null && System.IO.File.Exists(tmp)) return tmp;
-            try
-            {
-                var exeDir = System.IO.Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
-                if (!string.IsNullOrEmpty(exeDir))
-                {
-                    string p = System.IO.Path.Combine(exeDir, FontFileName);
-                    if (System.IO.File.Exists(p)) return p;
-                }
-            }
-            catch { }
-            return null;
-        }
-
-        static System.Windows.Media.FontFamily LoadAppFont()
-        {
-            try
-            {
-                var ttf = ResolveFontFile();
-                if (ttf != null)
-                {
-                    string dir = System.IO.Path.GetDirectoryName(ttf) + System.IO.Path.DirectorySeparatorChar;
-                    // "#HarmonyOS Sans SC" is the font's internal family name (not the file name).
-                    return new System.Windows.Media.FontFamily(new Uri(dir), "./#HarmonyOS Sans SC");
-                }
-            }
-            catch { }
-            return new System.Windows.Media.FontFamily("Microsoft YaHei UI");
-        }
-
-        // WinForms (tray menu) counterpart of AppFont: load the same HarmonyOS ttf into a
-        // System.Drawing.Font so the right-click menu matches the window font.
-        static System.Drawing.Font _trayFont;
-        static System.Drawing.Font TrayFont()
-        {
-            if (_trayFont != null) return _trayFont;
-            try
-            {
-                var ttf = ResolveFontFile();
-                if (ttf != null)
-                {
-                    var pfc = new System.Drawing.Text.PrivateFontCollection();
-                    pfc.AddFontFile(ttf);
-                    _trayFont = new System.Drawing.Font(pfc.Families[0], 9f, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point);
-                    return _trayFont;
-                }
-            }
-            catch { }
-            _trayFont = new System.Drawing.Font("Microsoft YaHei UI", 9f);
-            return _trayFont;
-        }
-
-        static System.Windows.Media.Imaging.BitmapImage LoadAppImage(string fileName)
-        {
-            try
-            {
-                // Prefer embedded resource (bundled in the exe) so no external file is
-                // needed. Resource name is "<default namespace>.<fileName>" — csc with
-                // /resource embeds using the file name with default namespace prefix.
-                var asm = System.Reflection.Assembly.GetExecutingAssembly();
-                string resName = "PowerAudioManager." + fileName;
-                using (var stream = asm.GetManifestResourceStream(resName))
-                {
-                    if (stream != null)
-                    {
-                        var bmp = new System.Windows.Media.Imaging.BitmapImage();
-                        bmp.BeginInit();
-                        bmp.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad;
-                        bmp.StreamSource = stream;
-                        bmp.EndInit();
-                        bmp.Freeze();
-                        return bmp;
-                    }
-                }
-                // Fallback: external file next to the exe.
-                var dir = System.IO.Path.GetDirectoryName(asm.Location);
-                var path = System.IO.Path.Combine(dir, fileName);
-                if (System.IO.File.Exists(path))
-                {
-                    var bmp = new System.Windows.Media.Imaging.BitmapImage();
-                    bmp.BeginInit();
-                    bmp.UriSource = new Uri(path);
-                    bmp.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad;
-                    bmp.EndInit();
-                    bmp.Freeze();
-                    return bmp;
-                }
-            }
-            catch { }
-            return null;
-        }
+        // Fonts and bundled images live in AppResources now.
+        static System.Windows.Media.FontFamily AppFont { get { return AppResources.AppFont; } }
+        static System.Windows.Media.FontFamily EmojiFont { get { return AppResources.EmojiFont; } }
+        static System.Windows.Media.Imaging.BitmapImage LoadAppImage(string fileName) { return AppResources.LoadAppImage(fileName); }
 
         public MainWindow()
         {
@@ -230,12 +104,12 @@ namespace PowerAudioManager
             MouseWheel += (s, e) => { VolumeControl.SetVolume(VolumeControl.GetVolume() + (e.Delta > 0 ? 0.02f : -0.02f)); UpdateVolumeUI(); };
             LoadData();
             _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(30) };
-            _refreshTimer.Tick += (s, e) => { LoadData(); UpdateTrayIcon(); try { ApplyScaling(); ClampToWorkArea(); } catch { } };
+            _refreshTimer.Tick += (s, e) => { LoadData(); if (_tray != null) _tray.UpdateIcon(); try { _scaling.ApplyScaling(); _scaling.ClampToWorkArea(); } catch { } };
             _refreshTimer.Start();
             // Quick poll (2s) for resolution/DPI changes: SystemEvents.DisplaySettingsChanged
             // is unreliable across DPI switches, so we watch the live screen width directly.
             _screenPoll = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
-            _screenPoll.Tick += (s, e) => { try { ApplyScaling(); } catch { } };
+            _screenPoll.Tick += (s, e) => { try { if (_scaling != null) _scaling.ApplyScaling(); } catch { } };
             _screenPoll.Start();
             Closing += (s, ev) => { ev.Cancel = true; Hide(); };
             Loaded += OnLoaded;
@@ -255,8 +129,8 @@ namespace PowerAudioManager
                     _topmost ? Native.HWND_TOPMOST : Native.HWND_NOTOPMOST,
                     0, 0, 0, 0,
                     Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE);
-                try { InitTrayIcon(); } catch { }
-                try { UpdateTrayIcon(); } catch { }
+                try { _tray = new TrayController(this, ExitApp); _tray.Init(); } catch { }
+                try { _tray.UpdateIcon(); } catch { }
                 try { ClipboardHistory.Start(); } catch { }
                 try { UpdateChecker.CheckAsync(this, false); } catch { }
                 try { RestartAutoCleanTimer(); } catch { }
@@ -268,110 +142,21 @@ namespace PowerAudioManager
                 _deviceWatcher.OnChange = () => Dispatcher.BeginInvoke(new Action(() => { VolumeControl.Invalidate(); LoadData(); ScheduleVolumeRefresh(); }));
                 Dispatcher.BeginInvoke(new Action(() => { try { TrimWorkingSet(); } catch { } }),
                     System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+                // Scaling / work-area clamping live in WindowScaling now.
+                _scaling = new WindowScaling(this, () => _mainBorder);
                 // Re-clamp window into the work area when display config changes (e.g. 4K -> 1080p,
                 // monitor unplugged, DPI / scaling change). SystemEvents callbacks fire on a
                 // worker thread, so always hop back to the UI dispatcher.
-                Microsoft.Win32.SystemEvents.DisplaySettingsChanged += OnDisplaySettingsChanged;
-                Microsoft.Win32.SystemEvents.UserPreferenceChanged += OnUserPreferenceChanged;
+                Microsoft.Win32.SystemEvents.DisplaySettingsChanged += _scaling.OnDisplaySettingsChanged;
+                Microsoft.Win32.SystemEvents.UserPreferenceChanged += _scaling.OnUserPreferenceChanged;
                 // Scale to the screen resolution first, then re-clamp after the first
                 // layout pass so ActualWidth/ActualHeight are real.
-                ApplyScaling();
-                Dispatcher.BeginInvoke(new Action(ClampToWorkArea), DispatcherPriority.Loaded);
+                _scaling.ApplyScaling();
+                Dispatcher.BeginInvoke(new Action(_scaling.ClampToWorkArea), DispatcherPriority.Loaded);
             }
             catch (Exception ex) { AppLog.Log("OnLoaded", ex); }
         }
 
-        void OnDisplaySettingsChanged(object sender, EventArgs e)
-        {
-            try { Dispatcher.BeginInvoke(new Action(() => { ApplyScaling(); ClampToWorkArea(); })); } catch { }
-        }
-
-        // Scale the whole floating window to occupy a consistent fraction of the screen.
-        // Linear map from physical screen width to scale, calibrated so:
-        //   1080p (1920px) -> 1.0x,  4K (3840px) -> 1.5x.
-        // Uses physical pixels (Screen.Bounds) which update reliably across resolution
-        // switches, independent of process DPI (system-level awareness locks DPI at start).
-        const double BaseWindowWidth = 280.0;
-        double _currentScale = -1; // -1 forces first apply
-        void ApplyScaling()
-        {
-            try
-            {
-                double phys = 1920;
-                try { phys = System.Windows.Forms.Screen.PrimaryScreen.Bounds.Width; }
-                catch { }
-                if (phys <= 0) phys = 1920;
-                // scale = 1.0 at 1920px, 1.5 at 3840px (linear).
-                double scale = 0.5 + (phys - 1920.0) * (0.5 / 1920.0);
-                if (scale < 0.85) scale = 0.85;
-                if (scale > 2.0) scale = 2.0;
-                if (scale == _currentScale && _mainBorder != null && _mainBorder.LayoutTransform != null) return;
-                _currentScale = scale;
-                Width = BaseWindowWidth * scale;
-                if (_mainBorder != null)
-                    _mainBorder.LayoutTransform = new System.Windows.Media.ScaleTransform(scale, scale);
-            }
-            catch (Exception ex) { AppLog.Log("ApplyScaling", ex); }
-        }
-
-        void OnUserPreferenceChanged(object sender, Microsoft.Win32.UserPreferenceChangedEventArgs e)
-        {
-            // DPI / desktop changes can also move the work area on us.
-            if (e.Category == Microsoft.Win32.UserPreferenceCategory.Desktop ||
-                e.Category == Microsoft.Win32.UserPreferenceCategory.General)
-            {
-                try { Dispatcher.BeginInvoke(new Action(() => { ApplyScaling(); ClampToWorkArea(); })); } catch { }
-            }
-        }
-
-        void ClampToWorkArea()
-        {
-            try
-            {
-                // SystemParameters.WorkArea can lag behind a resolution/DPI change.
-                // System.Windows.Forms.Screen reads the live display geometry instead.
-                var screen = System.Windows.Forms.Screen.PrimaryScreen;
-                double waLeft = screen.WorkingArea.Left;
-                double waTop = screen.WorkingArea.Top;
-                double waRight = screen.WorkingArea.Right;
-                double waBottom = screen.WorkingArea.Bottom;
-                // Convert device pixels (WinForms) to WPF DIPs using the current DPI.
-                double dpi = 96.0;
-                try
-                {
-                    var src = System.Windows.PresentationSource.FromVisual(this);
-                    if (src != null && src.CompositionTarget != null)
-                        dpi = 96.0 * src.CompositionTarget.TransformToDevice.M11;
-                }
-                catch { }
-                double scale = 96.0 / dpi;
-                waLeft *= scale; waTop *= scale; waRight *= scale; waBottom *= scale;
-
-                double w = ActualWidth > 0 ? ActualWidth : Width;
-                double h = ActualHeight > 0 ? ActualHeight : Height;
-                if (double.IsNaN(w) || w <= 0) w = 280;
-                if (double.IsNaN(h) || h <= 0) h = 36;
-                double left = Left;
-                double top = Top;
-                bool offscreen = double.IsNaN(left) || double.IsNaN(top)
-                    || left + w <= waLeft + 8 || left >= waRight - 8
-                    || top + h <= waTop + 8  || top >= waBottom - 8;
-                if (offscreen)
-                {
-                    // Lost display – snap back to the top-right of the new primary work area.
-                    Left = waRight - w - 20;
-                    Top  = waTop + 20;
-                    return;
-                }
-                if (left + w > waRight)  left = waRight - w;
-                if (top  + h > waBottom) top  = waBottom - h;
-                if (left < waLeft) left = waLeft;
-                if (top  < waTop)  top  = waTop;
-                if (left != Left) Left = left;
-                if (top  != Top)  Top  = top;
-            }
-            catch (Exception ex) { AppLog.Log("ClampToWorkArea", ex); }
-        }
 
         void BuildUI()
         {
@@ -445,7 +230,7 @@ namespace PowerAudioManager
                 AppPrefs.SetBool("LockPosition", _lockPosition);
                 pinBtn.Content = _lockPosition ? "\uD83D\uDD12" : "\uD83D\uDD13";
                 pinBtn.Foreground = new SolidColorBrush(_lockPosition ? AccentColor : TextSecondary);
-                if (_lockMenuItem != null) _lockMenuItem.Checked = _lockPosition;
+                if (_tray != null) _tray.SetLockChecked(_lockPosition);
             };
             _pinBtn = pinBtn;
 
@@ -646,7 +431,7 @@ namespace PowerAudioManager
             }
 
             // ---- Launcher bar (4 quick-launch slots) ------------------------------
-            if (ModuleVisible("Launcher")) BuildLauncherBar(contentPanel);
+            if (ModuleVisible("Launcher")) LauncherBar.Build(contentPanel, RebuildUI);
 
             // ---- Clipboard-history button -----------------------------------------
             if (ModuleVisible("Clipboard")) BuildClipboardButton(contentPanel);
@@ -689,218 +474,9 @@ namespace PowerAudioManager
             _root = null;
             _mainBorder = null;
             BuildUI();
-            ApplyScaling(); // re-apply scale to the freshly built _mainBorder
+            if (_scaling != null) _scaling.ApplyScaling(); // re-apply scale to the freshly built _mainBorder
             LoadData();
             Left = left; Top = top;
-        }
-
-        // ---- Launcher bar ------------------------------------------------------
-        const int LauncherSlots = 4;
-        const string LauncherPrefKey = "Launcher.Paths";
-
-        static List<string> LoadLauncherPaths()
-        {
-            var list = new List<string>();
-            try
-            {
-                using (var k = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\PowerAudioManager\App"))
-                {
-                    if (k != null)
-                    {
-                        var s = k.GetValue(LauncherPrefKey) as string;
-                        if (!string.IsNullOrEmpty(s))
-                            foreach (var p in s.Split('|')) if (p.Length > 0) list.Add(p);
-                    }
-                }
-            }
-            catch { }
-            return list;
-        }
-
-        static void SaveLauncherPaths(List<string> paths)
-        {
-            try
-            {
-                using (var k = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(@"Software\PowerAudioManager\App"))
-                {
-                    var sb = new System.Text.StringBuilder();
-                    for (int i = 0; i < paths.Count; i++) { if (i > 0) sb.Append('|'); sb.Append(paths[i]); }
-                    k.SetValue(LauncherPrefKey, sb.ToString());
-                }
-            }
-            catch { }
-        }
-
-        // Extract a small icon from an exe/dll/lnk for the launcher slot.
-        static System.Windows.Media.ImageSource ExtractIcon(string path)
-        {
-            try
-            {
-                var ico = System.Drawing.Icon.ExtractAssociatedIcon(path);
-                if (ico != null)
-                {
-                    var bmp = System.Windows.Interop.Imaging.CreateBitmapSourceFromHIcon(
-                        ico.Handle, Int32Rect.Empty,
-                        System.Windows.Media.Imaging.BitmapSizeOptions.FromEmptyOptions());
-                    bmp.Freeze();
-                    return bmp;
-                }
-            }
-            catch { }
-            return null;
-        }
-
-        void BuildLauncherBar(StackPanel contentPanel)
-        {
-            if (contentPanel.Children.Count > 0) contentPanel.Children.Add(MakeDivider());
-            var header = new TextBlock {
-                Foreground = new SolidColorBrush(AccentColor), FontSize = 12,
-                FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 0, 0, 6) };
-            header.Inlines.Add(new Run("🚀") { FontFamily = EmojiFont });
-            header.Inlines.Add(new Run(" 快捷启动"));
-            contentPanel.Children.Add(header);
-            var row = new StackPanel { Orientation = Orientation.Horizontal };
-            var paths = LoadLauncherPaths();
-            for (int i = 0; i < LauncherSlots; i++)
-            {
-                string p = i < paths.Count ? paths[i] : null;
-                row.Children.Add(MakeLauncherSlot(i, p, paths));
-            }
-            contentPanel.Children.Add(row);
-        }
-
-        Button MakeLauncherSlot(int index, string path, List<string> paths)
-        {
-            var btn = new Button {
-                Width = 44, Height = 44,
-                Margin = new Thickness(0, 0, 6, 0),
-                Cursor = Cursors.Hand,
-                Background = new SolidColorBrush(CardColor),
-                BorderBrush = new SolidColorBrush(BorderColor),
-                ToolTip = string.IsNullOrEmpty(path) ? "点击或拖入程序（exe / 快捷方式）" : path,
-                AllowDrop = true
-            };
-            if (!string.IsNullOrEmpty(path))
-            {
-                var img = ExtractIcon(path);
-                if (img != null)
-                    btn.Content = new System.Windows.Controls.Image { Source = img, Width = 24, Height = 24 };
-                else
-                    btn.Content = "•";
-            }
-            else
-            {
-                btn.Content = "+";
-                btn.FontSize = 18;
-                btn.Foreground = new SolidColorBrush(TextSecondary);
-            }
-            btn.Click += (s, e) =>
-            {
-                if (string.IsNullOrEmpty(path))
-                {
-                    // Pick an executable
-                    var dlg = new Microsoft.Win32.OpenFileDialog {
-                        Filter = "程序|*.exe;*.lnk|所有文件|*.*",
-                        Title = "选择要添加的程序" };
-                    if (dlg.ShowDialog() == true)
-                        SetLauncherSlotPath(index, dlg.FileName, paths);
-                }
-                else
-                {
-                    try { System.Diagnostics.Process.Start(path); }
-                    catch (Exception ex) { AppLog.Log("Launch " + path, ex); }
-                }
-            };
-            btn.MouseRightButtonUp += (s, e) =>
-            {
-                // Right-click clears the slot
-                if (!string.IsNullOrEmpty(path))
-                {
-                    if (index < paths.Count) paths[index] = "";
-                    SaveLauncherPaths(paths);
-                    RebuildUI();
-                    e.Handled = true;
-                }
-            };
-            // Drag-and-drop: drop an exe / shortcut onto the slot to assign it.
-            btn.DragEnter += (s, e) =>
-            {
-                if (e.Data.GetDataPresent(DataFormats.FileDrop))
-                {
-                    e.Effects = DragDropEffects.Copy;
-                    btn.BorderBrush = new SolidColorBrush(AccentColor);
-                    btn.BorderThickness = new Thickness(2);
-                }
-                else { e.Effects = DragDropEffects.None; }
-                e.Handled = true;
-            };
-            btn.DragLeave += (s, e) =>
-            {
-                btn.BorderBrush = new SolidColorBrush(BorderColor);
-                btn.BorderThickness = new Thickness(1);
-                e.Handled = true;
-            };
-            btn.Drop += (s, e) =>
-            {
-                btn.BorderBrush = new SolidColorBrush(BorderColor);
-                btn.BorderThickness = new Thickness(1);
-                if (e.Data.GetDataPresent(DataFormats.FileDrop))
-                {
-                    var files = (string[])e.Data.GetData(DataFormats.FileDrop);
-                    if (files != null && files.Length > 0)
-                    {
-                        string dropped = files[0];
-                        // Resolve .lnk shortcuts to their target so the icon/launch works.
-                        string resolved = ResolveShortcut(dropped);
-                        SetLauncherSlotPath(index, resolved, paths);
-                    }
-                }
-                e.Handled = true;
-            };
-            return btn;
-        }
-
-        // Assign a path to a launcher slot (clamps the list, saves, rebuilds).
-        void SetLauncherSlotPath(int index, string path, List<string> paths)
-        {
-            if (string.IsNullOrEmpty(path)) return;
-            while (paths.Count <= index) paths.Add("");
-            if (paths.Count > index) paths[index] = path; else paths.Add(path);
-            SaveLauncherPaths(paths);
-            RebuildUI();
-        }
-
-        // Resolve a .lnk shortcut to its target path. Falls back to the original path
-        // if it's not a shortcut or resolution fails. Uses late binding via reflection
-        // (no dynamic / Microsoft.CSharp dependency).
-        static string ResolveShortcut(string path)
-        {
-            if (string.IsNullOrEmpty(path)) return path;
-            try
-            {
-                if (!path.EndsWith(".lnk", StringComparison.OrdinalIgnoreCase)) return path;
-                // WScript.Shell.CreateShortcut parses .lnk files via COM late-binding.
-                Type shellType = Type.GetTypeFromProgID("WScript.Shell");
-                if (shellType == null) return path;
-                object shell = Activator.CreateInstance(shellType);
-                try
-                {
-                    object sc = shellType.InvokeMember("CreateShortcut",
-                        System.Reflection.BindingFlags.InvokeMethod, null, shell, new object[] { path });
-                    if (sc == null) return path;
-                    try
-                    {
-                        object target = sc.GetType().InvokeMember("TargetPath",
-                            System.Reflection.BindingFlags.GetProperty, null, sc, null);
-                        string t = target as string;
-                        if (!string.IsNullOrEmpty(t)) return t;
-                    }
-                    finally { try { System.Runtime.InteropServices.Marshal.ReleaseComObject(sc); } catch { } }
-                }
-                finally { try { System.Runtime.InteropServices.Marshal.ReleaseComObject(shell); } catch { } }
-            }
-            catch (Exception ex) { AppLog.Log("ResolveShortcut " + path, ex); }
-            return path;
         }
 
         // ---- Clipboard history button ------------------------------------------
@@ -986,7 +562,7 @@ namespace PowerAudioManager
         bool _loading;
         DateTime _loadStartTime;
 
-        void LoadData()
+        internal void LoadData()
         {
             try { UpdateVolumeUI(); } catch { }
             try { UpdateMemoryUI(); } catch { }
@@ -1228,7 +804,7 @@ namespace PowerAudioManager
 
         // A soft Fluent separator: the existing BorderColor, but inset from the edges so it
         // reads as a divider between sections rather than a full-bleed line. No new colour.
-        Border MakeDivider()
+        internal static Border MakeDivider()
         {
             return new Border
             {
@@ -1340,7 +916,7 @@ namespace PowerAudioManager
             catch { }
         }
 
-        void CleanMemory()
+        internal void CleanMemory()
         {
             if (_memStatusLabel != null) _memStatusLabel.Text = "正在清理...";
             System.Threading.ThreadPool.QueueUserWorkItem(state =>
@@ -1409,37 +985,25 @@ namespace PowerAudioManager
             catch { }
         }
 
+        // Builds the multi-line status text shown in the tray tooltip (plan /
+        // device / memory). The tray controller writes it to the NotifyIcon,
+        // bypassing the 63-char public limit via reflection.
+        internal string TrayStatusText
+        {
+            get
+            {
+                string plan = "(无)", dev = "(无)";
+                try { if (_powerPlans != null) { var p = _powerPlans.Find(x => x.IsActive || x.Guid == _currentPlanId); if (p != null) plan = p.Name; } } catch { }
+                try { if (_audioDevices != null) { var d = _audioDevices.Find(x => x.IsDefault); if (d != null) dev = d.Name; } } catch { }
+                string mem = "";
+                try { var ms = MemoryCleaner.GetStatus(); if (ms != null) mem = string.Format(System.Environment.NewLine + "内存: {0:0.0}/{1:0.0} GB ({2}%)", (ms.TotalBytes - ms.AvailableBytes) / 1073741824.0, ms.TotalBytes / 1073741824.0, ms.MemoryLoadPercent); } catch { }
+                return "电源计划: " + plan + System.Environment.NewLine + "音频设备: " + dev + mem;
+            }
+        }
+
         void UpdateTrayTooltip()
         {
-            if (_winFormsTray == null) return;
-            string plan = "(无)", dev = "(无)";
-            try { if (_powerPlans != null) { var p = _powerPlans.Find(x => x.IsActive || x.Guid == _currentPlanId); if (p != null) plan = p.Name; } } catch { }
-            try { if (_audioDevices != null) { var d = _audioDevices.Find(x => x.IsDefault); if (d != null) dev = d.Name; } } catch { }
-            string mem = "";
-            try { var ms = MemoryCleaner.GetStatus(); if (ms != null) mem = string.Format(System.Environment.NewLine + "内存: {0:0.0}/{1:0.0} GB ({2}%)", (ms.TotalBytes - ms.AvailableBytes) / 1073741824.0, ms.TotalBytes / 1073741824.0, ms.MemoryLoadPercent); } catch { }
-            string txt = "电源计划: " + plan + System.Environment.NewLine + "音频设备: " + dev + mem;
-            // Truncate at the WinShell hard limit (127 wchars including null) — but .NET 4 has a stricter
-            // 63-char check on the public NotifyIcon.Text setter. Use reflection to bypass it and reach
-            // the underlying field, then call UpdateIcon() to refresh the tooltip.
-            if (txt.Length > 127) txt = txt.Substring(0, 126) + "…";
-            try
-            {
-                var t = typeof(System.Windows.Forms.NotifyIcon);
-                var fld = t.GetField("text", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-                if (fld != null) fld.SetValue(_winFormsTray, txt);
-                var added = t.GetField("added", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-                bool isAdded = added != null && (bool)added.GetValue(_winFormsTray);
-                if (isAdded)
-                {
-                    var update = t.GetMethod("UpdateIcon", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-                    if (update != null) update.Invoke(_winFormsTray, new object[] { true });
-                }
-            }
-            catch
-            {
-                // Last-resort: stay within the public 63-char limit so we at least see something
-                try { _winFormsTray.Text = txt.Length > 63 ? txt.Substring(0, 60) + "…" : txt; } catch { }
-            }
+            if (_tray != null) _tray.UpdateTooltip();
         }
 
         void StyleButton(Button btn, bool isActive)
@@ -1469,7 +1033,7 @@ namespace PowerAudioManager
         }
 
 
-        private void ShowWindow()
+        internal void ShowWindow()
         {
             if (!IsVisible) Show();
             if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
@@ -1478,240 +1042,17 @@ namespace PowerAudioManager
             if (_topmost) { Topmost = false; Topmost = true; }
         }
 
-
-        static bool IsAutoStartEnabled()
+        // Application shutdown: stop the device watcher, detach SystemEvents
+        // hooks, dispose the tray, then exit. Invoked from the tray "退出" item.
+        internal void ExitApp()
         {
-            try
-            {
-                using (var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(
-                    @"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", false))
-                {
-                    return key != null && key.GetValue("OneBox") != null;
-                }
-            }
-            catch { return false; }
+            if (_deviceWatcher != null) _deviceWatcher.Stop();
+            try { Microsoft.Win32.SystemEvents.DisplaySettingsChanged -= _scaling.OnDisplaySettingsChanged; } catch { }
+            try { Microsoft.Win32.SystemEvents.UserPreferenceChanged -= _scaling.OnUserPreferenceChanged; } catch { }
+            if (_tray != null) _tray.Dispose();
+            Application.Current.Shutdown();
         }
 
-        static void ToggleAutoStart(bool enable)
-        {
-            try
-            {
-                using (var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(
-                    @"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", true))
-                {
-                    if (enable)
-                        key.SetValue("OneBox",
-                            System.Reflection.Assembly.GetExecutingAssembly().Location);
-                    else
-                        key.DeleteValue("OneBox", false);
-                }
-            }
-            catch { }
-        }
-
-        #region Native Tray Icon
-
-        void InitTrayIcon()
-        {
-            try
-            {
-                _winFormsTray = new System.Windows.Forms.NotifyIcon
-                {
-                    Icon = System.Drawing.Icon.FromHandle(CreateTrayIconHandle()),
-                    Text = "OneBox",
-                    Visible = true
-                };
-                _trayMenu = new System.Windows.Forms.ContextMenuStrip();
-                _trayMenu.Font = TrayFont(); // HarmonyOS Sans SC — match the window font
-                // Match the floating window's dark-purple theme on the WinForms tray menu.
-                _trayMenu.RenderMode = System.Windows.Forms.ToolStripRenderMode.ManagerRenderMode;
-                _trayMenu.Renderer = new System.Windows.Forms.ToolStripProfessionalRenderer(new OneBoxMenuColorTable());
-                _trayMenu.BackColor = System.Drawing.Color.FromArgb(28, 26, 40);   // BgColor
-                _trayMenu.ForeColor = System.Drawing.Color.White;                    // TextPrimary
-                // Keep the image margin ON — WinForms draws checkmarks (for 开机自启 /
-                // 窗口置顶 / 锁定位置) in this margin. Hiding it makes the checks
-                // invisible. The OneBoxMenuColorTable already paints the margin dark.
-                _trayMenu.ShowImageMargin = true;
-                _trayMenu.Padding = new System.Windows.Forms.Padding(2, 4, 2, 4);
-                _trayMenu.Items.Add("显示窗口", null, (s, e) => ShowWindow());
-                var autoItem = new System.Windows.Forms.ToolStripMenuItem("开机自启") { CheckOnClick = true, Checked = IsAutoStartEnabled() };
-                autoItem.Click += (s, e) => ToggleAutoStart(autoItem.Checked);
-                _trayMenu.Items.Add(autoItem);
-                _trayMenu.Opening += (s, e) => autoItem.Checked = IsAutoStartEnabled();
-                _trayMenu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
-                _topmostMenuItem = new System.Windows.Forms.ToolStripMenuItem("窗口置顶") { CheckOnClick = true, Checked = _topmost };
-                _topmostMenuItem.Click += (s, e) => { _topmost = _topmostMenuItem.Checked; Topmost = _topmost; AppPrefs.SetBool("Topmost", _topmost); };
-                _trayMenu.Items.Insert(_trayMenu.Items.Count - 1, _topmostMenuItem);
-                _lockMenuItem = new System.Windows.Forms.ToolStripMenuItem("锁定位置") { CheckOnClick = true, Checked = _lockPosition };
-                _lockMenuItem.Click += (s, e) => { _lockPosition = _lockMenuItem.Checked; AppPrefs.SetBool("LockPosition", _lockPosition); if (_pinBtn != null) { _pinBtn.Content = _lockPosition ? "\uD83D\uDD12" : "\uD83D\uDD13"; _pinBtn.Foreground = new SolidColorBrush(_lockPosition ? AccentColor : TextSecondary); } };
-                _trayMenu.Items.Insert(_trayMenu.Items.Count - 1, _lockMenuItem);
-                var hiddenSub = new System.Windows.Forms.ToolStripMenuItem("显示已隐藏设备");
-                // Force the submenu drop-down to inherit the dark theme (it does not
-                // pick up BackColor/ForeColor from the parent ContextMenuStrip).
-                hiddenSub.DropDown.BackColor = System.Drawing.Color.FromArgb(28, 26, 40);
-                hiddenSub.DropDown.ForeColor = System.Drawing.Color.White;
-                _trayMenu.Items.Insert(_trayMenu.Items.Count - 1, hiddenSub);
-                _trayMenu.Opening += (s, e) => {
-                    hiddenSub.DropDownItems.Clear();
-                    var devs = AudioDevices.GetOutputDevices();
-                    bool any = false;
-                    foreach (var d in devs) if (d.IsHidden) {
-                        any = true;
-                        var copy = d;
-                        var mi = new System.Windows.Forms.ToolStripMenuItem(d.Name);
-                        mi.ForeColor = System.Drawing.Color.White;
-                        mi.Click += (ss, ee) => { DevicePrefs.SetHidden(copy.Name, false); LoadData(); };
-                        hiddenSub.DropDownItems.Add(mi);
-                    }
-                    hiddenSub.Visible = any;
-                };
-                _trayMenu.Items.Insert(_trayMenu.Items.Count - 1, new System.Windows.Forms.ToolStripSeparator());
-                _trayMenu.Items.Insert(_trayMenu.Items.Count - 1,
-                    new System.Windows.Forms.ToolStripMenuItem("清理内存", null, (s, e) => CleanMemory()));
-                _trayMenu.Items.Insert(_trayMenu.Items.Count - 1,
-                    new System.Windows.Forms.ToolStripMenuItem("内存清理设置...", null,
-                        (ss, ee) => { ShowWindow(); CleanerSettingsDialog.Show(this); }));
-                _trayMenu.Items.Insert(_trayMenu.Items.Count - 1,
-                    new System.Windows.Forms.ToolStripMenuItem("板块设置...", null,
-                        (ss, ee) => { ShowWindow(); ModulesSettingsDialog.Show(this); }));
-                _trayMenu.Items.Insert(_trayMenu.Items.Count - 1,
-                    new System.Windows.Forms.ToolStripMenuItem("检查更新...", null,
-                        (ss, ee) => { UpdateChecker.CheckAsync(this, true); }));
-                _trayMenu.Items.Insert(_trayMenu.Items.Count - 1, new System.Windows.Forms.ToolStripSeparator());
-                _trayMenu.Items.Add("退出", null, (s, e) => {
-                    if (_deviceWatcher != null) _deviceWatcher.Stop();
-                    try { Microsoft.Win32.SystemEvents.DisplaySettingsChanged -= OnDisplaySettingsChanged; } catch { }
-                    try { Microsoft.Win32.SystemEvents.UserPreferenceChanged -= OnUserPreferenceChanged; } catch { }
-                    if (_winFormsTray != null) { _winFormsTray.Visible = false; _winFormsTray.Dispose(); }
-                    Application.Current.Shutdown();
-                });
-                _winFormsTray.ContextMenuStrip = _trayMenu;
-                _winFormsTray.MouseUp += (s, e) => {
-                    if (e.Button == System.Windows.Forms.MouseButtons.Left) ShowWindow();
-                    else if (e.Button == System.Windows.Forms.MouseButtons.Middle) CleanMemory();
-                };
-            }
-            catch
-            {
-            }
-        }
-
-        // ---- Dynamic tray icon --------------------------------------------------
-        // Renders the "闪电" (bolt) logo as a 32x32 bitmap, recoloured by current
-        // memory load: green < 60%, amber 60–80%, red > 80%. Called on every refresh
-        // tick so the tray reflects live system pressure.
-        System.Drawing.Icon _dynIcon;
-        int _lastLoadBucket = -1; // -1 forces a redraw on first call
-
-        static System.Drawing.Color LoadColor(uint load)
-        {
-            if (load >= 80) return System.Drawing.Color.FromArgb(232, 93, 93);   // red
-            if (load >= 60) return System.Drawing.Color.FromArgb(240, 180, 80);  // amber
-            return System.Drawing.Color.FromArgb(120, 200, 130);                 // green
-        }
-
-        System.Drawing.Icon BuildDynamicIcon(uint load)
-        {
-            var bmp = new System.Drawing.Bitmap(32, 32, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
-            using (var g = System.Drawing.Graphics.FromImage(bmp))
-            {
-                g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-                g.Clear(System.Drawing.Color.Transparent);
-                var color = LoadColor(load);
-                // Bolt polygon, centred in 32x32.
-                var pts = new System.Drawing.PointF[] {
-                    new System.Drawing.PointF(19f, 3f),
-                    new System.Drawing.PointF(8f, 18f),
-                    new System.Drawing.PointF(15f, 18f),
-                    new System.Drawing.PointF(13f, 29f),
-                    new System.Drawing.PointF(24f, 13f),
-                    new System.Drawing.PointF(17f, 13f)
-                };
-                using (var brush = new System.Drawing.SolidBrush(color))
-                    g.FillPolygon(brush, pts);
-                using (var pen = new System.Drawing.Pen(System.Drawing.Color.FromArgb(255, 255, 255), 1.2f))
-                    g.DrawPolygon(pen, pts);
-            }
-            var hicon = bmp.GetHicon();
-            var icon = System.Drawing.Icon.FromHandle(hicon);
-            return icon;
-        }
-
-        void UpdateTrayIcon()
-        {
-            try
-            {
-                if (_winFormsTray == null) return;
-                uint load = 0;
-                var s = MemoryCleaner.GetStatus();
-                if (s != null) load = s.MemoryLoadPercent;
-                int bucket = load >= 80 ? 2 : (load >= 60 ? 1 : 0);
-                if (bucket == _lastLoadBucket && _dynIcon != null) return; // unchanged
-                _lastLoadBucket = bucket;
-                var old = _dynIcon;
-                _dynIcon = BuildDynamicIcon(load);
-                _winFormsTray.Icon = _dynIcon;
-                if (old != null) { try { old.Dispose(); } catch { } }
-                UpdateTrayTooltip();
-            }
-            catch (Exception ex) { AppLog.Log("UpdateTrayIcon", ex); }
-        }
-
-        IntPtr CreateTrayIconHandle()
-        {
-            // Initial icon (green bucket). Subsequent updates go through UpdateTrayIcon.
-            try
-            {
-                if (_dynIcon == null) _dynIcon = BuildDynamicIcon(0);
-                return _dynIcon.Handle;
-            }
-            catch { }
-            return new System.Drawing.Bitmap(32, 32).GetHicon();
-        }
-
-        // WinForms ProfessionalColorTable that mirrors the WPF floating window's
-        // dark-purple palette (BgColor/CardColor/Hover/Accent/Border) so the tray
-        // right-click menu looks like the window, not the default light OS menu.
-        class OneBoxMenuColorTable : System.Windows.Forms.ProfessionalColorTable
-        {
-            static readonly System.Drawing.Color Bg     = System.Drawing.Color.FromArgb(28, 26, 40);   // BgColor #1C1A28
-            static readonly System.Drawing.Color Title  = System.Drawing.Color.FromArgb(34, 32, 50);   // title bar #222132
-            static readonly System.Drawing.Color Card   = System.Drawing.Color.FromArgb(42, 39, 60);   // CardColor #2A273C
-            static readonly System.Drawing.Color Hover  = System.Drawing.Color.FromArgb(58, 54, 84);   // HoverColor #3A3654
-            static readonly System.Drawing.Color Active = System.Drawing.Color.FromArgb(110, 105, 200);// ActiveBg #6E69C8
-            static readonly System.Drawing.Color Accent = System.Drawing.Color.FromArgb(142, 140, 216);// Accent #8E8CD8
-            static readonly System.Drawing.Color Border = System.Drawing.Color.FromArgb(80, 75, 120);  // BorderColor #504F78
-
-            public override System.Drawing.Color MenuBorder { get { return Border; } }
-            public override System.Drawing.Color MenuItemBorder { get { return Accent; } }
-            public override System.Drawing.Color MenuItemSelected { get { return Hover; } }
-            public override System.Drawing.Color MenuItemSelectedGradientBegin { get { return Hover; } }
-            public override System.Drawing.Color MenuItemSelectedGradientEnd { get { return Hover; } }
-            public override System.Drawing.Color MenuItemPressedGradientBegin { get { return Active; } }
-            public override System.Drawing.Color MenuItemPressedGradientMiddle { get { return Active; } }
-            public override System.Drawing.Color MenuItemPressedGradientEnd { get { return Active; } }
-            public override System.Drawing.Color MenuStripGradientBegin { get { return Bg; } }
-            public override System.Drawing.Color MenuStripGradientEnd { get { return Bg; } }
-            public override System.Drawing.Color ToolStripGradientBegin { get { return Title; } }
-            public override System.Drawing.Color ToolStripGradientMiddle { get { return Title; } }
-            public override System.Drawing.Color ToolStripGradientEnd { get { return Bg; } }
-            public override System.Drawing.Color ImageMarginGradientBegin { get { return Card; } }
-            public override System.Drawing.Color ImageMarginGradientMiddle { get { return Card; } }
-            public override System.Drawing.Color ImageMarginGradientEnd { get { return Card; } }
-            public override System.Drawing.Color SeparatorDark { get { return Border; } }
-            public override System.Drawing.Color SeparatorLight { get { return Card; } }
-            public override System.Drawing.Color CheckBackground { get { return Active; } }
-            public override System.Drawing.Color CheckPressedBackground { get { return Active; } }
-            public override System.Drawing.Color CheckSelectedBackground { get { return Hover; } }
-            public override System.Drawing.Color ButtonSelectedHighlight { get { return Hover; } }
-            public override System.Drawing.Color ButtonSelectedGradientBegin { get { return Hover; } }
-            public override System.Drawing.Color ButtonSelectedGradientEnd { get { return Hover; } }
-            public override System.Drawing.Color ButtonPressedGradientBegin { get { return Active; } }
-            public override System.Drawing.Color ButtonPressedGradientMiddle { get { return Active; } }
-            public override System.Drawing.Color ButtonPressedGradientEnd { get { return Active; } }
-            public override System.Drawing.Color StatusStripGradientBegin { get { return Bg; } }
-            public override System.Drawing.Color StatusStripGradientEnd { get { return Bg; } }
-        }
 
         IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
         {
@@ -1740,8 +1081,6 @@ namespace PowerAudioManager
             return IntPtr.Zero;
         }
 
-
-        #endregion
 
         void TrimWorkingSet()
         {
