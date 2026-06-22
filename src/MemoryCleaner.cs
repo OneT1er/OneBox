@@ -107,6 +107,7 @@ namespace PowerAudioManager
             public ulong TotalBytes;
             public ulong AvailableBytes;
             public uint MemoryLoadPercent;
+            public ulong SystemCacheBytes; // system file cache working set (via GetPerformanceInfo)
         }
 
         [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
@@ -125,11 +126,44 @@ namespace PowerAudioManager
         }
         [DllImport("kernel32.dll")] static extern bool GlobalMemoryStatusEx([In, Out] MEMORYSTATUSEX mse);
 
+        // GetPerformanceInfo returns counters in bytes/units; SystemCache is the
+        // system file cache size in bytes. memreduct shows it as a third group;
+        // we surface it so the tray/float can display cache pressure too.
+        [StructLayout(LayoutKind.Sequential)]
+        class PERFORMANCE_INFORMATION
+        {
+            public uint cb;
+            public uint CommitTotal;
+            public uint CommitLimit;
+            public uint CommitPeak;
+            public uint PhysicalTotal;
+            public uint PhysicalAvailable;
+            public uint SystemCache;
+            public uint KernelTotal;
+            public uint KernelPaged;
+            public uint KernelNonpaged;
+            public uint PageSize;
+            public uint HandleCount;
+            public uint ProcessCount;
+            public uint ThreadCount;
+            public PERFORMANCE_INFORMATION() { cb = (uint)Marshal.SizeOf(typeof(PERFORMANCE_INFORMATION)); }
+        }
+        [DllImport("psapi.dll", SetLastError = true)]
+        static extern bool GetPerformanceInfo([In, Out] PERFORMANCE_INFORMATION pi, int cb);
+
         public static MemoryStatus GetStatus()
         {
             var m = new MEMORYSTATUSEX();
             if (!GlobalMemoryStatusEx(m)) return null;
-            return new MemoryStatus { TotalBytes = m.ullTotalPhys, AvailableBytes = m.ullAvailPhys, MemoryLoadPercent = m.dwMemoryLoad };
+            var s = new MemoryStatus { TotalBytes = m.ullTotalPhys, AvailableBytes = m.ullAvailPhys, MemoryLoadPercent = m.dwMemoryLoad };
+            try
+            {
+                var pi = new PERFORMANCE_INFORMATION();
+                if (GetPerformanceInfo(pi, (int)pi.cb))
+                    s.SystemCacheBytes = (ulong)pi.SystemCache * pi.PageSize;
+            }
+            catch { }
+            return s;
         }
 
         public class CleanResult
@@ -153,7 +187,10 @@ namespace PowerAudioManager
             ModifiedFileCache  = 1 << 5,  // alias of MemoryFlushModifiedList
             RegistryCache      = 1 << 6,  // win8.1+
             CombineMemoryLists = 1 << 7,  // win10+
-            Default = WorkingSet | SystemFileCache | StandbyListNoPrio | ModifiedFileCache | RegistryCache
+            // The two *-marked items (StandbyList full purge, ModifiedPageList flush)
+            // can cause brief system freezes, so they are off by default — matching
+            // memreduct's REDUCT_MASK_DEFAULT.
+            Default = WorkingSet | SystemFileCache | StandbyListNoPrio | ModifiedFileCache | RegistryCache | CombineMemoryLists
         }
 
         public static CleanResult CleanAll() { return CleanAll(CleanFlags.Default); }
@@ -276,7 +313,7 @@ namespace PowerAudioManager
             if (AppPrefs.GetBool("Clean.StandbyListNoPrio", true)) f |= CleanFlags.StandbyListNoPrio;
             if (AppPrefs.GetBool("Clean.ModifiedFileCache", true)) f |= CleanFlags.ModifiedFileCache;
             if (AppPrefs.GetBool("Clean.RegistryCache", true)) f |= CleanFlags.RegistryCache;
-            if (AppPrefs.GetBool("Clean.CombineMemoryLists", false)) f |= CleanFlags.CombineMemoryLists;
+            if (AppPrefs.GetBool("Clean.CombineMemoryLists", true)) f |= CleanFlags.CombineMemoryLists;
             if (f == CleanFlags.None) f = CleanFlags.Default;
             return f;
         }

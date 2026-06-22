@@ -266,7 +266,7 @@ namespace PowerAudioManager
             var cbSLNP = MakeAreaCb("Standby list (without priority)", "只清理低优先级的 standby 页（影响小、释放慢但稳定）。", "Clean.StandbyListNoPrio", true, fg, true);
             var cbMFC = MakeAreaCb("Modified file cache", "刷新已修改的文件缓存页（与 Modified page list 的非分页部分对应）。", "Clean.ModifiedFileCache", true, fg, true);
             var cbReg = MakeAreaCb("Registry cache (win8.1+)", "Windows 8.1 及以上：归还注册表配置单元的缓存内存。", "Clean.RegistryCache", true, fg, AdminUtils.RealOsVersion() >= new Version(6, 3));
-            var cbCML = MakeAreaCb("Combine memory lists (win10+)", "Windows 10 及以上：合并相同内容的物理内存页（内存压缩 / 共享）。", "Clean.CombineMemoryLists", false, fg, AdminUtils.RealOsVersion().Major >= 10);
+            var cbCML = MakeAreaCb("Combine memory lists (win10+)", "Windows 10 及以上：合并相同内容的物理内存页（内存压缩 / 共享）。", "Clean.CombineMemoryLists", true, fg, AdminUtils.RealOsVersion().Major >= 10);
             stack.Children.Add(cbWS);
             stack.Children.Add(cbSFC);
             stack.Children.Add(cbMPL);
@@ -276,6 +276,16 @@ namespace PowerAudioManager
             stack.Children.Add(cbReg);
             stack.Children.Add(cbCML);
 
+            // The two *-marked items can cause brief system freezes; warn when the
+            // user enables them (matching memreduct's confirmation prompt).
+            ConfirmIfDangerous(cbSL, dlg, "清空整个 standby 列表可能导致系统短暂卡顿，确定启用？");
+            ConfirmIfDangerous(cbMPL, dlg, "刷盘 Modified page list 可能导致系统短暂卡顿，确定启用？");
+
+            stack.Children.Add(new Border { Height = 1, Background = new SolidColorBrush(Color.FromRgb(80, 75, 120)), Margin = new Thickness(0, 14, 0, 12) });
+            var allowFreezeCb = new CheckBox { Content = "允许自动清理危险项（Standby list / Modified page list）", Foreground = fg, FontSize = 11, Margin = new Thickness(0, 0, 0, 4), IsChecked = AppPrefs.GetBool("AutoCleanAllowFreezes", false) };
+            stack.Children.Add(allowFreezeCb);
+            stack.Children.Add(new TextBlock { Text = "默认自动清理会跳过这两项以避免后台卡顿；勾选后自动清理也执行它们。", Foreground = fg, FontSize = 10, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 0) });
+
             var btns = MakeButtons();
             ((Button)btns.Children[0]).Click += (s, e) =>
             {
@@ -284,6 +294,7 @@ namespace PowerAudioManager
                 AppPrefs.SetBool("AutoCleanByThreshold", byThCb.IsChecked == true);
                 int n; if (int.TryParse(timeBox.Text, out n) && n > 0) AppPrefs.SetDouble("AutoCleanMinutes", n);
                 int t; if (int.TryParse(thBox.Text, out t) && t > 0 && t <= 100) AppPrefs.SetDouble("AutoCleanThreshold", t);
+                AppPrefs.SetBool("AutoCleanAllowFreezes", allowFreezeCb.IsChecked == true);
                 AppPrefs.SetBool("Clean.WorkingSet", cbWS.IsChecked == true);
                 AppPrefs.SetBool("Clean.SystemFileCache", cbSFC.IsChecked == true);
                 AppPrefs.SetBool("Clean.ModifiedPageList", cbMPL.IsChecked == true);
@@ -299,6 +310,17 @@ namespace PowerAudioManager
             stack.Children.Add(btns);
 
             return new TabItem { Header = " 内存 ", Content = Scroll(stack) };
+        }
+
+        // When a "dangerous" cleaning option is checked, prompt for confirmation;
+        // if the user declines, uncheck it again.
+        static void ConfirmIfDangerous(CheckBox cb, Window dlg, string message)
+        {
+            cb.Checked += (s, e) =>
+            {
+                var rc = MessageBox.Show(dlg, message, "提示", MessageBoxButton.OKCancel, MessageBoxImage.Warning);
+                if (rc != MessageBoxResult.OK) cb.IsChecked = false;
+            };
         }
 
         // ---- 翻译 tab ----------------------------------------------------------

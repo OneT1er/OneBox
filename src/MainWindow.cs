@@ -289,7 +289,7 @@ namespace PowerAudioManager
                 string plan = "(无)", dev = "(无)";
                 try { if (_powerPlans != null) { var p = _powerPlans.Find(x => x.IsActive || x.Guid == _currentPlanId); if (p != null) plan = p.Name; } } catch { }
                 try { if (_audioDevices != null) { var d = _audioDevices.Find(x => x.IsDefault); if (d != null) dev = d.Name; } } catch { }
-                string mem = ""; try { var ms = MemoryCleaner.GetStatus(); if (ms != null) mem = string.Format(System.Environment.NewLine + "内存: {0:0.0}/{1:0.0} GB ({2}%)", (ms.TotalBytes - ms.AvailableBytes) / 1073741824.0, ms.TotalBytes / 1073741824.0, ms.MemoryLoadPercent); } catch { }
+                string mem = ""; try { var ms = MemoryCleaner.GetStatus(); if (ms != null) mem = string.Format(System.Environment.NewLine + "内存: {0:0.0}/{1:0.0} GB ({2}%) · 缓存 {3:0}MB", (ms.TotalBytes - ms.AvailableBytes) / 1073741824.0, ms.TotalBytes / 1073741824.0, ms.MemoryLoadPercent, ms.SystemCacheBytes / 1048576.0); } catch { }
                 tipBlock.Text = "电源计划: " + plan + System.Environment.NewLine + "音频设备: " + dev + mem;
             };
             // Drag the window only when position is unlocked. When locked, the
@@ -937,19 +937,29 @@ namespace PowerAudioManager
                 double total = s.TotalBytes / 1024.0 / 1024.0 / 1024.0;
                 double avail = s.AvailableBytes / 1024.0 / 1024.0 / 1024.0;
                 double used = total - avail;
-                _memStatusLabel.Text = string.Format("已用 {0:0.0} GB / {1:0.0} GB ({2}%)", used, total, s.MemoryLoadPercent);
+                double cacheMb = s.SystemCacheBytes / 1024.0 / 1024.0;
+                _memStatusLabel.Text = string.Format("已用 {0:0.0} GB / {1:0.0} GB ({2}%) · 缓存 {3:0} MB", used, total, s.MemoryLoadPercent, cacheMb);
             }
             catch { }
         }
 
         internal void CleanMemory()
         {
+            CleanMemory(MemoryCleaner.GetSavedFlags());
+        }
+
+        // Clean with explicit flags. Auto-clean passes a mask with the freeze-prone
+        // items (full StandbyList purge, ModifiedPageList flush) stripped unless the
+        // user opted in via 设置→内存 的"允许自动清理危险项" — silently purging the
+        // standby list in the background can stall the whole system.
+        internal void CleanMemory(MemoryCleaner.CleanFlags flags)
+        {
             if (_memStatusLabel != null) _memStatusLabel.Text = "正在清理...";
             System.Threading.ThreadPool.QueueUserWorkItem(state =>
             {
                 MemoryCleaner.CleanResult r = null;
                 Exception err = null;
-                try { r = MemoryCleaner.CleanAll(MemoryCleaner.GetSavedFlags()); }
+                try { r = MemoryCleaner.CleanAll(flags); }
                 catch (Exception ex) { err = ex; }
                 Dispatcher.BeginInvoke(new Action(() =>
                 {
@@ -1005,7 +1015,13 @@ namespace PowerAudioManager
                 if (shouldClean)
                 {
                     _lastCleanTime = DateTime.Now;
-                    CleanMemory();
+                    var flags = MemoryCleaner.GetSavedFlags();
+                    // Auto-clean skips the freeze-prone items (full standby purge,
+                    // modified page list flush) unless the user explicitly allows
+                    // them — a background standby purge can stall the system.
+                    if (!AppPrefs.GetBool("AutoCleanAllowFreezes", false))
+                        flags &= ~(MemoryCleaner.CleanFlags.StandbyList | MemoryCleaner.CleanFlags.ModifiedPageList);
+                    CleanMemory(flags);
                 }
             }
             catch { }
@@ -1022,7 +1038,7 @@ namespace PowerAudioManager
                 try { if (_powerPlans != null) { var p = _powerPlans.Find(x => x.IsActive || x.Guid == _currentPlanId); if (p != null) plan = p.Name; } } catch { }
                 try { if (_audioDevices != null) { var d = _audioDevices.Find(x => x.IsDefault); if (d != null) dev = d.Name; } } catch { }
                 string mem = "";
-                try { var ms = MemoryCleaner.GetStatus(); if (ms != null) mem = string.Format(System.Environment.NewLine + "内存: {0:0.0}/{1:0.0} GB ({2}%)", (ms.TotalBytes - ms.AvailableBytes) / 1073741824.0, ms.TotalBytes / 1073741824.0, ms.MemoryLoadPercent); } catch { }
+                try { var ms = MemoryCleaner.GetStatus(); if (ms != null) mem = string.Format(System.Environment.NewLine + "内存: {0:0.0}/{1:0.0} GB ({2}%) · 缓存 {3:0}MB", (ms.TotalBytes - ms.AvailableBytes) / 1073741824.0, ms.TotalBytes / 1073741824.0, ms.MemoryLoadPercent, ms.SystemCacheBytes / 1048576.0); } catch { }
                 return "电源计划: " + plan + System.Environment.NewLine + "音频设备: " + dev + mem;
             }
         }
