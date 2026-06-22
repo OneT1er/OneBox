@@ -46,14 +46,19 @@ namespace PowerAudioManager
 
         // Shared palette — internal so the extracted helper classes (LauncherBar,
         // TrayController, etc.) can reuse the exact same colours.
+        // Organised as Material-style elevation tiers: the deeper the tier, the
+        // lighter the surface, so layered cards read as stacked depth.
         internal static readonly Color AccentColor = Color.FromRgb(142, 140, 216);   // 紫影 #8E8CD8
+        internal static readonly Color AccentHover = Color.FromRgb(126, 122, 210);   // 强调色悬停(略深)
         internal static readonly Color BgColor = Color.FromRgb(28, 26, 40);          // 深底，与紫影协调
-        internal static readonly Color CardColor = Color.FromRgb(42, 39, 60);        // 卡片
+        internal static readonly Color CardColor = Color.FromRgb(42, 39, 60);        // 卡片 (elevation 1)
+        internal static readonly Color HoverColor = Color.FromRgb(58, 54, 84);       // 悬停 (elevation 2)
         internal static readonly Color TextPrimary = Colors.White;
         internal static readonly Color TextSecondary = Color.FromRgb(190, 188, 220); // 次要文字
-        internal static readonly Color HoverColor = Color.FromRgb(58, 54, 84);       // 悬停
         internal static readonly Color ActiveBg = Color.FromRgb(110, 105, 200);      // 激活态（紫影偏深）
         internal static readonly Color BorderColor = Color.FromRgb(80, 75, 120);     // 边框
+        // Material-style tonal surfaces for the filled/outline button variants.
+        internal static readonly Color AccentRipple = Color.FromRgb(80, 76, 150);    // 强调按钮按下/悬停叠色
 
         // Fonts and bundled images live in AppResources now.
         static System.Windows.Media.FontFamily AppFont { get { return AppResources.AppFont; } }
@@ -130,6 +135,50 @@ namespace PowerAudioManager
             catch { }
         }
 
+        // Start-up nudge: clamp any edge that pokes outside the work area so the
+        // whole window is visible on first show (e.g. when the saved position was
+        // estimated against a different size). Runs once after the first layout.
+        // Later resolution changes deliberately do NOT call this — they honour
+        // 固定位置 and leave the window where the user put it.
+        void EnsureFullyVisible()
+        {
+            try
+            {
+                var screen = System.Windows.Forms.Screen.PrimaryScreen;
+                double dpi = 96.0;
+                try
+                {
+                    var src = System.Windows.PresentationSource.FromVisual(this);
+                    if (src != null && src.CompositionTarget != null)
+                        dpi = 96.0 * src.CompositionTarget.TransformToDevice.M11;
+                }
+                catch { }
+                double s = 96.0 / dpi;
+                double waL = screen.WorkingArea.Left * s, waT = screen.WorkingArea.Top * s;
+                double waR = screen.WorkingArea.Right * s, waB = screen.WorkingArea.Bottom * s;
+                double w = ActualWidth > 0 ? ActualWidth : Width;
+                double h = ActualHeight > 0 ? ActualHeight : Height;
+                if (double.IsNaN(w) || w <= 0) w = 280;
+                if (double.IsNaN(h) || h <= 0) h = 200;
+                double left = Left, top = Top;
+                // Fully off-screen (e.g. its monitor was unplugged): re-seat at the
+                // bottom-right so the window is reachable.
+                if (left + w <= waL + 8 || left >= waR - 8 || top + h <= waT + 8 || top >= waB - 8)
+                {
+                    Left = waR - w - 20;
+                    Top = waB - h - 20;
+                    return;
+                }
+                if (left + w > waR) left = waR - w;
+                if (top + h > waB) top = waB - h;
+                if (left < waL) left = waL;
+                if (top < waT) top = waT;
+                if (left != Left) Left = left;
+                if (top != Top) Top = top;
+            }
+            catch { }
+        }
+
         void OnLoaded(object sender, RoutedEventArgs e)
         {
             try
@@ -167,7 +216,11 @@ namespace PowerAudioManager
                 // Scale to the screen resolution first, then re-clamp after the first
                 // layout pass so ActualWidth/ActualHeight are real.
                 _scaling.ApplyScaling();
-                Dispatcher.BeginInvoke(new Action(_scaling.Reposition), DispatcherPriority.Loaded);
+                // After the first layout pass ActualWidth/ActualHeight are real, so we
+                // can nudge the window fully on-screen. This is start-up only — it does
+                // NOT run on later resolution changes (those honour 固定位置 and leave
+                // the window where the user put it).
+                Dispatcher.BeginInvoke(new Action(EnsureFullyVisible), DispatcherPriority.Loaded);
             }
             catch (Exception ex) { AppLog.Log("OnLoaded", ex); }
         }
@@ -180,13 +233,14 @@ namespace PowerAudioManager
                 CornerRadius = new CornerRadius(10),
                 Background = new SolidColorBrush(BgColor),
                 BorderBrush = new SolidColorBrush(BorderColor),                BorderThickness = new Thickness(1),
-                // Fluent elevation: a soft, depth-less shadow gives the floating card lift
-                // without introducing any new palette colour.
+                // Material elevation (dp2-ish): a wide, soft, low-opacity shadow lifts
+                // the floating card off the desktop without a hard edge. Larger blur +
+                // smaller depth + lower opacity reads as ambient occlusion, not a drop.
                 Effect = new System.Windows.Media.Effects.DropShadowEffect
                 {
-                    BlurRadius = 28,
-                    ShadowDepth = 0,
-                    Opacity = 0.45,
+                    BlurRadius = 36,
+                    ShadowDepth = 2,
+                    Opacity = 0.32,
                     Color = Colors.Black
                 }
             };
@@ -407,7 +461,7 @@ namespace PowerAudioManager
                 FontSize = 12,
                 Cursor = Cursors.Hand
             };
-            StyleButton(memBtn, false);
+            StyleButton(memBtn, false, true);
             memBtn.Click += (s, e) => CleanMemory();
             contentPanel.Children.Add(memBtn);
 
@@ -444,7 +498,7 @@ namespace PowerAudioManager
                 Cursor = Cursors.Hand,
                 ToolTip = "全局快捷键：Ctrl+Shift+T 自动翻译剪贴板"
             };
-            StyleButton(trBtn, false);
+            StyleButton(trBtn, false, true);
             trBtn.Click += (s, e) => OpenTranslateWindow(null);
             contentPanel.Children.Add(trBtn);
             }
@@ -842,15 +896,15 @@ namespace PowerAudioManager
             };
         }
 
-        // Rounded button template (corner radius 6) — the single source of the Fluent pill
-        // shape for every action button. Background/Border/Content/Padding all bind through.
+        // Rounded button template (corner radius 8) — Material-style pill shape for
+        // every action button. Background/Border/Content/Padding all bind through.
         static ControlTemplate _roundedBtn;
         static ControlTemplate RoundedButtonTemplate()
         {
             if (_roundedBtn != null) return _roundedBtn;
             string xaml =
 @"<ControlTemplate TargetType='Button' xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'>
-  <Border CornerRadius='6' Background='{TemplateBinding Background}' BorderBrush='{TemplateBinding BorderBrush}' BorderThickness='{TemplateBinding BorderThickness}'>
+  <Border CornerRadius='8' Background='{TemplateBinding Background}' BorderBrush='{TemplateBinding BorderBrush}' BorderThickness='{TemplateBinding BorderThickness}'>
     <ContentPresenter Margin='{TemplateBinding Padding}' HorizontalAlignment='{TemplateBinding HorizontalContentAlignment}' VerticalAlignment='Center' RecognizesAccessKey='True'/>
   </Border>
 </ControlTemplate>";
@@ -858,14 +912,14 @@ namespace PowerAudioManager
             return _roundedBtn;
         }
 
-        // Smooth Fluent hover: animate the Background brush colour instead of swapping it
-        // instantly. Only applied to inactive buttons (active ones keep their accent fill).
+        // Smooth hover: animate the Background brush colour instead of swapping it
+        // instantly. ~180ms matches Material's standard ease for surface state changes.
         static void AnimateButtonBg(Button btn, Color to)
         {
             var b = btn.Background as SolidColorBrush;
             if (b == null) { btn.Background = new SolidColorBrush(to); return; }
             b.BeginAnimation(SolidColorBrush.ColorProperty,
-                new System.Windows.Media.Animation.ColorAnimation(to, TimeSpan.FromMilliseconds(120)));
+                new System.Windows.Media.Animation.ColorAnimation(to, TimeSpan.FromMilliseconds(180)));
         }
 
         void UpdateVolumeUI()
@@ -1049,7 +1103,15 @@ namespace PowerAudioManager
             if (_tray != null) _tray.UpdateTooltip();
         }
 
-        void StyleButton(Button btn, bool isActive)
+        // Material-style button styling. Three variants share one rounded template:
+        //  - primary:  accent fill + white text, hover darkens to AccentHover
+        //  - outline:  transparent fill + border, hover fills with a tonal accent tint
+        //  - default:  card fill + secondary text, hover lifts to HoverColor (elevation)
+        // active overrides the fill to the pressed/accent state (used for the selected
+        // power plan / audio device button).
+        void StyleButton(Button btn, bool isActive) { StyleButton(btn, isActive, false); }
+
+        void StyleButton(Button btn, bool isActive, bool primary)
         {
             btn.Template = RoundedButtonTemplate();
             if (isActive)
@@ -1059,6 +1121,18 @@ namespace PowerAudioManager
                 btn.FontWeight = FontWeights.SemiBold;
                 btn.BorderBrush = new SolidColorBrush(AccentColor);
                 btn.BorderThickness = new Thickness(1);
+                return;
+            }
+            if (primary)
+            {
+                // Filled accent button — the main call-to-action (清理/翻译).
+                btn.Background = new SolidColorBrush(AccentColor);
+                btn.Foreground = Brushes.White;
+                btn.FontWeight = FontWeights.SemiBold;
+                btn.BorderBrush = new SolidColorBrush(AccentColor);
+                btn.BorderThickness = new Thickness(0);
+                btn.MouseEnter += (s, e) => AnimateButtonBg(btn, AccentHover);
+                btn.MouseLeave += (s, e) => AnimateButtonBg(btn, AccentColor);
             }
             else
             {
@@ -1067,9 +1141,6 @@ namespace PowerAudioManager
                 btn.FontWeight = FontWeights.Normal;
                 btn.BorderBrush = new SolidColorBrush(BorderColor);
                 btn.BorderThickness = new Thickness(1);
-            }
-            if (!isActive)
-            {
                 btn.MouseEnter += (s, e) => AnimateButtonBg(btn, HoverColor);
                 btn.MouseLeave += (s, e) => AnimateButtonBg(btn, CardColor);
             }
