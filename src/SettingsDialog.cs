@@ -33,6 +33,7 @@ namespace PowerAudioManager
                 BorderBrush = Brushes.Transparent,
                 Padding = new Thickness(0)
             };
+            AppResources.StyleDarkTabControl(tabs);
 
             var dlg = OneBoxWindow.Create(owner, "设置", 460, 560, tabs, true);
 

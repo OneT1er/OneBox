@@ -344,7 +344,7 @@ namespace PowerAudioManager
                 string plan = "(无)", dev = "(无)";
                 try { if (_powerPlans != null) { var p = _powerPlans.Find(x => x.IsActive || x.Guid == _currentPlanId); if (p != null) plan = p.Name; } } catch { }
                 try { if (_audioDevices != null) { var d = _audioDevices.Find(x => x.IsDefault); if (d != null) dev = d.Name; } } catch { }
-                string mem = ""; try { var ms = MemoryCleaner.GetStatus(); if (ms != null) mem = string.Format(System.Environment.NewLine + "内存: {0:0.0}/{1:0.0} GB ({2}%) · 缓存 {3:0}MB", (ms.TotalBytes - ms.AvailableBytes) / 1073741824.0, ms.TotalBytes / 1073741824.0, ms.MemoryLoadPercent, ms.SystemCacheBytes / 1048576.0); } catch { }
+                string mem = ""; try { var ms = MemoryCleaner.GetStatus(); if (ms != null) mem = string.Format(System.Environment.NewLine + "内存: {0:0.0}/{1:0.0} GB ({2}%) · 已缓存 {3:0.0}GB", (ms.TotalBytes - ms.AvailableBytes) / 1073741824.0, ms.TotalBytes / 1073741824.0, ms.MemoryLoadPercent, ms.CachedBytes / 1073741824.0); } catch { }
                 tipBlock.Text = "电源计划: " + plan + System.Environment.NewLine + "音频设备: " + dev + mem;
             };
             // Drag the window only when position is unlocked. When locked, the
@@ -992,8 +992,8 @@ namespace PowerAudioManager
                 double total = s.TotalBytes / 1024.0 / 1024.0 / 1024.0;
                 double avail = s.AvailableBytes / 1024.0 / 1024.0 / 1024.0;
                 double used = total - avail;
-                double cacheMb = s.SystemCacheBytes / 1024.0 / 1024.0;
-                _memStatusLabel.Text = string.Format("已用 {0:0.0} GB / {1:0.0} GB ({2}%) · 缓存 {3:0} MB", used, total, s.MemoryLoadPercent, cacheMb);
+                double cachedGb = s.CachedBytes / 1024.0 / 1024.0 / 1024.0;
+                _memStatusLabel.Text = string.Format("已用 {0:0.0} GB / {1:0.0} GB ({2}%) · 已缓存 {3:0.0} GB", used, total, s.MemoryLoadPercent, cachedGb);
             }
             catch { }
         }
@@ -1093,7 +1093,7 @@ namespace PowerAudioManager
                 try { if (_powerPlans != null) { var p = _powerPlans.Find(x => x.IsActive || x.Guid == _currentPlanId); if (p != null) plan = p.Name; } } catch { }
                 try { if (_audioDevices != null) { var d = _audioDevices.Find(x => x.IsDefault); if (d != null) dev = d.Name; } } catch { }
                 string mem = "";
-                try { var ms = MemoryCleaner.GetStatus(); if (ms != null) mem = string.Format(System.Environment.NewLine + "内存: {0:0.0}/{1:0.0} GB ({2}%) · 缓存 {3:0}MB", (ms.TotalBytes - ms.AvailableBytes) / 1073741824.0, ms.TotalBytes / 1073741824.0, ms.MemoryLoadPercent, ms.SystemCacheBytes / 1048576.0); } catch { }
+                try { var ms = MemoryCleaner.GetStatus(); if (ms != null) mem = string.Format(System.Environment.NewLine + "内存: {0:0.0}/{1:0.0} GB ({2}%) · 已缓存 {3:0.0}GB", (ms.TotalBytes - ms.AvailableBytes) / 1073741824.0, ms.TotalBytes / 1073741824.0, ms.MemoryLoadPercent, ms.CachedBytes / 1073741824.0); } catch { }
                 return "电源计划: " + plan + System.Environment.NewLine + "音频设备: " + dev + mem;
             }
         }

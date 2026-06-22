@@ -107,7 +107,7 @@ namespace PowerAudioManager
             public ulong TotalBytes;
             public ulong AvailableBytes;
             public uint MemoryLoadPercent;
-            public ulong SystemCacheBytes; // system file cache working set (via GetPerformanceInfo)
+            public ulong CachedBytes; // "已缓存" = Standby(all priorities) + Modified page list
         }
 
         [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
@@ -126,19 +126,25 @@ namespace PowerAudioManager
         }
         [DllImport("kernel32.dll")] static extern bool GlobalMemoryStatusEx([In, Out] MEMORYSTATUSEX mse);
 
-        // System file cache size, via the "System Cache Resident Bytes" perf
-        // counter. We reuse a single PerformanceCounter instance (creating one per
-        // read leaks a kernel perf-counter mapping; a long-lived one does not).
-        // GetPerformanceInfo would be allocation-free but returns BAD_LENGTH on
-        // current Windows because the PERFORMANCE_INFORMATION struct grew.
-        static System.Diagnostics.PerformanceCounter _cacheCounter;
-        static ulong ReadSystemCacheBytes()
+        // "已缓存内存" — matches Task Manager's Cached value: the sum of all
+        // standby lists (Core / Normal priority / Reserve) plus the modified page
+        // list. These are pages evicted from working sets but still in RAM, ready
+        // to be repurposed — i.e. "available-ish" cached memory. We reuse long-
+        // lived PerformanceCounter instances (creating one per read leaks a kernel
+        // perf-counter mapping; a cached one does not).
+        static System.Diagnostics.PerformanceCounter _standbyCore, _standbyNormal, _standbyReserve, _modified;
+        static ulong ReadCachedBytes()
         {
             try
             {
-                if (_cacheCounter == null)
-                    _cacheCounter = new System.Diagnostics.PerformanceCounter("Memory", "System Cache Resident Bytes", true);
-                return (ulong)_cacheCounter.NextValue();
+                if (_standbyCore == null)
+                {
+                    _standbyCore = new System.Diagnostics.PerformanceCounter("Memory", "Standby Cache Core Bytes", true);
+                    _standbyNormal = new System.Diagnostics.PerformanceCounter("Memory", "Standby Cache Normal Priority Bytes", true);
+                    _standbyReserve = new System.Diagnostics.PerformanceCounter("Memory", "Standby Cache Reserve Bytes", true);
+                    _modified = new System.Diagnostics.PerformanceCounter("Memory", "Modified Page List Bytes", true);
+                }
+                return (ulong)(_standbyCore.NextValue() + _standbyNormal.NextValue() + _standbyReserve.NextValue() + _modified.NextValue());
             }
             catch { return 0; }
         }
@@ -148,7 +154,7 @@ namespace PowerAudioManager
             var m = new MEMORYSTATUSEX();
             if (!GlobalMemoryStatusEx(m)) return null;
             var s = new MemoryStatus { TotalBytes = m.ullTotalPhys, AvailableBytes = m.ullAvailPhys, MemoryLoadPercent = m.dwMemoryLoad };
-            s.SystemCacheBytes = ReadSystemCacheBytes();
+            s.CachedBytes = ReadCachedBytes();
             return s;
         }
 

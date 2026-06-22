@@ -218,6 +218,68 @@ namespace PowerAudioManager
         static readonly Color ComboText = Color.FromRgb(220, 218, 245);
         static readonly Color ComboDim = Color.FromRgb(190, 188, 220);
 
+        // ---- Dark TabControl styling (shared) ----------------------------------
+        // Replaces the default (light) TabControl chrome so the 设置 window's
+        // 常规/板块/内存/翻译 tabs match the dark OneBox theme: pill-shaped tab
+        // headers, accent fill on the selected tab, transparent content area.
+        public static void StyleDarkTabControl(TabControl tc)
+        {
+            tc.Background = Brushes.Transparent;
+            tc.BorderBrush = Brushes.Transparent;
+            tc.Padding = new Thickness(0);
+
+            // TabItem template: a rounded-top pill, accent-filled when selected.
+            const string itemXaml =
+@"<ControlTemplate TargetType='TabItem' xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'>
+  <Border x:Name='bd' CornerRadius='8,8,0,0' Background='Transparent' BorderBrush='Transparent' BorderThickness='1,1,1,0' Padding='14,6,14,6' Margin='2,0,2,0'>
+    <ContentPresenter ContentSource='Header' HorizontalAlignment='Center' VerticalAlignment='Center'/>
+  </Border>
+  <ControlTemplate.Triggers>
+    <Trigger Property='IsSelected' Value='True'>
+      <Setter TargetName='bd' Property='Background' Value='#8E8CD8'/>
+      <Setter TargetName='bd' Property='BorderBrush' Value='#8E8CD8'/>
+      <Setter Property='Foreground' Value='White'/>
+      <Setter Property='FontWeight' Value='SemiBold'/>
+    </Trigger>
+    <Trigger Property='IsMouseOver' Value='True'>
+      <Setter TargetName='bd' Property='Background' Value='#3A3654'/>
+    </Trigger>
+    <MultiTrigger>
+      <MultiTrigger.Conditions>
+        <Condition Property='IsMouseOver' Value='True'/>
+        <Condition Property='IsSelected' Value='True'/>
+      </MultiTrigger.Conditions>
+      <Setter TargetName='bd' Property='Background' Value='#7E7AD2'/>
+    </MultiTrigger>
+  </ControlTemplate.Triggers>
+</ControlTemplate>";
+            var itemStyle = new Style(typeof(TabItem));
+            itemStyle.Setters.Add(new Setter(TabItem.ForegroundProperty, new SolidColorBrush(Color.FromRgb(190, 188, 220))));
+            itemStyle.Setters.Add(new Setter(TabItem.FontSizeProperty, 13.0));
+            itemStyle.Setters.Add(new Setter(TabItem.TemplateProperty, (ControlTemplate)System.Windows.Markup.XamlReader.Parse(itemXaml)));
+            tc.Resources.Add(typeof(TabItem), itemStyle);
+
+            // TabControl template: tab strip on top (transparent), content below,
+            // with a thin accent underline beneath the selected row.
+            const string tcXaml =
+@"<ControlTemplate TargetType='TabControl' xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'>
+  <Grid>
+    <Grid.RowDefinitions>
+      <RowDefinition Height='Auto'/>
+      <RowDefinition Height='*'/>
+    </Grid.RowDefinitions>
+    <Grid>
+      <Border Background='#222132' CornerRadius='8,8,0,0'/>
+      <TabPanel x:Name='HeaderPanel' IsItemsHost='True' Margin='6,6,6,0'/>
+    </Grid>
+    <Border Grid.Row='1' Background='#1C1A28' BorderBrush='#504F78' BorderThickness='1,0,1,1' CornerRadius='0,0,8,8'>
+      <ContentPresenter ContentSource='SelectedContent'/>
+    </Border>
+  </Grid>
+</ControlTemplate>";
+            tc.Template = (ControlTemplate)System.Windows.Markup.XamlReader.Parse(tcXaml);
+        }
+
         public static void StyleDarkComboBox(ComboBox cb)
         {
             var lightText = new SolidColorBrush(ComboText);
