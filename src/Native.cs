@@ -49,6 +49,19 @@ namespace PowerAudioManager
         // ---- Working-set trim ---------------------------------------------------
         [DllImport("kernel32.dll")]
         public static extern bool SetProcessWorkingSetSize(IntPtr hProcess, int min, int max);
+
+        // ---- Console OEM code page ---------------------------------------------
+        // powercfg writes its output using the system OEM code page (the active
+        // console CP). On zh-CN Windows this is 936 (GBK); on other locales it
+        // differs. Reading with the real OEM CP avoids mojibake / broken GUID
+        // parsing on non-Chinese systems. Falls back to 936 if the call fails.
+        [DllImport("kernel32.dll")]
+        public static extern uint GetOEMCP();
+        public static int GetOemCodePage()
+        {
+            try { int cp = (int)GetOEMCP(); return cp > 0 ? cp : 936; }
+            catch { return 936; }
+        }
     }
 
 }

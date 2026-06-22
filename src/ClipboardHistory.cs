@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Security.Cryptography;
 using System.Text;
 using System.Windows;
 using System.Windows.Controls;
@@ -13,8 +14,16 @@ namespace PowerAudioManager
 {
     // Clipboard history: records the most recent text AND image copies (max 20),
     // persists them to disk so they survive restarts, and shows them in a popup.
-    // Images are stored as PNG files under %LocalAppData%\OneBox\clip_images\.
-    // Capture is poll-based (cheap and robust across processes).
+    // Images are stored as DPAPI-encrypted PNG bytes under
+    // %LocalAppData%\OneBox\clip_images\ (.bin for new captures; legacy .png
+    // plaintext files are still readable). clipboard.txt is stored as a single
+    // DPAPI blob (CurrentUser scope). Capture is poll-based (cheap and robust
+    // across processes).
+    //
+    // Privacy note: DPAPI CurrentUser scope only prevents OTHER Windows user
+    // accounts (and casual file snooping) from reading the history. It does NOT
+    // defend against malware running under the same user — that is an accepted
+    // trade-off for a clipboard manager.
     public static class ClipboardHistory
     {
         const int MaxItems = 20;
@@ -28,11 +37,16 @@ namespace PowerAudioManager
         static DispatcherTimer _poll;
         static string _lastHash = "";
 
+        // Fixed app-specific entropy for DPAPI. Using a constant is fine: the
+        // goal is to bind the blob to OneBox so a different app can't trivially
+        // Unprotect it with the same scope, not to keep the entropy secret.
+        static readonly byte[] _dpapiEntropy = Encoding.UTF8.GetBytes("OneBox.Clipboard.v1");
+
         public class ClipItem
         {
             public bool IsImage;
             public string Text;          // for text items
-            public string ImagePath;     // for image items (PNG file path)
+            public string ImagePath;     // for image items (encrypted .bin / legacy .png)
         }
 
         public static void Start()
@@ -48,8 +62,17 @@ namespace PowerAudioManager
             try
             {
                 if (!File.Exists(_storePath)) return;
+                // The file is a DPAPI blob. Try to unprotect; if that fails the
+                // file is a legacy plaintext copy from an older OneBox, so read
+                // it as UTF-8 text directly (it will be re-saved encrypted on
+                // the next change).
+                string content;
+                var raw = File.ReadAllBytes(_storePath);
+                try { content = Encoding.UTF8.GetString(ProtectedData.Unprotect(raw, _dpapiEntropy, DataProtectionScope.CurrentUser)); }
+                catch { content = Encoding.UTF8.GetString(raw); }
+
                 _items = new List<ClipItem>();
-                foreach (var line in File.ReadAllLines(_storePath, Encoding.UTF8))
+                foreach (var line in content.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None))
                 {
                     if (line.Length == 0) continue;
                     if (line.StartsWith("IMG:"))
@@ -77,12 +100,17 @@ namespace PowerAudioManager
                     if (it.IsImage) sb.AppendLine("IMG:" + Escape(it.ImagePath ?? ""));
                     else sb.AppendLine(Escape(it.Text ?? ""));
                 }
-                File.WriteAllText(_storePath, sb.ToString(), Encoding.UTF8);
+                // Encrypt the whole history blob with DPAPI (CurrentUser) so the
+                // text — which may include pasted passwords / codes — is not
+                // sitting on disk in plaintext.
+                var plain = Encoding.UTF8.GetBytes(sb.ToString());
+                var blob = ProtectedData.Protect(plain, _dpapiEntropy, DataProtectionScope.CurrentUser);
+                File.WriteAllBytes(_storePath, blob);
             }
             catch { }
         }
 
-        // Newline-safe line storage: escape \n and \r so each item is one file line.
+        // Newline-safe line storage: escape \n and \r so each item is one line.
         static string Escape(string s) { return s.Replace("\\", "\\\\").Replace("\n", "\\n").Replace("\r", "\\r"); }
         static string Unescape(string s) { return s.Replace("\\r", "\r").Replace("\\n", "\n").Replace("\\\\", "\\"); }
 
@@ -96,10 +124,15 @@ namespace PowerAudioManager
                 {
                     var bmp = Clipboard.GetImage();
                     if (bmp == null) return;
-                    string hash = "IMG:" + bmp.PixelWidth + "x" + bmp.PixelHeight;
+                    // De-dupe by the PNG-encoded content hash, not just dimensions:
+                    // two different screenshots of the same size would otherwise be
+                    // treated as duplicates under the old PixelWidth x PixelHeight key.
+                    byte[] png = EncodeToPng(bmp);
+                    if (png == null) return;
+                    string hash = "IMG:" + Sha256Hex(png);
                     if (hash == _lastHash) return;
                     _lastHash = hash;
-                    string path = SaveImage(bmp);
+                    string path = SaveImage(png);
                     if (path == null) return;
                     lock (_lock)
                     {
@@ -138,17 +171,60 @@ namespace PowerAudioManager
             catch { }
         }
 
-        // Encode a BitmapSource to PNG on disk; returns the path or null on failure.
-        static string SaveImage(BitmapSource src)
+        // Encode a BitmapSource to PNG bytes (in memory).
+        static byte[] EncodeToPng(BitmapSource src)
+        {
+            try
+            {
+                var enc = new PngBitmapEncoder();
+                enc.Frames.Add(BitmapFrame.Create(src));
+                using (var ms = new MemoryStream())
+                {
+                    enc.Save(ms);
+                    return ms.ToArray();
+                }
+            }
+            catch { return null; }
+        }
+
+        // SHA256 of the given bytes as a lowercase hex string (stable de-dupe key).
+        static string Sha256Hex(byte[] data)
+        {
+            using (var sha = SHA256.Create())
+            {
+                var h = sha.ComputeHash(data);
+                var sb = new StringBuilder(h.Length * 2);
+                foreach (var b in h) sb.Append(b.ToString("x2"));
+                return sb.ToString();
+            }
+        }
+
+        // Write the PNG bytes to disk, DPAPI-encrypted (CurrentUser). New files
+        // use the .bin extension so they aren't mistaken for plain PNGs. Returns
+        // the path or null on failure.
+        static string SaveImage(byte[] pngBytes)
         {
             try
             {
                 Directory.CreateDirectory(_imageDir);
-                string path = Path.Combine(_imageDir, "clip_" + DateTime.Now.ToString("yyyyMMdd_HHmmss_fff") + ".png");
-                var enc = new PngBitmapEncoder();
-                enc.Frames.Add(BitmapFrame.Create(src));
-                using (var fs = new FileStream(path, FileMode.Create)) enc.Save(fs);
+                string path = Path.Combine(_imageDir, "clip_" + DateTime.Now.ToString("yyyyMMdd_HHmmss_fff") + ".bin");
+                var blob = ProtectedData.Protect(pngBytes, _dpapiEntropy, DataProtectionScope.CurrentUser);
+                File.WriteAllBytes(path, blob);
                 return path;
+            }
+            catch { return null; }
+        }
+
+        // Read an image file and return its PNG bytes, transparently
+        // decrypting DPAPI-encrypted .bin files and falling back to raw PNG
+        // bytes for legacy plaintext .png captures.
+        internal static byte[] LoadImageBytes(string path)
+        {
+            try
+            {
+                var raw = File.ReadAllBytes(path);
+                try { return ProtectedData.Unprotect(raw, _dpapiEntropy, DataProtectionScope.CurrentUser); }
+                catch { return raw; } // legacy plaintext PNG
             }
             catch { return null; }
         }
@@ -215,11 +291,15 @@ namespace PowerAudioManager
                         var row = new StackPanel { Orientation = Orientation.Horizontal };
                         try
                         {
-                            var img = new System.Windows.Controls.Image {
-                                Source = LoadThumbnail(captured.ImagePath),
-                                Width = 48, Height = 32, Stretch = Stretch.UniformToFill,
-                                Margin = new Thickness(0, 0, 8, 0) };
-                            row.Children.Add(img);
+                            var thumb = LoadThumbnail(captured.ImagePath);
+                            if (thumb != null)
+                            {
+                                var img = new System.Windows.Controls.Image {
+                                    Source = thumb,
+                                    Width = 48, Height = 32, Stretch = Stretch.UniformToFill,
+                                    Margin = new Thickness(0, 0, 8, 0) };
+                                row.Children.Add(img);
+                            }
                         }
                         catch { }
                         row.Children.Add(new TextBlock {
@@ -279,17 +359,21 @@ namespace PowerAudioManager
             dlg.ShowDialog();
         }
 
+        // Decode (and decrypt if needed) an image file into a frozen thumbnail
+        // BitmapSource. Returns null if the file can't be read/decoded.
         static BitmapSource LoadThumbnail(string path)
         {
             try
             {
-                var bmp = new BitmapImage();
-                bmp.BeginInit();
-                bmp.CacheOption = BitmapCacheOption.OnLoad;
-                bmp.UriSource = new Uri(path);
-                bmp.EndInit();
-                bmp.Freeze();
-                return bmp;
+                var bytes = ClipboardHistory.LoadImageBytes(path);
+                if (bytes == null) return null;
+                var img = new BitmapImage();
+                img.BeginInit();
+                img.CacheOption = BitmapCacheOption.OnLoad;
+                img.StreamSource = new MemoryStream(bytes);
+                img.EndInit();
+                img.Freeze();
+                return img;
             }
             catch { return null; }
         }
@@ -298,13 +382,15 @@ namespace PowerAudioManager
         {
             try
             {
-                var bmp = new BitmapImage();
-                bmp.BeginInit();
-                bmp.CacheOption = BitmapCacheOption.OnLoad;
-                bmp.UriSource = new Uri(path);
-                bmp.EndInit();
-                bmp.Freeze();
-                Clipboard.SetImage(bmp);
+                var bytes = ClipboardHistory.LoadImageBytes(path);
+                if (bytes == null) return;
+                var img = new BitmapImage();
+                img.BeginInit();
+                img.CacheOption = BitmapCacheOption.OnLoad;
+                img.StreamSource = new MemoryStream(bytes);
+                img.EndInit();
+                img.Freeze();
+                Clipboard.SetImage(img);
             }
             catch { }
         }

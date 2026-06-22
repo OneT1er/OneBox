@@ -19,9 +19,19 @@ namespace PowerAudioManager
     // menu item does a manual check that always reports back (including "已是最新").
     //
     // Configure Owner/Repo below to match your GitHub repository. Version tags are
-    // compared as Version objects (e.g. "v1.2.0" -> 1.2.0). The update flow opens
-    // the release page in the browser so the user downloads the new build manually —
-    // no in-place replace, which is risky for a running single-exe app.
+    // compared as Version objects (e.g. "v1.2.0" -> 1.2.0). When a release ships a
+    // OneBox.exe asset, the update flow downloads it to a randomly-named temp file
+    // and hands off to a temp batch that waits for this process to exit, overwrites
+    // the locked exe, then relaunches — an in-place self-replace. Temp files use
+    // Path.GetRandomFileName() rather than predictable names to avoid local
+    // squatting / TOCTOU races.
+    //
+    // INTEGRITY: the download is fetched over HTTPS from GitHub but is NOT
+    // independently verified (no signature/hash checked against a trusted source).
+    // Trust therefore rests entirely on the GitHub repository itself — if the repo
+    // or its release pipeline is compromised, a malicious exe would be installed
+    // automatically. Hardening this (code-signing with an embedded public key) is
+    // a known follow-up.
     public static class UpdateChecker
     {
         // === Configure these for your repo ===
@@ -261,7 +271,9 @@ namespace PowerAudioManager
             req.ReadWriteTimeout = 60000;
             req.UserAgent = "OneBox-Updater";
             req.AllowAutoRedirect = true; // GitHub asset URLs redirect to S3
-            string tmp = Path.Combine(Path.GetTempPath(), "OneBox_update.exe");
+            // Random temp name (predictable names let a local user squat/swap the
+            // file before we read it back).
+            string tmp = Path.Combine(Path.GetTempPath(), "OneBox_" + Path.GetRandomFileName() + ".exe");
             using (var resp = (HttpWebResponse)req.GetResponse())
             using (var rs = resp.GetResponseStream())
             using (var fs = new FileStream(tmp, FileMode.Create, FileAccess.Write))
@@ -287,7 +299,9 @@ namespace PowerAudioManager
         {
             string currentExe = System.Reflection.Assembly.GetExecutingAssembly().Location;
             string currentDir = Path.GetDirectoryName(currentExe);
-            string batPath = Path.Combine(Path.GetTempPath(), "OneBox_updater.bat");
+            // Random batch name so a local attacker can't pre-place a malicious
+            // OneBox_updater.bat in temp.
+            string batPath = Path.Combine(Path.GetTempPath(), "OneBox_" + Path.GetRandomFileName() + ".bat");
             // PID list of the current process AND any child processes that might
             // hold the exe open. We wait on the current PID at minimum.
             int pid = System.Diagnostics.Process.GetCurrentProcess().Id;

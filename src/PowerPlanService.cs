@@ -21,67 +21,75 @@ namespace PowerAudioManager
             var plans = new List<PowerPlanInfo>();
             try
             {
-                var psi = new ProcessStartInfo("powercfg", "/list")
-                {
-                    RedirectStandardOutput = true,
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                    StandardOutputEncoding = Encoding.GetEncoding(936)
-                };
-                using (var proc = Process.Start(psi))
-                {
-                    var output = proc.StandardOutput.ReadToEnd();
-                    if (!proc.WaitForExit(5000)) { try { proc.Kill(); } catch { } } // don't hang the refresher
-                    var activeGuid = GetActivePlanGuid();
+                var output = RunPowercfg("/list");
+                if (output == null) return plans;
+                var activeGuid = GetActivePlanGuid();
 
-                    foreach (var line in output.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
+                foreach (var line in output.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
+                {
+                    if (!line.Contains("GUID:")) continue;
+                    int idx = line.IndexOf("GUID:");
+                    if (idx < 0) continue;
+                    var rest = line.Substring(idx + 5).Trim();
+                    var guid = rest.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries)[0];
+                    var parenStart = line.LastIndexOf('(');
+                    var parenEnd = line.LastIndexOf(')');
+                    if (parenStart < 0 || parenEnd <= parenStart) continue;
+                    var name = line.Substring(parenStart + 1, parenEnd - parenStart - 1);
+                    plans.Add(new PowerPlanInfo
                     {
-                        if (!line.Contains("GUID:")) continue;
-                        int idx = line.IndexOf("GUID:");
-                        if (idx < 0) continue;
-                        var rest = line.Substring(idx + 5).Trim();
-                        var guid = rest.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries)[0];
-                        var parenStart = line.LastIndexOf('(');
-                        var parenEnd = line.LastIndexOf(')');
-                        if (parenStart < 0 || parenEnd <= parenStart) continue;
-                        var name = line.Substring(parenStart + 1, parenEnd - parenStart - 1);
-                        plans.Add(new PowerPlanInfo
-                        {
-                            Guid = guid,
-                            Name = name,
-                            IsActive = guid.Equals(activeGuid, StringComparison.OrdinalIgnoreCase)
-                        });
-                    }
+                        Guid = guid,
+                        Name = name,
+                        IsActive = guid.Equals(activeGuid, StringComparison.OrdinalIgnoreCase)
+                    });
                 }
             }
             catch { }
             return plans;
         }
 
-        public static string GetActivePlanGuid()
+        // Run powercfg with the given args and return its stdout, or null on
+        // timeout/failure. Reads stdout asynchronously (BeginOutputReadLine) to
+        // avoid the classic deadlock where a full stdout pipe blocks the child
+        // while the parent is still in ReadToEnd — powercfg output is tiny so
+        // this never triggered in practice, but the pattern is correct. Output
+        // is decoded with the system OEM code page so parsing works on
+        // non-Chinese Windows too.
+        static string RunPowercfg(string args)
         {
             try
             {
-                var psi = new ProcessStartInfo("powercfg", "/getactivescheme")
+                var psi = new ProcessStartInfo("powercfg", args)
                 {
                     RedirectStandardOutput = true,
                     UseShellExecute = false,
                     CreateNoWindow = true,
-                    StandardOutputEncoding = Encoding.GetEncoding(936)
+                    StandardOutputEncoding = Encoding.GetEncoding(Native.GetOemCodePage())
                 };
                 using (var proc = Process.Start(psi))
                 {
-                    var output = proc.StandardOutput.ReadToEnd();
-                    if (!proc.WaitForExit(5000)) { try { proc.Kill(); } catch { } }
-                    var idx = output.IndexOf("GUID:");
-                    if (idx >= 0)
-                    {
-                        var sub = output.Substring(idx + 5).Trim();
-                        return sub.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries)[0];
-                    }
+                    var sb = new StringBuilder();
+                    // Capture asynchronously so a full pipe can't deadlock us.
+                    proc.OutputDataReceived += (s, e) => { if (e.Data != null) sb.AppendLine(e.Data); };
+                    proc.BeginOutputReadLine();
+                    if (!proc.WaitForExit(5000)) { try { proc.Kill(); } catch { } return null; } // don't hang the refresher
+                    proc.WaitForExit(); // let async drain finish
+                    return sb.ToString();
                 }
             }
-            catch { }
+            catch { return null; }
+        }
+
+        public static string GetActivePlanGuid()
+        {
+            var output = RunPowercfg("/getactivescheme");
+            if (output == null) return "";
+            var idx = output.IndexOf("GUID:");
+            if (idx >= 0)
+            {
+                var sub = output.Substring(idx + 5).Trim();
+                return sub.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries)[0];
+            }
             return "";
         }
 
@@ -96,7 +104,11 @@ namespace PowerAudioManager
                 };
                 using (var proc = Process.Start(psi))
                 {
-                    proc.WaitForExit();
+                    // Cap the wait like the readers above: if powercfg hangs during
+                    // a system-wide policy refresh we must not leave a threadpool
+                    // thread stuck forever (the async caller's onDone would never
+                    // fire). Treat a timeout as failure.
+                    if (!proc.WaitForExit(5000)) { try { proc.Kill(); } catch { } return false; }
                     return proc.ExitCode == 0;
                 }
             }
