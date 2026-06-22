@@ -220,6 +220,7 @@ namespace PowerAudioManager
             var titleLabel = new TextBlock
             {
                 Text = "OneBox",
+                FontFamily = AppFont,
                 Foreground = new SolidColorBrush(TextPrimary),
                 FontSize = 13,
                 FontWeight = FontWeights.SemiBold,

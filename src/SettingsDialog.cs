@@ -64,7 +64,7 @@ namespace PowerAudioManager
                 BorderBrush = new SolidColorBrush(Color.FromRgb(80, 75, 120)),
                 VerticalContentAlignment = VerticalAlignment.Center
             };
-            ApplyDarkComboBox(fontCombo, lightText);
+            AppResources.StyleDarkComboBox(fontCombo);
             string currentFont = AppPrefs.GetString("App.FontFamily", "Microsoft YaHei UI");
             foreach (var fam in System.Windows.Media.Fonts.SystemFontFamilies.OrderBy(f => f.Source))
                 fontCombo.Items.Add(fam.Source);
@@ -399,30 +399,6 @@ namespace PowerAudioManager
         static ScrollViewer Scroll(StackPanel stack)
         {
             return new ScrollViewer { Content = stack, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Padding = new Thickness(0) };
-        }
-
-        // Force a ComboBox to render dark (selected text + dropdown). The default
-        // WPF ComboBox template is light, which makes white text unreadable.
-        static void ApplyDarkComboBox(ComboBox cb, SolidColorBrush lightText)
-        {
-            var tbStyle = new Style(typeof(TextBlock));
-            tbStyle.Setters.Add(new Setter(TextBlock.ForegroundProperty, lightText));
-            cb.Resources.Add(typeof(TextBlock), tbStyle);
-            cb.Resources.Add(System.Windows.SystemColors.WindowBrushKey, new SolidColorBrush(Color.FromRgb(34, 32, 50)));
-            cb.Resources.Add(System.Windows.SystemColors.WindowTextBrushKey, lightText);
-            cb.Resources.Add(System.Windows.SystemColors.HighlightBrushKey, new SolidColorBrush(Color.FromRgb(110, 105, 200)));
-            cb.Resources.Add(System.Windows.SystemColors.HighlightTextBrushKey, Brushes.White);
-            cb.Resources.Add(System.Windows.SystemColors.ControlBrushKey, new SolidColorBrush(Color.FromRgb(42, 39, 60)));
-            cb.Resources.Add(System.Windows.SystemColors.ControlTextBrushKey, lightText);
-            var itemStyle = new Style(typeof(ComboBoxItem));
-            itemStyle.Setters.Add(new Setter(ComboBoxItem.BackgroundProperty, new SolidColorBrush(Color.FromRgb(34, 32, 50))));
-            itemStyle.Setters.Add(new Setter(ComboBoxItem.ForegroundProperty, lightText));
-            itemStyle.Setters.Add(new Setter(ComboBoxItem.PaddingProperty, new Thickness(8, 4, 8, 4)));
-            var hover = new Trigger { Property = ComboBoxItem.IsHighlightedProperty, Value = true };
-            hover.Setters.Add(new Setter(ComboBoxItem.BackgroundProperty, new SolidColorBrush(Color.FromRgb(58, 54, 84))));
-            hover.Setters.Add(new Setter(ComboBoxItem.ForegroundProperty, Brushes.White));
-            itemStyle.Triggers.Add(hover);
-            cb.ItemContainerStyle = itemStyle;
         }
 
         static bool IsAutoStartEnabled()

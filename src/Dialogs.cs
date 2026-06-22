@@ -276,124 +276,16 @@ namespace PowerAudioManager
             };
         }
 
-        // A minimal dark ComboBox control template built with FrameworkElementFactory.
-        // Replaces the default (light) template so the selected-item display area and
-        // the toggle button both render on the dark card background, with light text.
-        static System.Windows.Controls.ControlTemplate DarkComboBoxTemplate()
-        {
-            var template = new System.Windows.Controls.ControlTemplate(typeof(ComboBox));
-
-            // Root: a grid holding the content presenter (selected item) + a toggle button.
-            var root = new FrameworkElementFactory(typeof(Grid));
-
-            // Content presenter for the selected item, left-aligned, vertically centred.
-            var cp = new FrameworkElementFactory(typeof(ContentPresenter));
-            cp.SetValue(ContentPresenter.ContentSourceProperty, "SelectionBoxItem");
-            cp.SetValue(ContentPresenter.HorizontalAlignmentProperty, HorizontalAlignment.Stretch);
-            cp.SetValue(ContentPresenter.VerticalAlignmentProperty, VerticalAlignment.Center);
-            cp.SetValue(ContentPresenter.MarginProperty, new Thickness(6, 0, 22, 0));
-            cp.SetValue(ContentPresenter.SnapsToDevicePixelsProperty, true);
-            root.AppendChild(cp);
-
-            // Toggle button: transparent overlay that fills the whole box and toggles
-            // IsDropDownOpen on click. It sits above the content presenter so it
-            // captures the mouse for the whole combo area.
-            var toggle = new FrameworkElementFactory(typeof(ToggleButton));
-            toggle.SetValue(ToggleButton.FocusableProperty, false);
-            toggle.SetValue(ToggleButton.IsTabStopProperty, false);
-            toggle.SetValue(ToggleButton.HorizontalAlignmentProperty, HorizontalAlignment.Stretch);
-            toggle.SetValue(ToggleButton.VerticalAlignmentProperty, VerticalAlignment.Stretch);
-            // Two-way bind IsChecked <-> IsDropDownOpen. Inside a control template the
-            // binding source must be the templated parent (the ComboBox) — without
-            // RelativeSource it binds to DataContext (null) and clicks never reach
-            // IsDropDownOpen, so the popup never opens.
-            var isOpenCheckBinding = new System.Windows.Data.Binding("IsDropDownOpen") {
-                Mode = System.Windows.Data.BindingMode.TwoWay,
-                RelativeSource = new System.Windows.Data.RelativeSource(System.Windows.Data.RelativeSourceMode.TemplatedParent)
-            };
-            toggle.SetBinding(ToggleButton.IsCheckedProperty, isOpenCheckBinding);
-            // Transparent button template: a Border that stretches and has a real
-            // (transparent) brush so it participates in hit-testing. A null background
-            // would make it ignore clicks.
-            var tbTemplate = new System.Windows.Controls.ControlTemplate(typeof(ToggleButton));
-            var tbRoot = new FrameworkElementFactory(typeof(Border));
-            tbRoot.SetValue(Border.BackgroundProperty, Brushes.Transparent);
-            tbRoot.SetValue(Border.HorizontalAlignmentProperty, HorizontalAlignment.Stretch);
-            tbRoot.SetValue(Border.VerticalAlignmentProperty, VerticalAlignment.Stretch);
-            tbTemplate.VisualTree = tbRoot;
-            toggle.SetValue(ToggleButton.TemplateProperty, tbTemplate);
-            root.AppendChild(toggle);
-
-            // Dropdown arrow glyph on the right.
-            var arrow = new FrameworkElementFactory(typeof(TextBlock));
-            arrow.SetValue(TextBlock.TextProperty, "▾");
-            arrow.SetValue(TextBlock.FontSizeProperty, 10.0);
-            arrow.SetValue(TextBlock.ForegroundProperty, new SolidColorBrush(Color.FromRgb(190, 188, 220)));
-            arrow.SetValue(TextBlock.HorizontalAlignmentProperty, HorizontalAlignment.Right);
-            arrow.SetValue(TextBlock.VerticalAlignmentProperty, VerticalAlignment.Center);
-            arrow.SetValue(TextBlock.MarginProperty, new Thickness(0, 0, 6, 0));
-            arrow.SetValue(TextBlock.IsHitTestVisibleProperty, false);
-            root.AppendChild(arrow);
-
-            // Popup hosting the items (dark background).
-            var popup = new FrameworkElementFactory(typeof(Popup));
-            popup.SetValue(Popup.NameProperty, "PART_Popup");
-            popup.SetValue(Popup.AllowsTransparencyProperty, true);
-            popup.SetValue(Popup.PlacementProperty, PlacementMode.Bottom);
-            popup.SetValue(Popup.PopupAnimationProperty, PopupAnimation.None);
-            var isOpenBinding = new System.Windows.Data.Binding("IsDropDownOpen") {
-                RelativeSource = new System.Windows.Data.RelativeSource(System.Windows.Data.RelativeSourceMode.TemplatedParent)
-            };
-            popup.SetBinding(Popup.IsOpenProperty, isOpenBinding);
-            popup.SetValue(Popup.FocusableProperty, false);
-
-            var dropBorder = new FrameworkElementFactory(typeof(Border));
-            dropBorder.SetValue(Border.BackgroundProperty, new SolidColorBrush(Color.FromRgb(34, 32, 50)));
-            dropBorder.SetValue(Border.BorderBrushProperty, new SolidColorBrush(Color.FromRgb(80, 75, 120)));
-            dropBorder.SetValue(Border.BorderThicknessProperty, new Thickness(1));
-            dropBorder.SetValue(Border.CornerRadiusProperty, new CornerRadius(6));
-
-            var scroller = new FrameworkElementFactory(typeof(ScrollViewer));
-            scroller.SetValue(ScrollViewer.VerticalScrollBarVisibilityProperty, ScrollBarVisibility.Auto);
-            scroller.SetValue(ScrollViewer.MaxHeightProperty, 300.0);
-            var itemsHost = new FrameworkElementFactory(typeof(ItemsPresenter));
-            itemsHost.SetValue(KeyboardNavigation.DirectionalNavigationProperty, KeyboardNavigationMode.Cycle);
-            scroller.AppendChild(itemsHost);
-            dropBorder.AppendChild(scroller);
-            popup.AppendChild(dropBorder);
-            root.AppendChild(popup);
-
-            template.VisualTree = root;
-            return template;
-        }
 
         ComboBox MakeLangBox(bool isFrom)
         {
             var cb = new ComboBox {
                 Width = 110, Height = 28,
                 FontSize = 12,
-                Background = new SolidColorBrush(Color.FromRgb(42, 39, 60)),
-                Foreground = new SolidColorBrush(Color.FromRgb(220, 218, 245)),
-                BorderBrush = new SolidColorBrush(Color.FromRgb(80, 75, 120)),
                 Padding = new Thickness(6, 0, 0, 0),
                 VerticalContentAlignment = VerticalAlignment.Center
             };
-            // Dark theme: force every TextBlock inside (selected-display + popup) to
-            // light text, and give the dropdown popup a dark background.
-            var lightText = new SolidColorBrush(Color.FromRgb(220, 218, 245));
-            var tbStyle = new Style(typeof(TextBlock));
-            tbStyle.Setters.Add(new Setter(TextBlock.ForegroundProperty, lightText));
-            cb.Resources.Add(typeof(TextBlock), tbStyle);
-            cb.Resources.Add(System.Windows.SystemColors.WindowBrushKey, new SolidColorBrush(Color.FromRgb(34, 32, 50)));
-            cb.Resources.Add(System.Windows.SystemColors.WindowTextBrushKey, lightText);
-            cb.Resources.Add(System.Windows.SystemColors.HighlightBrushKey, new SolidColorBrush(Color.FromRgb(110, 105, 200)));
-            cb.Resources.Add(System.Windows.SystemColors.HighlightTextBrushKey, Brushes.White);
-            cb.Resources.Add(System.Windows.SystemColors.ControlBrushKey, new SolidColorBrush(Color.FromRgb(42, 39, 60)));
-            cb.Resources.Add(System.Windows.SystemColors.ControlTextBrushKey, lightText);
-            // Replace the default (light) ComboBox control template with a dark one,
-            // otherwise the selected-item display area keeps the system light
-            // background and the text becomes unreadable (白字灰底).
-            cb.Template = DarkComboBoxTemplate();
+            AppResources.StyleDarkComboBox(cb);
             string[][] codes = isFrom
                 ? new[] { new[] { "auto","自动检测" }, new[] { "zh","中文" }, new[] { "en","英语" }, new[] { "jp","日语" }, new[] { "kor","韩语" }, new[] { "fra","法语" }, new[] { "de","德语" }, new[] { "ru","俄语" }, new[] { "spa","西班牙语" }, new[] { "ara","阿拉伯语" } }
                 : new[] { new[] { "zh","中文" }, new[] { "en","英语" }, new[] { "jp","日语" }, new[] { "kor","韩语" }, new[] { "fra","法语" }, new[] { "de","德语" }, new[] { "ru","俄语" }, new[] { "spa","西班牙语" }, new[] { "ara","阿拉伯语" } };
@@ -403,22 +295,9 @@ namespace PowerAudioManager
                 {
                     Content = p[1],
                     Tag = p[0],
-                    Foreground = new SolidColorBrush(Color.FromRgb(220, 218, 245)),
-                    Background = new SolidColorBrush(Color.FromRgb(34, 32, 50)),
                     Padding = new Thickness(8, 4, 8, 4)
                 });
             }
-            // Dark item container style with a purple hover, matching the app accent.
-            var itemStyle = new Style(typeof(ComboBoxItem));
-            itemStyle.Setters.Add(new Setter(ComboBoxItem.BackgroundProperty, new SolidColorBrush(Color.FromRgb(34, 32, 50))));
-            itemStyle.Setters.Add(new Setter(ComboBoxItem.ForegroundProperty, new SolidColorBrush(Color.FromRgb(220, 218, 245))));
-            itemStyle.Setters.Add(new Setter(ComboBoxItem.PaddingProperty, new Thickness(8, 4, 8, 4)));
-            itemStyle.Setters.Add(new Setter(ComboBoxItem.BorderBrushProperty, Brushes.Transparent));
-            var hover = new Trigger { Property = ComboBoxItem.IsHighlightedProperty, Value = true };
-            hover.Setters.Add(new Setter(ComboBoxItem.BackgroundProperty, new SolidColorBrush(Color.FromRgb(58, 54, 84))));
-            hover.Setters.Add(new Setter(ComboBoxItem.ForegroundProperty, Brushes.White));
-            itemStyle.Triggers.Add(hover);
-            cb.ItemContainerStyle = itemStyle;
             string saved;
             using (var k = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\PowerAudioManager\App"))
                 saved = k == null ? null : (k.GetValue(isFrom ? "Translate.From" : "Translate.To") as string);
