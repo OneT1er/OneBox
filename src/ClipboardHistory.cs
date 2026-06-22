@@ -260,6 +260,7 @@ namespace PowerAudioManager
 
             var clearBtn = new Button {
                 Content = "清空", Width = 56, Height = 24, FontSize = 11, Margin = new Thickness(0, 0, 0, 8) };
+            AppResources.StyleDialogButton(clearBtn, false);
             DockPanel.SetDock(clearBtn, Dock.Bottom);
             outer.Children.Add(clearBtn);
 

@@ -126,43 +126,29 @@ namespace PowerAudioManager
         }
         [DllImport("kernel32.dll")] static extern bool GlobalMemoryStatusEx([In, Out] MEMORYSTATUSEX mse);
 
-        // GetPerformanceInfo returns counters in bytes/units; SystemCache is the
-        // system file cache size in bytes. memreduct shows it as a third group;
-        // we surface it so the tray/float can display cache pressure too.
-        [StructLayout(LayoutKind.Sequential)]
-        class PERFORMANCE_INFORMATION
+        // System file cache size, via the "System Cache Resident Bytes" perf
+        // counter. We reuse a single PerformanceCounter instance (creating one per
+        // read leaks a kernel perf-counter mapping; a long-lived one does not).
+        // GetPerformanceInfo would be allocation-free but returns BAD_LENGTH on
+        // current Windows because the PERFORMANCE_INFORMATION struct grew.
+        static System.Diagnostics.PerformanceCounter _cacheCounter;
+        static ulong ReadSystemCacheBytes()
         {
-            public uint cb;
-            public uint CommitTotal;
-            public uint CommitLimit;
-            public uint CommitPeak;
-            public uint PhysicalTotal;
-            public uint PhysicalAvailable;
-            public uint SystemCache;
-            public uint KernelTotal;
-            public uint KernelPaged;
-            public uint KernelNonpaged;
-            public uint PageSize;
-            public uint HandleCount;
-            public uint ProcessCount;
-            public uint ThreadCount;
-            public PERFORMANCE_INFORMATION() { cb = (uint)Marshal.SizeOf(typeof(PERFORMANCE_INFORMATION)); }
+            try
+            {
+                if (_cacheCounter == null)
+                    _cacheCounter = new System.Diagnostics.PerformanceCounter("Memory", "System Cache Resident Bytes", true);
+                return (ulong)_cacheCounter.NextValue();
+            }
+            catch { return 0; }
         }
-        [DllImport("psapi.dll", SetLastError = true)]
-        static extern bool GetPerformanceInfo([In, Out] PERFORMANCE_INFORMATION pi, int cb);
 
         public static MemoryStatus GetStatus()
         {
             var m = new MEMORYSTATUSEX();
             if (!GlobalMemoryStatusEx(m)) return null;
             var s = new MemoryStatus { TotalBytes = m.ullTotalPhys, AvailableBytes = m.ullAvailPhys, MemoryLoadPercent = m.dwMemoryLoad };
-            try
-            {
-                var pi = new PERFORMANCE_INFORMATION();
-                if (GetPerformanceInfo(pi, (int)pi.cb))
-                    s.SystemCacheBytes = (ulong)pi.SystemCache * pi.PageSize;
-            }
-            catch { }
+            s.SystemCacheBytes = ReadSystemCacheBytes();
             return s;
         }
 

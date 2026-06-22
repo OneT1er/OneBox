@@ -41,6 +41,8 @@ namespace PowerAudioManager
             var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
             var ok = new Button { Content = "确定", Width = 64, Height = 28, Margin = new Thickness(0,0,8,0) };
             var cancel = new Button { Content = "取消", Width = 64, Height = 28 };
+            AppResources.StyleDialogButton(ok, true);
+            AppResources.StyleDialogButton(cancel, false);
             buttons.Children.Add(ok); buttons.Children.Add(cancel);
             stack.Children.Add(hint); stack.Children.Add(display); stack.Children.Add(buttons);
             dlg.Content = stack;
@@ -206,6 +208,7 @@ namespace PowerAudioManager
             _fromBox = MakeLangBox(true);
             _toBox = MakeLangBox(false);
             _btnSwap = new Button { Content = "\u21C4", Width = 32, Height = 28, FontSize = 14, Margin = new Thickness(4, 0, 4, 0), ToolTip = "交换源/目标语言" };
+            AppResources.StyleDialogButton(_btnSwap, false);
             _btnSwap.Click += (s, e) => SwapLanguages();
             DockPanel.SetDock(_fromBox, Dock.Left);
             DockPanel.SetDock(_btnSwap, Dock.Left);
@@ -214,10 +217,12 @@ namespace PowerAudioManager
             bar.Children.Add(_btnSwap);
             bar.Children.Add(_toBox);
             _btnGo = new Button { Content = "翻译", Width = 80, Height = 28, FontSize = 12 };
+            AppResources.StyleDialogButton(_btnGo, true);
             _btnGo.Click += (s, e) => RunTranslation(_input.Text);
             DockPanel.SetDock(_btnGo, Dock.Right);
             bar.Children.Add(_btnGo);
             _btnSettings = new Button { Content = "\u2699", Width = 32, Height = 28, FontSize = 14, Margin = new Thickness(0, 0, 4, 0), ToolTip = "翻译 API 设置" };
+            AppResources.StyleDialogButton(_btnSettings, false);
             _btnSettings.Click += (s, e) =>
             {
                 SettingsDialog.Show(this, 3); // 翻译 tab
@@ -238,6 +243,7 @@ namespace PowerAudioManager
             var midBar = new DockPanel { Margin = new Thickness(0, 8, 0, 8), LastChildFill = true };
             _statusBlock = new TextBlock { Foreground = new SolidColorBrush(Color.FromRgb(190, 188, 220)), FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
             _btnCopy = new Button { Content = "复制译文", Width = 80, Height = 28, FontSize = 12 };
+            AppResources.StyleDialogButton(_btnCopy, false);
             _btnCopy.Click += (s, e) => { try { if (!string.IsNullOrEmpty(_output.Text)) Clipboard.SetText(_output.Text); _statusBlock.Text = "已复制"; } catch { } };
             DockPanel.SetDock(_btnCopy, Dock.Right);
             midBar.Children.Add(_btnCopy);

@@ -138,6 +138,71 @@ namespace PowerAudioManager
             return null;
         }
 
+        // ---- Dialog button styling (shared, Material-ish) ----------------------
+        // Gives the standalone windows (设置/翻译/剪贴板历史/快捷键) the same
+        // rounded dark button look as the floating window, so the app reads as one
+        // design language instead of default WPF buttons in dialogs.
+        //
+        // primary = true  → accent fill + white text (call-to-action, e.g. 确定/翻译)
+        // primary = false → card fill + border, hover lifts to the hover tier
+        static readonly Color DBg = Color.FromRgb(42, 39, 60);
+        static readonly Color DHover = Color.FromRgb(58, 54, 84);
+        static readonly Color DBorder = Color.FromRgb(80, 75, 120);
+        static readonly Color DText = Color.FromRgb(220, 218, 245);
+        static readonly Color DDim = Color.FromRgb(190, 188, 220);
+        static readonly Color DAccent = Color.FromRgb(142, 140, 216);
+        static readonly Color DAccentHover = Color.FromRgb(126, 122, 210);
+
+        public static void StyleDialogButton(Button btn, bool primary)
+        {
+            btn.Template = DialogButtonTemplate();
+            if (primary)
+            {
+                btn.Background = new SolidColorBrush(DAccent);
+                btn.Foreground = Brushes.White;
+                btn.FontWeight = FontWeights.SemiBold;
+                btn.BorderBrush = new SolidColorBrush(DAccent);
+                btn.BorderThickness = new Thickness(0);
+                btn.MouseEnter += (s, e) => AnimateBg(btn, DAccentHover);
+                btn.MouseLeave += (s, e) => AnimateBg(btn, DAccent);
+            }
+            else
+            {
+                btn.Background = new SolidColorBrush(DBg);
+                btn.Foreground = new SolidColorBrush(DDim);
+                btn.BorderBrush = new SolidColorBrush(DBorder);
+                btn.BorderThickness = new Thickness(1);
+                btn.MouseEnter += (s, e) => AnimateBg(btn, DHover);
+                btn.MouseLeave += (s, e) => AnimateBg(btn, DBg);
+            }
+        }
+
+        static void AnimateBg(Button btn, Color to)
+        {
+            var b = btn.Background as SolidColorBrush;
+            if (b == null) { btn.Background = new SolidColorBrush(to); return; }
+            b.BeginAnimation(SolidColorBrush.ColorProperty,
+                new System.Windows.Media.Animation.ColorAnimation(to, TimeSpan.FromMilliseconds(180)));
+        }
+
+        static ControlTemplate DialogButtonTemplate()
+        {
+            var template = new ControlTemplate(typeof(Button));
+            var root = new FrameworkElementFactory(typeof(Border));
+            root.SetValue(Border.CornerRadiusProperty, new CornerRadius(8));
+            root.SetValue(Border.BackgroundProperty, new TemplateBindingExtension(Border.BackgroundProperty));
+            root.SetValue(Border.BorderBrushProperty, new TemplateBindingExtension(Border.BorderBrushProperty));
+            root.SetValue(Border.BorderThicknessProperty, new TemplateBindingExtension(Border.BorderThicknessProperty));
+            var cp = new FrameworkElementFactory(typeof(ContentPresenter));
+            cp.SetValue(ContentPresenter.MarginProperty, new TemplateBindingExtension(Control.PaddingProperty));
+            cp.SetValue(ContentPresenter.HorizontalAlignmentProperty, new TemplateBindingExtension(ContentControl.HorizontalContentAlignmentProperty));
+            cp.SetValue(ContentPresenter.VerticalAlignmentProperty, VerticalAlignment.Center);
+            cp.SetValue(ContentPresenter.RecognizesAccessKeyProperty, true);
+            root.AppendChild(cp);
+            template.VisualTree = root;
+            return template;
+        }
+
         // ---- Dark ComboBox styling (shared) ------------------------------------
         // The default WPF ComboBox template is light, which makes light text
         // unreadable and clashes with the dark OneBox UI. This swaps in a dark

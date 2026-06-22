@@ -221,7 +221,8 @@ namespace PowerAudioManager
             });
             if (!isAdmin)
             {
-                var elevateBtn = new Button { Content = "以管理员重启", Padding = new Thickness(8, 2, 8, 2), FontSize = 11 };
+                var elevateBtn = new Button { Content = "以管理员重启", Padding = new Thickness(10, 4, 10, 4), FontSize = 11 };
+                AppResources.StyleDialogButton(elevateBtn, true);
                 DockPanel.SetDock(elevateBtn, Dock.Right);
                 elevateBtn.Click += (s, e) => AdminUtils.RestartAsAdmin();
                 adminRow.Children.Add(elevateBtn);
@@ -360,8 +361,12 @@ namespace PowerAudioManager
         static StackPanel MakeButtons()
         {
             var btns = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 18, 0, 0) };
-            btns.Children.Add(new Button { Content = "确定", Width = 72, Height = 28, FontSize = 12, Margin = new Thickness(0, 0, 8, 0) });
-            btns.Children.Add(new Button { Content = "取消", Width = 72, Height = 28, FontSize = 12 });
+            var ok = new Button { Content = "确定", Width = 72, Height = 28, FontSize = 12, Margin = new Thickness(0, 0, 8, 0) };
+            var cancel = new Button { Content = "取消", Width = 72, Height = 28, FontSize = 12 };
+            AppResources.StyleDialogButton(ok, true);
+            AppResources.StyleDialogButton(cancel, false);
+            btns.Children.Add(ok);
+            btns.Children.Add(cancel);
             return btns;
         }
 
