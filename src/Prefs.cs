@@ -46,6 +46,46 @@ namespace PowerAudioManager
             try { using (var k = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(KeyPath))
                 k.SetValue(key, v.ToString(System.Globalization.CultureInfo.InvariantCulture)); } catch { }
         }
+
+        public static string GetString(string key, string defaultValue)
+        {
+            try
+            {
+                using (var k = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(KeyPath))
+                {
+                    if (k == null) return defaultValue;
+                    var v = k.GetValue(key) as string;
+                    return string.IsNullOrEmpty(v) ? defaultValue : v;
+                }
+            }
+            catch { return defaultValue; }
+        }
+
+        public static void SetString(string key, string v)
+        {
+            try { using (var k = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(KeyPath))
+                k.SetValue(key, v ?? ""); } catch { }
+        }
+
+        public static int GetInt(string key, int defaultValue)
+        {
+            try
+            {
+                using (var k = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(KeyPath))
+                {
+                    if (k == null) return defaultValue;
+                    var v = k.GetValue(key) as string;
+                    int n; return int.TryParse(v, out n) ? n : defaultValue;
+                }
+            }
+            catch { return defaultValue; }
+        }
+
+        public static void SetInt(string key, int v)
+        {
+            try { using (var k = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(KeyPath))
+                k.SetValue(key, v.ToString()); } catch { }
+        }
     }
 
     public static class DevicePrefs

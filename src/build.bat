@@ -27,12 +27,12 @@ if exist "%OUTDIR%\OneBox.exe" del /f /q "%OUTDIR%\OneBox.exe"
   /reference:"System.Windows.Forms.dll" ^
   /reference:"System.Security.dll" ^
   /reference:"System.Web.Extensions.dll" ^
-  /resource:"%SRC%HarmonyOS_Sans_SC_Regular.ttf",PowerAudioManager.HarmonyOS_Sans_SC_Regular.ttf ^
   /resource:"%SRC%app.ico",PowerAudioManager.app.ico ^
   /resource:"%SRC%app.png",PowerAudioManager.app.png ^
   /resource:"%SRC%icon-power.png",PowerAudioManager.icon-power.png ^
   /resource:"%SRC%icon-audio.png",PowerAudioManager.icon-audio.png ^
   "%SRC%App.cs" ^
+  "%SRC%SettingsDialog.cs" ^
   "%SRC%AppResources.cs" ^
   "%SRC%LauncherBar.cs" ^
   "%SRC%WindowScaling.cs" ^

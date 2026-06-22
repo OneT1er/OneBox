@@ -264,6 +264,22 @@ namespace PowerAudioManager
                 r.FreedBytes = after.AvailableBytes - availBefore;
             return r;
         }
+
+        // Read the per-area clean flags the user configured in 设置 → 内存.
+        public static CleanFlags GetSavedFlags()
+        {
+            var f = CleanFlags.None;
+            if (AppPrefs.GetBool("Clean.WorkingSet", true)) f |= CleanFlags.WorkingSet;
+            if (AppPrefs.GetBool("Clean.SystemFileCache", true)) f |= CleanFlags.SystemFileCache;
+            if (AppPrefs.GetBool("Clean.ModifiedPageList", false)) f |= CleanFlags.ModifiedPageList;
+            if (AppPrefs.GetBool("Clean.StandbyList", false)) f |= CleanFlags.StandbyList;
+            if (AppPrefs.GetBool("Clean.StandbyListNoPrio", true)) f |= CleanFlags.StandbyListNoPrio;
+            if (AppPrefs.GetBool("Clean.ModifiedFileCache", true)) f |= CleanFlags.ModifiedFileCache;
+            if (AppPrefs.GetBool("Clean.RegistryCache", true)) f |= CleanFlags.RegistryCache;
+            if (AppPrefs.GetBool("Clean.CombineMemoryLists", false)) f |= CleanFlags.CombineMemoryLists;
+            if (f == CleanFlags.None) f = CleanFlags.Default;
+            return f;
+        }
     }
 
 }

@@ -104,7 +104,7 @@ namespace PowerAudioManager
             MouseWheel += (s, e) => { VolumeControl.SetVolume(VolumeControl.GetVolume() + (e.Delta > 0 ? 0.02f : -0.02f)); UpdateVolumeUI(); };
             LoadData();
             _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(30) };
-            _refreshTimer.Tick += (s, e) => { LoadData(); if (_tray != null) _tray.UpdateIcon(); try { _scaling.ApplyScaling(); _scaling.ClampToWorkArea(); } catch { } };
+            _refreshTimer.Tick += (s, e) => { LoadData(); if (_tray != null) _tray.UpdateIcon(); try { _scaling.ApplyScaling(); _scaling.Reposition(); } catch { } };
             _refreshTimer.Start();
             // Quick poll (2s) for resolution/DPI changes: SystemEvents.DisplaySettingsChanged
             // is unreliable across DPI switches, so we watch the live screen width directly.
@@ -113,7 +113,20 @@ namespace PowerAudioManager
             _screenPoll.Start();
             Closing += (s, ev) => { ev.Cancel = true; Hide(); };
             Loaded += OnLoaded;
-            LocationChanged += (s, e) => { if (IsLoaded) { AppPrefs.SetDouble("Left", Left); AppPrefs.SetDouble("Top", Top); } };
+            LocationChanged += (s, e) => { if (IsLoaded) SavePosition(); };
+        }
+
+        // Persist the window's absolute position. Fixed position is unconditional —
+        // the window stays at these coordinates across resolution changes; it is
+        // only rescued (not repositioned) if it ends up fully off-screen.
+        void SavePosition()
+        {
+            try
+            {
+                AppPrefs.SetDouble("Left", Left);
+                AppPrefs.SetDouble("Top", Top);
+            }
+            catch { }
         }
 
         void OnLoaded(object sender, RoutedEventArgs e)
@@ -134,6 +147,7 @@ namespace PowerAudioManager
                 try { ClipboardHistory.Start(); } catch { }
                 try { UpdateChecker.CheckAsync(this, false); } catch { }
                 try { RestartAutoCleanTimer(); } catch { }
+                try { StartAutoCollapse(); } catch { }
                 // Register hotkey window hook
                 _hotkeyHwnd = hwnd;
                 System.Windows.Interop.HwndSource.FromHwnd(hwnd).AddHook(WndProc);
@@ -152,7 +166,7 @@ namespace PowerAudioManager
                 // Scale to the screen resolution first, then re-clamp after the first
                 // layout pass so ActualWidth/ActualHeight are real.
                 _scaling.ApplyScaling();
-                Dispatcher.BeginInvoke(new Action(_scaling.ClampToWorkArea), DispatcherPriority.Loaded);
+                Dispatcher.BeginInvoke(new Action(_scaling.Reposition), DispatcherPriority.Loaded);
             }
             catch (Exception ex) { AppLog.Log("OnLoaded", ex); }
         }
@@ -214,7 +228,7 @@ namespace PowerAudioManager
             titleStack.Children.Add(titleLabel);
             var pinBtn = new Button
             {
-                Content = _lockPosition ? "\uD83D\uDD12" : "\uD83D\uDD13", FontFamily = EmojiFont,  // 🔒 locked / 🔓 unlocked
+                Content = _lockPosition ? "🔒" : "🔓", FontFamily = EmojiFont,  // 🔒 locked / 🔓 unlocked
                 Width = 28, Height = 28,
                 FontSize = 12,
                 Foreground = new SolidColorBrush(_lockPosition ? AccentColor : TextSecondary),
@@ -228,15 +242,14 @@ namespace PowerAudioManager
             {
                 _lockPosition = !_lockPosition;
                 AppPrefs.SetBool("LockPosition", _lockPosition);
-                pinBtn.Content = _lockPosition ? "\uD83D\uDD12" : "\uD83D\uDD13";
+                pinBtn.Content = _lockPosition ? "🔒" : "🔓";
                 pinBtn.Foreground = new SolidColorBrush(_lockPosition ? AccentColor : TextSecondary);
                 if (_tray != null) _tray.SetLockChecked(_lockPosition);
             };
             _pinBtn = pinBtn;
-
             var collapseBtn = new Button
             {
-                Content = "\u25B2",
+                Content = "▲",
                 Width = 28, Height = 28,
                 FontSize = 14,
                 Foreground = new SolidColorBrush(TextSecondary),
@@ -248,7 +261,7 @@ namespace PowerAudioManager
             collapseBtn.Click += ToggleCollapse;
             var closeBtn = new Button
             {
-                Content = "\u2715",
+                Content = "✕",
                 Width = 28, Height = 28,
                 FontSize = 12,
                 Foreground = new SolidColorBrush(TextSecondary),
@@ -278,6 +291,9 @@ namespace PowerAudioManager
                 string mem = ""; try { var ms = MemoryCleaner.GetStatus(); if (ms != null) mem = string.Format(System.Environment.NewLine + "内存: {0:0.0}/{1:0.0} GB ({2}%)", (ms.TotalBytes - ms.AvailableBytes) / 1073741824.0, ms.TotalBytes / 1073741824.0, ms.MemoryLoadPercent); } catch { }
                 tipBlock.Text = "电源计划: " + plan + System.Environment.NewLine + "音频设备: " + dev + mem;
             };
+            // Drag the window only when position is unlocked. When locked, the
+            // position is fixed and survives resolution changes (ClampToWorkArea
+            // only nudges it back if it ends up fully off-screen).
             titleBar.MouseLeftButtonDown += (s, e) => { if (!_lockPosition) try { DragMove(); } catch { } };
             // Wrap the title bar in a Border whose top corners round to match the
             // outer card (CornerRadius 10). Previously the title bar's own opaque
@@ -477,6 +493,14 @@ namespace PowerAudioManager
             if (_scaling != null) _scaling.ApplyScaling(); // re-apply scale to the freshly built _mainBorder
             LoadData();
             Left = left; Top = top;
+        }
+
+        // Re-read the user-selected font and apply it to the window, then rebuild
+        // so child elements pick it up. Called after the font is changed in settings.
+        internal void ApplyFont()
+        {
+            FontFamily = AppResources.ReloadFont();
+            RebuildUI();
         }
 
         // ---- Clipboard history button ------------------------------------------
@@ -923,7 +947,7 @@ namespace PowerAudioManager
             {
                 MemoryCleaner.CleanResult r = null;
                 Exception err = null;
-                try { r = MemoryCleaner.CleanAll(CleanerSettingsDialog.GetSavedFlags()); }
+                try { r = MemoryCleaner.CleanAll(MemoryCleaner.GetSavedFlags()); }
                 catch (Exception ex) { err = ex; }
                 Dispatcher.BeginInvoke(new Action(() =>
                 {
@@ -1130,19 +1154,23 @@ namespace PowerAudioManager
 
         void ToggleCollapse(object sender, RoutedEventArgs e)
         {
-            var btn = (Button)sender;
+            SetExpanded(!_isExpanded);
+        }
+
+        // Core expand/collapse, reused by the manual button and auto-collapse.
+        // Keeps the bottom edge anchored so the window grows/shrinks in place.
+        void SetExpanded(bool expanded)
+        {
+            _isExpanded = expanded;
             // Pin bottom edge so the window collapses upward
             double bottom = Top + ActualHeight;
-            _isExpanded = !_isExpanded;
             if (_isExpanded)
             {
-                btn.Content = "\u25BC"; // pointing down: click to collapse
                 if (_contentPanel != null) _contentPanel.Visibility = Visibility.Visible;
                 SizeToContent = SizeToContent.Height;
             }
             else
             {
-                btn.Content = "\u25B2"; // pointing up: click to expand
                 if (_contentPanel != null) _contentPanel.Visibility = Visibility.Collapsed;
                 SizeToContent = SizeToContent.Height; // let WPF compute exact title-bar height
                 MinHeight = 36;
@@ -1159,6 +1187,42 @@ namespace PowerAudioManager
                 Top = newTop;
             };
             LayoutUpdated += reanchor;
+            // Cancel any pending auto-collapse when the user manually expands.
+            if (expanded && _autoCollapseTimer != null) _autoCollapseTimer.Stop();
+        }
+
+        // ---- Auto-collapse -----------------------------------------------------
+        // When enabled, the window collapses after the mouse leaves for a configurable
+        // delay, and expands again on hover. The manual collapse button stays in sync.
+        DispatcherTimer _autoCollapseTimer;
+
+        void StartAutoCollapse()
+        {
+            if (!AppPrefs.GetBool("AutoCollapse", true)) return;
+            _autoCollapseTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(Math.Max(0, AppPrefs.GetInt("AutoCollapseDelay", 8))) };
+            _autoCollapseTimer.Tick += (s, e) => { _autoCollapseTimer.Stop(); SetExpanded(false); };
+            MouseEnter += (s, e) =>
+            {
+                if (_autoCollapseTimer != null) _autoCollapseTimer.Stop();
+                if (!_isExpanded) SetExpanded(true);
+            };
+            MouseLeave += (s, e) =>
+            {
+                if (_autoCollapseTimer != null && AppPrefs.GetBool("AutoCollapse", true))
+                {
+                    _autoCollapseTimer.Interval = TimeSpan.FromSeconds(Math.Max(0, AppPrefs.GetInt("AutoCollapseDelay", 8)));
+                    _autoCollapseTimer.Start();
+                }
+            };
+        }
+
+        // Re-read auto-collapse settings (called after the user changes them).
+        internal void RefreshAutoCollapse()
+        {
+            if (_autoCollapseTimer != null) _autoCollapseTimer.Stop();
+            if (!AppPrefs.GetBool("AutoCollapse", true)) return;
+            if (_autoCollapseTimer == null) { StartAutoCollapse(); return; }
+            _autoCollapseTimer.Interval = TimeSpan.FromSeconds(Math.Max(0, AppPrefs.GetInt("AutoCollapseDelay", 8)));
         }
     }
 

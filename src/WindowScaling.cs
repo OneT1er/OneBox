@@ -60,38 +60,33 @@ namespace PowerAudioManager
             if (e.Category == UserPreferenceCategory.Desktop ||
                 e.Category == UserPreferenceCategory.General)
             {
-                try { _window.Dispatcher.BeginInvoke(new Action(() => { ApplyScaling(); ClampToWorkArea(); })); } catch { }
+                try { _window.Dispatcher.BeginInvoke(new Action(() => { ApplyScaling(); Reposition(); })); } catch { }
             }
         }
 
         public void OnDisplaySettingsChanged(object sender, EventArgs e)
         {
-            try { _window.Dispatcher.BeginInvoke(new Action(() => { ApplyScaling(); ClampToWorkArea(); })); } catch { }
+            try { _window.Dispatcher.BeginInvoke(new Action(() => { ApplyScaling(); Reposition(); })); } catch { }
         }
 
-        public void ClampToWorkArea()
+        // Fixed position (unconditional): on a display-config change we do NOT
+        // move the window — it stays exactly where the user left it, surviving
+        // resolution / DPI switches. We only rescue it if it has become fully
+        // off-screen (e.g. the monitor it lived on was unplugged), so the user
+        // can never lose the window entirely. Partial overhang is left as-is.
+        public void Reposition()
+        {
+            EnsureVisible();
+        }
+
+        // Nudge the window back on-screen only when it is completely outside the
+        // current work area. Anything else (e.g. one edge poking off after a
+        // resolution drop) is intentionally untouched to honour "固定位置".
+        public void EnsureVisible()
         {
             try
             {
-                // SystemParameters.WorkArea can lag behind a resolution/DPI change.
-                // System.Windows.Forms.Screen reads the live display geometry instead.
-                var screen = System.Windows.Forms.Screen.PrimaryScreen;
-                double waLeft = screen.WorkingArea.Left;
-                double waTop = screen.WorkingArea.Top;
-                double waRight = screen.WorkingArea.Right;
-                double waBottom = screen.WorkingArea.Bottom;
-                // Convert device pixels (WinForms) to WPF DIPs using the current DPI.
-                double dpi = 96.0;
-                try
-                {
-                    var src = PresentationSource.FromVisual(_window);
-                    if (src != null && src.CompositionTarget != null)
-                        dpi = 96.0 * src.CompositionTarget.TransformToDevice.M11;
-                }
-                catch { }
-                double scale = 96.0 / dpi;
-                waLeft *= scale; waTop *= scale; waRight *= scale; waBottom *= scale;
-
+                var wa = GetWorkAreaDip();
                 double w = _window.ActualWidth > 0 ? _window.ActualWidth : _window.Width;
                 double h = _window.ActualHeight > 0 ? _window.ActualHeight : _window.Height;
                 if (double.IsNaN(w) || w <= 0) w = 280;
@@ -99,23 +94,45 @@ namespace PowerAudioManager
                 double left = _window.Left;
                 double top = _window.Top;
                 bool offscreen = double.IsNaN(left) || double.IsNaN(top)
-                    || left + w <= waLeft + 8 || left >= waRight - 8
-                    || top + h <= waTop + 8  || top >= waBottom - 8;
+                    || left + w <= wa.Left + 8 || left >= wa.Right - 8
+                    || top + h <= wa.Top + 8  || top >= wa.Bottom - 8;
                 if (offscreen)
                 {
-                    // Lost display – snap back to the top-right of the new primary work area.
-                    _window.Left = waRight - w - 20;
-                    _window.Top  = waTop + 20;
-                    return;
+                    // Completely lost — snap back to the top-right of the primary work area.
+                    _window.Left = wa.Right - w - 20;
+                    _window.Top  = wa.Top + 20;
                 }
-                if (left + w > waRight)  left = waRight - w;
-                if (top  + h > waBottom) top  = waBottom - h;
-                if (left < waLeft) left = waLeft;
-                if (top  < waTop)  top  = waTop;
-                if (left != _window.Left) _window.Left = left;
-                if (top  != _window.Top)  _window.Top  = top;
             }
-            catch (Exception ex) { AppLog.Log("ClampToWorkArea", ex); }
+            catch (Exception ex) { AppLog.Log("EnsureVisible", ex); }
+        }
+
+        // Work area in WPF DIPs (WinForms returns device pixels).
+        struct Rect { public double Left, Top, Right, Bottom; public double Width { get { return Right - Left; } } public double Height { get { return Bottom - Top; } } }
+        Rect GetWorkAreaDip()
+        {
+            var screen = System.Windows.Forms.Screen.PrimaryScreen;
+            double waLeft = screen.WorkingArea.Left;
+            double waTop = screen.WorkingArea.Top;
+            double waRight = screen.WorkingArea.Right;
+            double waBottom = screen.WorkingArea.Bottom;
+            double dpi = 96.0;
+            try
+            {
+                var src = PresentationSource.FromVisual(_window);
+                if (src != null && src.CompositionTarget != null)
+                    dpi = 96.0 * src.CompositionTarget.TransformToDevice.M11;
+            }
+            catch { }
+            double scale = 96.0 / dpi;
+            return new Rect { Left = waLeft * scale, Top = waTop * scale, Right = waRight * scale, Bottom = waBottom * scale };
+        }
+
+        // Kept for callers that still clamp on first layout / explicit re-clamp.
+        // Behaviour matches EnsureVisible (rescue only when fully off-screen) so the
+        // fixed-position guarantee holds on startup too.
+        public void ClampToWorkArea()
+        {
+            EnsureVisible();
         }
     }
 }

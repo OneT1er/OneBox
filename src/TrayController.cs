@@ -104,11 +104,8 @@ namespace PowerAudioManager
                 _menu.Items.Insert(_menu.Items.Count - 1,
                     new ToolStripMenuItem("清理内存", null, (s, e) => _owner.CleanMemory()));
                 _menu.Items.Insert(_menu.Items.Count - 1,
-                    new ToolStripMenuItem("内存清理设置...", null,
-                        (ss, ee) => { _owner.ShowWindow(); CleanerSettingsDialog.Show(_owner); }));
-                _menu.Items.Insert(_menu.Items.Count - 1,
-                    new ToolStripMenuItem("板块设置...", null,
-                        (ss, ee) => { _owner.ShowWindow(); ModulesSettingsDialog.Show(_owner); }));
+                    new ToolStripMenuItem("设置...", null,
+                        (ss, ee) => { _owner.ShowWindow(); SettingsDialog.Show(_owner, 0); }));
                 _menu.Items.Insert(_menu.Items.Count - 1,
                     new ToolStripMenuItem("检查更新...", null,
                         (ss, ee) => { UpdateChecker.CheckAsync(_owner, true); }));
