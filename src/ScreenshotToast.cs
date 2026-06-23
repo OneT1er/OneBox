@@ -35,7 +35,7 @@ namespace PowerAudioManager
 
             var dlg = new Window
             {
-                Width = 320,
+                Width = 240,
                 SizeToContent = SizeToContent.Height,
                 WindowStyle = WindowStyle.None,
                 ResizeMode = ResizeMode.NoResize,
@@ -87,39 +87,30 @@ namespace PowerAudioManager
             else
             {
                 // Thumbnail + path row
-                var row = new DockPanel { Margin = new Thickness(0, 0, 0, 8) };
-                BitmapSource thumb = ScreenshotService.LoadThumbnail(path, 96, 96);
+                // Centered thumbnail (no path text — the open-folder button is
+                // enough; the full path is in OneBox.log if ever needed).
+                BitmapSource thumb = ScreenshotService.LoadThumbnail(path, 160, 160);
                 if (thumb != null)
                 {
                     var img = new System.Windows.Controls.Image
                     {
                         Source = thumb,
-                        Width = 72, Height = 72,
-                        Stretch = Stretch.UniformToFill,
-                        Margin = new Thickness(0, 0, 10, 0)
+                        MaxWidth = 160, MaxHeight = 120,
+                        Stretch = Stretch.Uniform,
+                        HorizontalAlignment = HorizontalAlignment.Center,
+                        Margin = new Thickness(0, 0, 0, 10)
                     };
-                    DockPanel.SetDock(img, Dock.Left);
-                    row.Children.Add(img);
+                    stack.Children.Add(img);
                 }
-                var pathTb = new TextBlock
-                {
-                    Text = path,
-                    Foreground = new SolidColorBrush(Color.FromRgb(190, 188, 220)),
-                    FontSize = 10,
-                    TextWrapping = TextWrapping.Wrap,
-                    VerticalAlignment = VerticalAlignment.Center
-                };
-                row.Children.Add(pathTb);
-                stack.Children.Add(row);
 
-                // Open-folder button
+                // Open-folder button (centered)
                 var openBtn = new Button
                 {
                     Content = "打开文件夹",
-                    Height = 26,
-                    FontSize = 11,
-                    HorizontalAlignment = HorizontalAlignment.Left,
-                    Padding = new Thickness(10, 0, 10, 0)
+                    Height = 28,
+                    FontSize = 12,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    Padding = new Thickness(16, 0, 16, 0)
                 };
                 AppResources.StyleDialogButton(openBtn, false);
                 openBtn.Click += (s, e) =>
