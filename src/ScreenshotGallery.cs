@@ -42,6 +42,7 @@ namespace PowerAudioManager
             var scroller = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
             var wrap = new WrapPanel();
             scroller.Content = wrap;
+            outer.Children.Add(scroller); // must be added BEFORE handing outer to OneBoxWindow
 
             var dlg = OneBoxWindow.Create(owner, "图库", 600, 480, outer, true);
             openRootBtn.Click += (s, e) => { try { Process.Start("explorer.exe", "\"" + ScreenshotService.RootDir() + "\""); } catch { } };
