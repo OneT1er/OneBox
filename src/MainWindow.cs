@@ -68,6 +68,7 @@ namespace PowerAudioManager
 
         public MainWindow()
         {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
             _topmost = AppPrefs.GetBool("Topmost", false);
             _lockPosition = AppPrefs.GetBool("LockPosition", false);
             Title = "OneBox";
@@ -109,7 +110,10 @@ namespace PowerAudioManager
             else { Left = screen.Right - Width - 20; Top = screen.Bottom - 200 - 20; }
             BuildUI();
             MouseWheel += (s, e) => { VolumeControl.SetVolume(VolumeControl.GetVolume() + (e.Delta > 0 ? 0.02f : -0.02f)); UpdateVolumeUI(); };
-            LoadData();
+            // NOTE: LoadData() is deferred to OnLoaded (async, background) so the window
+            // appears instantly — GetStatus() lazily creates PerformanceCounter instances
+            // (~300ms) which would otherwise block the constructor.
+            AppLog.Log("Startup", "ctor done " + sw.ElapsedMilliseconds + "ms");
             _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(30) };
             _refreshTimer.Tick += (s, e) => { LoadData(); if (_tray != null) _tray.UpdateIcon(); try { _scaling.ApplyScaling(); _scaling.Reposition(); } catch { } };
             _refreshTimer.Start();
@@ -183,6 +187,8 @@ namespace PowerAudioManager
         void OnLoaded(object sender, RoutedEventArgs e)
         {
             AppLog.Log("App", "OnLoaded start, admin=" + AdminUtils.IsAdmin());
+            try { AppLog.Log("Startup", "process->OnLoaded " + (int)(System.DateTime.Now - System.Diagnostics.Process.GetCurrentProcess().StartTime).TotalMilliseconds + "ms"); } catch { }
+            var sw = System.Diagnostics.Stopwatch.StartNew();
             try
             {
                 var hwnd = new System.Windows.Interop.WindowInteropHelper(this).Handle;
@@ -195,7 +201,10 @@ namespace PowerAudioManager
                     0, 0, 0, 0,
                     Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE);
                 try { _tray = new TrayController(this, ExitApp); _tray.Init(); } catch { }
-                try { _tray.UpdateIcon(); } catch { }
+                // UpdateIcon calls MemoryCleaner.GetStatus() which lazily builds
+                // PerformanceCounters (~400ms first call) — defer so OnLoaded stays fast.
+                Dispatcher.BeginInvoke(new Action(() => { try { if (_tray != null) _tray.UpdateIcon(); } catch { } }),
+                    System.Windows.Threading.DispatcherPriority.ApplicationIdle);
                 try { ClipboardHistory.Start(); } catch { }
                 try { UpdateChecker.CheckAsync(this, false); } catch { }
                 try { RestartAutoCleanTimer(); } catch { }
@@ -223,6 +232,11 @@ namespace PowerAudioManager
                 // NOT run on later resolution changes (those honour 固定位置 and leave
                 // the window where the user put it).
                 Dispatcher.BeginInvoke(new Action(EnsureFullyVisible), DispatcherPriority.Loaded);
+                // Load plans/devices/memory async after the window is up so first paint
+                // isn't blocked by PerformanceCounter init (~300ms) or powercfg.
+                Dispatcher.BeginInvoke(new Action(() => { try { LoadData(); } catch { } }),
+                    System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+                AppLog.Log("Startup", "OnLoaded done " + sw.ElapsedMilliseconds + "ms");
             }
             catch (Exception ex) { AppLog.Log("OnLoaded", ex); }
         }
