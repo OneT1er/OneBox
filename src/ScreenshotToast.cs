@@ -18,17 +18,17 @@ namespace PowerAudioManager
     {
         static Window _current;
 
-        public static void Show(string appName, string path)
+        public static void Show(string appName, string path, string source)
         {
-            Application.Current.Dispatcher.BeginInvoke(new Action(() => ShowInternal(appName, path, null)));
+            Application.Current.Dispatcher.BeginInvoke(new Action(() => ShowInternal(appName, path, source, null)));
         }
 
         public static void ShowError(string message)
         {
-            Application.Current.Dispatcher.BeginInvoke(new Action(() => ShowInternal("截图失败", null, message)));
+            Application.Current.Dispatcher.BeginInvoke(new Action(() => ShowInternal("截图失败", null, null, message)));
         }
 
-        static void ShowInternal(string appName, string path, string error)
+        static void ShowInternal(string appName, string path, string source, string error)
         {
             // Only one toast at a time.
             if (_current != null) { try { _current.Close(); } catch { } _current = null; }
@@ -63,9 +63,10 @@ namespace PowerAudioManager
             var stack = new StackPanel();
 
             // Title row
+            string srcTag = string.IsNullOrEmpty(source) ? "" : " · " + source;
             var title = new TextBlock
             {
-                Text = "已保存截图 · " + appName,
+                Text = "已保存截图 · " + appName + srcTag,
                 Foreground = Brushes.White,
                 FontSize = 12,
                 FontWeight = FontWeights.SemiBold,

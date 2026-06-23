@@ -152,7 +152,7 @@ OneBox/
 | 翻译 API Key | 注册表，DPAPI（CurrentUser）加密 |
 | 剪贴板历史 | `%LocalAppData%\OneBox\`（DPAPI 加密） |
 | 崩溃日志 | `%TEMP%\pam_crash.log` |
-| 调试日志 | `%TEMP%\pam_debug.log` |
+| 运行日志 | exe 同目录 `OneBox.log`（截图/清理/热键/音频/电源/更新等） |
 
 ## 🔄 自动更新配置（自建分支）
 

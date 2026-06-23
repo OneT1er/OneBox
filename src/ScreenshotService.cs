@@ -36,6 +36,14 @@ namespace PowerAudioManager
         [DllImport("user32.dll")] static extern bool GetClientRect(IntPtr hWnd, out RECT lpRect);
         [DllImport("user32.dll")] static extern bool ClientToScreen(IntPtr hWnd, ref POINT lpPoint);
         [DllImport("user32.dll")] static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, IntPtr extraInfo);
+        // OpenProcess + QueryFullProcessImageName: more reliable than Process.MainModule
+        // (which throws Win32Exception for elevated / system processes the user can't
+        // OpenProcess with QUERY_LIMITED_INFORMATION). This reads most processes and
+        // avoids the "Unknown" folder for protected foreground apps.
+        [DllImport("kernel32.dll", SetLastError = true)] static extern IntPtr OpenProcess(uint access, bool inherit, uint pid);
+        [DllImport("kernel32.dll", SetLastError = true)] static extern bool CloseHandle(IntPtr h);
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern bool QueryFullProcessImageName(IntPtr h, int flags, System.Text.StringBuilder buf, ref uint size);
+        const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
         [StructLayout(LayoutKind.Sequential)] struct RECT { public int Left, Top, Right, Bottom; }
         [StructLayout(LayoutKind.Sequential)] struct POINT { public int X, Y; }
 
@@ -51,10 +59,11 @@ namespace PowerAudioManager
             string exeName = null;
             string savedPath = null;
             string error = null;
+            string source = null;
             try
             {
                 var hwnd = GetForegroundWindow();
-                if (hwnd == IntPtr.Zero) { error = "无可截取的前台窗口"; goto done; }
+                if (hwnd == IntPtr.Zero) { error = "无可截取的前台窗口"; AppLog.Log("Screenshot", "fail: no foreground window"); goto done; }
 
                 exeName = GetExeName(hwnd);
                 if (exeName == null) exeName = "Unknown";
@@ -62,7 +71,7 @@ namespace PowerAudioManager
                 // Client area in screen coordinates.
                 RECT cr;
                 if (!GetClientRect(hwnd, out cr) || cr.Right <= cr.Left || cr.Bottom <= cr.Top)
-                { error = "前台窗口无客户区"; goto done; }
+                { error = "前台窗口无客户区"; AppLog.Log("Screenshot", "fail: no client area, app=" + exeName); goto done; }
                 var tl = new POINT { X = cr.Left, Y = cr.Top };
                 var br = new POINT { X = cr.Right, Y = cr.Bottom };
                 ClientToScreen(hwnd, ref tl);
@@ -70,7 +79,9 @@ namespace PowerAudioManager
                 int x = tl.X, y = tl.Y;
                 int w = br.X - tl.X;
                 int h = br.Y - tl.Y;
-                if (w <= 0 || h <= 0) { error = "前台窗口无客户区"; goto done; }
+                if (w <= 0 || h <= 0) { error = "前台窗口无客户区"; AppLog.Log("Screenshot", "fail: empty client area, app=" + exeName); goto done; }
+
+                AppLog.Log("Screenshot", "start app=" + exeName + " size=" + w + "x" + h);
 
                 // 1) CopyFromScreen.
                 Bitmap bmp = null;
@@ -89,14 +100,25 @@ namespace PowerAudioManager
                 if (black)
                 {
                     // Likely fullscreen-exclusive game — try Game Bar.
+                    AppLog.Log("Screenshot", "CopyFromScreen result was all-black, falling back to Game Bar, app=" + exeName);
                     bmp.Dispose();
                     savedPath = CaptureViaGameBar(exeName);
                     if (savedPath == null)
+                    {
                         error = "截图为黑屏（可能是全屏游戏），且 Game Bar 未生成文件。请在系统设置→游戏中启用 Game Bar 捕获。";
+                        AppLog.Log("Screenshot", "fail: black + Game Bar produced no file, app=" + exeName);
+                    }
+                    else
+                    {
+                        source = "Game Bar";
+                        AppLog.Log("Screenshot", "ok source=GameBar app=" + exeName + " saved=" + savedPath);
+                    }
                 }
                 else
                 {
                     savedPath = SaveBitmap(bmp, exeName);
+                    source = "CopyFromScreen";
+                    AppLog.Log("Screenshot", "ok source=CopyFromScreen app=" + exeName + " saved=" + savedPath);
                     bmp.Dispose();
                 }
             }
@@ -104,9 +126,10 @@ namespace PowerAudioManager
 
         done:
             // Show toast on the UI thread.
+            string toastSource = source;
             Application.Current.Dispatcher.BeginInvoke(new Action(() =>
             {
-                if (savedPath != null) ScreenshotToast.Show(exeName ?? "截图", savedPath);
+                if (savedPath != null) ScreenshotToast.Show(exeName ?? "截图", savedPath, toastSource);
                 else if (error != null) ScreenshotToast.ShowError(error);
             }));
         }
@@ -137,7 +160,9 @@ namespace PowerAudioManager
         }
 
         // Resolve the foreground window's owning process exe name (no extension),
-        // with invalid path chars stripped so it's safe as a folder name.
+        // with invalid path chars stripped so it's safe as a folder name. Uses
+        // QueryFullProcessImageName (PROCESS_QUERY_LIMITED_INFORMATION) which works
+        // for elevated/UWP-store apps where Process.MainModule throws access denied.
         static string GetExeName(IntPtr hwnd)
         {
             try
@@ -145,12 +170,19 @@ namespace PowerAudioManager
                 uint pid;
                 GetWindowThreadProcessId(hwnd, out pid);
                 if (pid == 0) return null;
-                var p = Process.GetProcessById((int)pid);
-                string name = p.MainModule.FileName;
-                p.Dispose();
-                if (string.IsNullOrEmpty(name)) return null;
-                name = Path.GetFileNameWithoutExtension(name);
-                return Sanitize(name);
+                var h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
+                if (h == IntPtr.Zero) return null;
+                try
+                {
+                    var sb = new System.Text.StringBuilder(1024);
+                    uint size = 1024;
+                    if (!QueryFullProcessImageName(h, 0, sb, ref size)) return null;
+                    string name = sb.ToString();
+                    if (string.IsNullOrEmpty(name)) return null;
+                    name = Path.GetFileNameWithoutExtension(name);
+                    return Sanitize(name);
+                }
+                finally { CloseHandle(h); }
             }
             catch { return null; }
         }
@@ -187,7 +219,7 @@ namespace PowerAudioManager
         {
             string capturesDir = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.MyVideos), "Captures");
-            if (!Directory.Exists(capturesDir)) return null;
+            if (!Directory.Exists(capturesDir)) { AppLog.Log("Screenshot", "GameBar fallback: Captures dir not found: " + capturesDir); return null; }
 
             // Snapshot existing files before triggering.
             var before = new System.Collections.Generic.HashSet<string>();
@@ -216,7 +248,8 @@ namespace PowerAudioManager
                 }
                 if (found != null) break;
             }
-            if (found == null) return null;
+            if (found == null) { AppLog.Log("Screenshot", "GameBar fallback: no new file within " + GameBarWaitMs + "ms, app=" + exeName); return null; }
+            AppLog.Log("Screenshot", "GameBar fallback: found new file " + found);
 
             // Move + rename into the per-app folder.
             try

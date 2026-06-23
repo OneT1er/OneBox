@@ -181,6 +181,7 @@ namespace PowerAudioManager
 
         void OnLoaded(object sender, RoutedEventArgs e)
         {
+            AppLog.Log("App", "OnLoaded start, admin=" + AdminUtils.IsAdmin());
             try
             {
                 var hwnd = new System.Windows.Interop.WindowInteropHelper(this).Handle;
@@ -758,7 +759,7 @@ namespace PowerAudioManager
                 if (_powerSection == null) return;
                 _powerSection.Children.Clear();
                 foreach (var p in _powerPlans) _powerSection.Children.Add(CreatePlanButton(p));
-                PowerPlanService.SetActivePlanAsync(plan.Guid, Dispatcher, ok => { if (ok) LoadData(); });
+                PowerPlanService.SetActivePlanAsync(plan.Guid, Dispatcher, ok => { AppLog.Log("PowerPlan", "switch to " + plan.Name + " (" + plan.Guid + ") ok=" + ok); if (ok) LoadData(); });
             };
             return btn;
         }
@@ -1021,6 +1022,7 @@ namespace PowerAudioManager
                     if (err != null)
                     {
                         if (_memStatusLabel != null) _memStatusLabel.Text = "清理失败: " + err.Message;
+                        AppLog.Log("MemoryClean", "error: " + err.Message);
                         return;
                     }
                     if (r != null && _memStatusLabel != null)
@@ -1030,6 +1032,7 @@ namespace PowerAudioManager
                             _memStatusLabel.Text = string.Format("已释放 {0:0} MB · 需管理员权限以启用更多清理项", freedMb);
                         else
                             _memStatusLabel.Text = string.Format("已释放 {0:0} MB", freedMb);
+                        AppLog.Log("MemoryClean", "freed=" + (int)freedMb + "MB flags=" + flags);
                         Dispatcher.BeginInvoke(new Action(UpdateMemoryUI),
                             System.Windows.Threading.DispatcherPriority.ApplicationIdle);
                     }
@@ -1076,6 +1079,7 @@ namespace PowerAudioManager
                     // them — a background standby purge can stall the system.
                     if (!AppPrefs.GetBool("AutoCleanAllowFreezes", false))
                         flags &= ~(MemoryCleaner.CleanFlags.StandbyList | MemoryCleaner.CleanFlags.ModifiedPageList);
+                    AppLog.Log("AutoClean", "triggered, flags=" + flags);
                     CleanMemory(flags);
                 }
             }
@@ -1175,12 +1179,14 @@ namespace PowerAudioManager
                 int id = wParam.ToInt32();
                 if (id == Native.HOTKEY_ID_TRANSLATE)
                 {
+                    AppLog.Log("Hotkey", "translate (Ctrl+Shift+T) triggered");
                     TranslateFromClipboard();
                     handled = true;
                     return IntPtr.Zero;
                 }
                 if (id == Native.HOTKEY_ID_SCREENSHOT)
                 {
+                    AppLog.Log("Hotkey", "screenshot triggered");
                     // Capture on a threadpool thread so the hotkey loop is never
                     // blocked; the toast marshals back to the UI thread itself.
                     System.Threading.ThreadPool.QueueUserWorkItem(_ => ScreenshotService.CaptureForeground());
@@ -1190,6 +1196,7 @@ namespace PowerAudioManager
                 string devName;
                 if (_hotkeyMap.TryGetValue(id, out devName))
                 {
+                    AppLog.Log("Hotkey", "switch audio device: " + devName);
                     if (AudioDevices.SetDefaultDevice(devName))
                     {
                         _currentDeviceId = null;

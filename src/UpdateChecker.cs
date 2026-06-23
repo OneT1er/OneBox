@@ -70,6 +70,7 @@ namespace PowerAudioManager
                         return;
                     }
                     bool newer = info.Version != null && info.Version > CurrentVersion;
+                    AppLog.Log("UpdateChecker", "latest=" + (info.Version == null ? info.TagName : info.Version.ToString()) + " current=" + CurrentVersion + " newer=" + newer);
                     if (newer)
                         ShowUpdateDialog(owner, info);
                     else if (manual)

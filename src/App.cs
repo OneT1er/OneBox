@@ -59,8 +59,21 @@ namespace PowerAudioManager
     /// </summary>
     public static class AppLog
     {
-        static readonly string _path = System.IO.Path.GetTempPath() + "pam_debug.log";
+        // Log lives next to the exe so it's easy to find alongside OneBox.exe.
+        // Falls back to %TEMP% if the exe dir isn't writable.
+        static readonly string _path = ResolveLogPath();
         static readonly object _lock = new object();
+        static string ResolveLogPath()
+        {
+            try
+            {
+                var dir = System.IO.Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
+                if (!string.IsNullOrEmpty(dir)) return System.IO.Path.Combine(dir, "OneBox.log");
+            }
+            catch { }
+            return System.IO.Path.GetTempPath() + "OneBox.log";
+        }
+
         public static void Log(string message)
         {
             try
@@ -76,6 +89,11 @@ namespace PowerAudioManager
         public static void Log(string context, Exception ex)
         {
             Log(context + (ex == null ? "" : (": " + ex.GetType().Name + ": " + ex.Message)));
+        }
+        // Structured tag + detail, e.g. Log("Screenshot", "source=CopyFromScreen app=chrome saved=...").
+        public static void Log(string context, string detail)
+        {
+            Log("[" + context + "] " + detail);
         }
     }
 
