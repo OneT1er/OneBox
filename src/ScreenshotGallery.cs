@@ -50,12 +50,13 @@ namespace PowerAudioManager
             // opens instantly; images stream in as they decode.
             ThreadPool.QueueUserWorkItem(_ =>
             {
-                var files = ScreenshotService.GetRecent(int.MaxValue);
+                var files = ScreenshotService.GetRecent(10);
+                AppLog.Log("Gallery", "root=" + ScreenshotService.RootDir() + " found=" + files.Count);
                 foreach (var f in files)
                 {
                     var path = f;
                     var thumb = ScreenshotService.LoadThumbnail(path, ThumbSize * 2, ThumbSize * 2);
-                    if (thumb == null) continue;
+                    if (thumb == null) { AppLog.Log("Gallery", "thumb load failed: " + path); continue; }
                     dlg.Dispatcher.BeginInvoke(new Action(() =>
                     {
                         var img = new System.Windows.Controls.Image

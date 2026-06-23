@@ -273,10 +273,13 @@ namespace PowerAudioManager
         {
             try
             {
+                // Use a FileStream (StreamSource) instead of UriSource: UriSource
+                // mangles non-ASCII paths (e.g. 中文 "图片" in the root dir) and the
+                // BitmapImage silently fails to load -> empty gallery.
                 var bmp = new BitmapImage();
                 bmp.BeginInit();
                 bmp.CacheOption = BitmapCacheOption.OnLoad;
-                bmp.UriSource = new Uri(path);
+                bmp.StreamSource = new System.IO.FileStream(path, System.IO.FileMode.Open, System.IO.FileAccess.Read, System.IO.FileShare.Read);
                 bmp.DecodePixelWidth = maxW;
                 bmp.EndInit();
                 bmp.Freeze();
