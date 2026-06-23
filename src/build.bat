@@ -35,7 +35,6 @@ if exist "%OUTDIR%\OneBox.exe" del /f /q "%OUTDIR%\OneBox.exe"
   "%SRC%SettingsDialog.cs" ^
   "%SRC%ScreenshotService.cs" ^
   "%SRC%ScreenshotToast.cs" ^
-  "%SRC%ScreenshotGallery.cs" ^
   "%SRC%AppResources.cs" ^
   "%SRC%LauncherBar.cs" ^
   "%SRC%WindowScaling.cs" ^

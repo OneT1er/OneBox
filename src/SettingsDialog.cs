@@ -127,6 +127,45 @@ namespace PowerAudioManager
 
             stack.Children.Add(new Border { Height = 1, Background = new SolidColorBrush(Color.FromRgb(80, 75, 120)), Margin = new Thickness(0, 4, 0, 12) });
 
+            stack.Children.Add(new TextBlock { Text = "剪贴板历史快捷键", Foreground = Brushes.White, FontWeight = FontWeights.SemiBold, FontSize = 13, Margin = new Thickness(0, 0, 0, 6) });
+            int curClipHk = AppPrefs.GetInt("Clipboard.Hotkey", 0);
+            var clipHkLabel = new TextBlock
+            {
+                Text = curClipHk != 0 ? HotkeyCaptureDialog.Format(curClipHk) : "（未设置）",
+                Foreground = curClipHk != 0 ? Brushes.White : fg,
+                FontSize = 13, FontWeight = FontWeights.SemiBold,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, 12, 0)
+            };
+            var setClipHkBtn = new Button { Content = "设置快捷键", Height = 28, FontSize = 12, Margin = new Thickness(0, 0, 8, 0), Padding = new Thickness(10, 0, 10, 0) };
+            AppResources.StyleDialogButton(setClipHkBtn, false);
+            var clearClipHkBtn = new Button { Content = "清除", Height = 28, FontSize = 12, Padding = new Thickness(10, 0, 10, 0) };
+            AppResources.StyleDialogButton(clearClipHkBtn, false);
+            setClipHkBtn.Click += (s, e) =>
+            {
+                var captured = HotkeyCaptureDialog.Show(dlg, curClipHk);
+                if (captured.HasValue)
+                {
+                    curClipHk = captured.Value;
+                    clipHkLabel.Text = HotkeyCaptureDialog.Format(curClipHk);
+                    clipHkLabel.Foreground = Brushes.White;
+                }
+            };
+            clearClipHkBtn.Click += (s, e) =>
+            {
+                curClipHk = 0;
+                clipHkLabel.Text = "（未设置）";
+                clipHkLabel.Foreground = fg;
+            };
+            var clipHkRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 4) };
+            clipHkRow.Children.Add(clipHkLabel);
+            clipHkRow.Children.Add(setClipHkBtn);
+            clipHkRow.Children.Add(clearClipHkBtn);
+            stack.Children.Add(clipHkRow);
+            stack.Children.Add(new TextBlock { Text = "按下快捷键从鼠标位置弹出剪贴板历史。", Foreground = fg, FontSize = 10, Margin = new Thickness(0, 0, 0, 16) });
+
+            stack.Children.Add(new Border { Height = 1, Background = new SolidColorBrush(Color.FromRgb(80, 75, 120)), Margin = new Thickness(0, 4, 0, 12) });
+
             var autoStartCb = new CheckBox { Content = "开机自启", Foreground = Brushes.White, FontSize = 12, Margin = new Thickness(0, 0, 0, 16) };
             autoStartCb.IsChecked = IsAutoStartEnabled();
             stack.Children.Add(autoStartCb);
@@ -140,6 +179,7 @@ namespace PowerAudioManager
                 AppPrefs.SetBool("LockPosition", lockCb.IsChecked == true);
                 AppPrefs.SetBool("AutoCollapse", autoCb.IsChecked == true);
                 AppPrefs.SetBool("AutoExpandAfterManual", expandAfterManualCb.IsChecked == true);
+                AppPrefs.SetInt("Clipboard.Hotkey", curClipHk);
                 int d; if (int.TryParse(delayBox.Text, out d) && d >= 0) AppPrefs.SetInt("AutoCollapseDelay", d);
                 if (autoStartCb.IsChecked != IsAutoStartEnabled()) ToggleAutoStart(autoStartCb.IsChecked == true);
 
@@ -157,6 +197,7 @@ namespace PowerAudioManager
                         mw._pinBtn.Foreground = new SolidColorBrush(mw._lockPosition ? MainWindow.AccentColor : MainWindow.TextSecondary);
                     }
                     mw.RefreshAutoCollapse();
+                    mw.RefreshHotkeys();
                     mw.ApplyFont();
                 }
                 dlg.DialogResult = true; dlg.Close();
@@ -397,7 +438,16 @@ namespace PowerAudioManager
             rootRow.Children.Add(browseBtn);
             rootRow.Children.Add(rootBox);
             stack.Children.Add(rootRow);
-            stack.Children.Add(new TextBlock { Text = "截图按前台应用名自动建子文件夹存放。", Foreground = fg, FontSize = 10, Margin = new Thickness(0, 0, 0, 16) });
+            stack.Children.Add(new TextBlock { Text = "截图按前台应用名自动建子文件夹存放。", Foreground = fg, FontSize = 10, Margin = new Thickness(0, 0, 0, 12) });
+
+            // Recent count for the embedded gallery strip.
+            var recentRow = new DockPanel { Margin = new Thickness(0, 0, 0, 16) };
+            recentRow.Children.Add(new TextBlock { Text = "悬浮窗图库显示最近", Foreground = fg, FontSize = 12, VerticalAlignment = VerticalAlignment.Center });
+            var recentBox = new TextBox { Width = 50, MinHeight = 24, Margin = new Thickness(8, 0, 8, 0), Background = new SolidColorBrush(Color.FromRgb(42, 39, 60)), Foreground = Brushes.White, BorderBrush = new SolidColorBrush(Color.FromRgb(80, 75, 120)) };
+            recentBox.Text = AppPrefs.GetInt("Gallery.RecentCount", 10).ToString();
+            recentRow.Children.Add(recentBox);
+            recentRow.Children.Add(new TextBlock { Text = "张截图", Foreground = fg, FontSize = 12, VerticalAlignment = VerticalAlignment.Center });
+            stack.Children.Add(recentRow);
 
             stack.Children.Add(new Border { Height = 1, Background = new SolidColorBrush(Color.FromRgb(80, 75, 120)), Margin = new Thickness(0, 0, 0, 12) });
 
@@ -443,7 +493,8 @@ namespace PowerAudioManager
             {
                 AppPrefs.SetString("Screenshot.RootDir", rootBox.Text.Trim());
                 AppPrefs.SetInt("Screenshot.Hotkey", curHotkey);
-                if (owner is MainWindow) ((MainWindow)owner).RefreshHotkeys();
+                int rc; if (int.TryParse(recentBox.Text, out rc) && rc >= 0) AppPrefs.SetInt("Gallery.RecentCount", rc);
+                if (owner is MainWindow) { ((MainWindow)owner).RefreshHotkeys(); ((MainWindow)owner).RebuildUI(); }
                 dlg.DialogResult = true; dlg.Close();
             };
             ((Button)btns.Children[1]).Click += (s, e) => { dlg.DialogResult = false; dlg.Close(); };

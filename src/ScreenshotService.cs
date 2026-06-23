@@ -54,6 +54,10 @@ namespace PowerAudioManager
         const uint KEYEVENTF_KEYDOWN = 0;
         const uint KEYEVENTF_KEYUP = 0x0002;
 
+        // Fired (on the UI thread) after a screenshot is saved, so the gallery
+        // strip can refresh to include the new capture.
+        public static event Action Captured;
+
         public static void CaptureForeground()
         {
             string exeName = null;
@@ -129,7 +133,11 @@ namespace PowerAudioManager
             string toastSource = source;
             Application.Current.Dispatcher.BeginInvoke(new Action(() =>
             {
-                if (savedPath != null) ScreenshotToast.Show(exeName ?? "截图", savedPath, toastSource);
+                if (savedPath != null)
+                {
+                    ScreenshotToast.Show(exeName ?? "截图", savedPath, toastSource);
+                    if (Captured != null) Captured();
+                }
                 else if (error != null) ScreenshotToast.ShowError(error);
             }));
         }
@@ -194,14 +202,6 @@ namespace PowerAudioManager
             var sb = new System.Text.StringBuilder();
             foreach (char c in s) if (Array.IndexOf(invalid, c) < 0) sb.Append(c);
             return sb.Length == 0 ? "Unknown" : sb.ToString();
-        }
-
-        static string RootDir()
-        {
-            var s = AppPrefs.GetString(RootPrefKey, "");
-            if (string.IsNullOrWhiteSpace(s))
-                s = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyPictures), DefaultRoot);
-            return s;
         }
 
         static string SaveBitmap(Bitmap bmp, string exeName)
@@ -283,6 +283,33 @@ namespace PowerAudioManager
                 return bmp;
             }
             catch { return null; }
+        }
+
+        // The N most recent screenshots across all per-app subfolders (newest first),
+        // for the embedded gallery preview in the floating window.
+        public static System.Collections.Generic.List<string> GetRecent(int count)
+        {
+            var list = new System.Collections.Generic.List<string>();
+            try
+            {
+                if (count <= 0) return list;
+                var root = RootDir();
+                if (!System.IO.Directory.Exists(root)) return list;
+                var files = new System.Collections.Generic.List<string>(
+                    System.IO.Directory.GetFiles(root, "*.png", System.IO.SearchOption.AllDirectories));
+                files.Sort((a, b) => System.IO.File.GetLastWriteTime(b).CompareTo(System.IO.File.GetLastWriteTime(a)));
+                for (int i = 0; i < files.Count && i < count; i++) list.Add(files[i]);
+            }
+            catch { }
+            return list;
+        }
+
+        public static string RootDir()
+        {
+            var s = AppPrefs.GetString(RootPrefKey, "");
+            if (string.IsNullOrWhiteSpace(s))
+                s = System.IO.Path.Combine(System.Environment.GetFolderPath(System.Environment.SpecialFolder.MyPictures), DefaultRoot);
+            return s;
         }
     }
 }

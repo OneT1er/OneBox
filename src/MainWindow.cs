@@ -200,6 +200,9 @@ namespace PowerAudioManager
                 try { UpdateChecker.CheckAsync(this, false); } catch { }
                 try { RestartAutoCleanTimer(); } catch { }
                 try { StartAutoCollapse(); } catch { }
+                // Refresh the gallery strip when a new screenshot lands.
+                ScreenshotService.Captured -= OnScreenshotCaptured;
+                ScreenshotService.Captured += OnScreenshotCaptured;
                 // Register hotkey window hook
                 _hotkeyHwnd = hwnd;
                 System.Windows.Interop.HwndSource.FromHwnd(hwnd).AddHook(WndProc);
@@ -585,19 +588,60 @@ namespace PowerAudioManager
 
         void BuildGalleryButton(StackPanel contentPanel)
         {
-            var gContent = new TextBlock { FontSize = 12, Foreground = new SolidColorBrush(TextSecondary) };
-            gContent.Inlines.Add(new Run("🖼") { FontFamily = EmojiFont });
-            gContent.Inlines.Add(new Run("  截图图库"));
-            var gBtn = new Button {
-                Content = gContent,
-                Padding = new Thickness(10, 6, 10, 6),
-                Cursor = Cursors.Hand,
-                Margin = new Thickness(0, 6, 0, 0),
-                ToolTip = "查看已保存的截图"
+            if (contentPanel.Children.Count > 0) contentPanel.Children.Add(MakeDivider());
+            var header = new TextBlock { Foreground = new SolidColorBrush(AccentColor), FontSize = 12, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 0, 0, 6) };
+            header.Inlines.Add(new Run("🖼") { FontFamily = EmojiFont });
+            header.Inlines.Add(new Run(" 最近截图"));
+            contentPanel.Children.Add(header);
+
+            // Horizontal thumbnail strip of the N most recent screenshots.
+            int count = AppPrefs.GetInt("Gallery.RecentCount", 10);
+            var scroller = new ScrollViewer
+            {
+                VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
+                MaxHeight = 84,
+                Margin = new Thickness(0, 0, 0, 4)
             };
-            StyleButton(gBtn, false);
-            gBtn.Click += (s, e) => ScreenshotGallery.Show(this);
-            contentPanel.Children.Add(gBtn);
+            var wrap = new StackPanel { Orientation = Orientation.Horizontal };
+            scroller.Content = wrap;
+            contentPanel.Children.Add(scroller);
+
+            // Load thumbnails on a background thread, stream them in.
+            System.Threading.ThreadPool.QueueUserWorkItem(_ =>
+            {
+                var files = ScreenshotService.GetRecent(count);
+                foreach (var path in files)
+                {
+                    var p = path;
+                    var thumb = ScreenshotService.LoadThumbnail(p, 144, 144);
+                    if (thumb == null) continue;
+                    Dispatcher.BeginInvoke(new Action(() =>
+                    {
+                        var img = new System.Windows.Controls.Image
+                        {
+                            Source = thumb,
+                            Width = 72, Height = 72,
+                            Stretch = Stretch.UniformToFill,
+                            Margin = new Thickness(0, 0, 6, 0),
+                            Cursor = Cursors.Hand,
+                            ToolTip = System.IO.Path.GetFileName(p)
+                        };
+                        img.MouseLeftButtonDown += (s, e) => { try { System.Diagnostics.Process.Start("explorer.exe", "/select,\"" + p + "\""); } catch { } };
+                        wrap.Children.Add(img);
+                    }));
+                }
+                Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    if (wrap.Children.Count == 0)
+                        wrap.Children.Add(new TextBlock { Text = "（暂无截图）", Foreground = new SolidColorBrush(TextSecondary), FontSize = 11, VerticalAlignment = VerticalAlignment.Center });
+                }));
+            });
+
+            var openRootBtn = new Button { Content = "打开截图文件夹", Padding = new Thickness(10, 4, 10, 4), FontSize = 11, Cursor = Cursors.Hand, Margin = new Thickness(0, 4, 0, 0) };
+            StyleButton(openRootBtn, false);
+            openRootBtn.Click += (s, e) => { try { System.Diagnostics.Process.Start("explorer.exe", "\"" + ScreenshotService.RootDir() + "\""); } catch { } };
+            contentPanel.Children.Add(openRootBtn);
         }
 
 
@@ -1214,6 +1258,15 @@ namespace PowerAudioManager
                     handled = true;
                     return IntPtr.Zero;
                 }
+                if (id == Native.HOTKEY_ID_CLIPBOARD)
+                {
+                    AppLog.Log("Hotkey", "clipboard history triggered");
+                    Native.POINT pt;
+                    Native.GetCursorPos(out pt);
+                    ClipboardHistoryPanel.ShowAt(this, pt.X, pt.Y);
+                    handled = true;
+                    return IntPtr.Zero;
+                }
                 string devName;
                 if (_hotkeyMap.TryGetValue(id, out devName))
                 {
@@ -1250,6 +1303,7 @@ namespace PowerAudioManager
             _hotkeyMap.Clear();
             Native.UnregisterHotKey(_hotkeyHwnd, Native.HOTKEY_ID_TRANSLATE);
             Native.UnregisterHotKey(_hotkeyHwnd, Native.HOTKEY_ID_SCREENSHOT);
+            Native.UnregisterHotKey(_hotkeyHwnd, Native.HOTKEY_ID_CLIPBOARD);
         }
 
         internal void RefreshHotkeys()
@@ -1276,6 +1330,20 @@ namespace PowerAudioManager
                 if ((smods & 8) != 0) swinMods |= Native.MOD_WIN;
                 Native.RegisterHotKey(_hotkeyHwnd, Native.HOTKEY_ID_SCREENSHOT, swinMods, svk);
             }
+            // Clipboard-history hotkey: user-bound (Clipboard.Hotkey). No default.
+            Native.UnregisterHotKey(_hotkeyHwnd, Native.HOTKEY_ID_CLIPBOARD);
+            int clipEncoded = AppPrefs.GetInt("Clipboard.Hotkey", 0);
+            if (clipEncoded != 0)
+            {
+                int cmods = (clipEncoded >> 16) & 0xFFFF;
+                uint cvk = (uint)(clipEncoded & 0xFFFF);
+                uint cwinMods = 0;
+                if ((cmods & 1) != 0) cwinMods |= Native.MOD_ALT;
+                if ((cmods & 2) != 0) cwinMods |= Native.MOD_CONTROL;
+                if ((cmods & 4) != 0) cwinMods |= Native.MOD_SHIFT;
+                if ((cmods & 8) != 0) cwinMods |= Native.MOD_WIN;
+                Native.RegisterHotKey(_hotkeyHwnd, Native.HOTKEY_ID_CLIPBOARD, cwinMods, cvk);
+            }
             int nextId = Native.HOTKEY_ID_BASE;
             foreach (var kv in DevicePrefs.GetAllHotkeys())
             {
@@ -1297,6 +1365,13 @@ namespace PowerAudioManager
         void ToggleCollapse(object sender, RoutedEventArgs e)
         {
             SetExpanded(!_isExpanded, true);
+        }
+
+        // A new screenshot was saved — refresh the embedded gallery strip so it
+        // shows up immediately. Cheap to rebuild (thumbnails load async).
+        void OnScreenshotCaptured()
+        {
+            try { if (ModuleVisible("Gallery") && IsVisible) RebuildUI(); } catch { }
         }
 
         // Core expand/collapse, reused by the manual button and auto-collapse.

@@ -46,10 +46,17 @@ namespace PowerAudioManager
         public const int HOTKEY_ID_BASE = 0xB000;
         public const int HOTKEY_ID_TRANSLATE = 0xBFFF;
         public const int HOTKEY_ID_SCREENSHOT = 0xBFFE;
+        public const int HOTKEY_ID_CLIPBOARD = 0xBFD0;
 
         // ---- Working-set trim ---------------------------------------------------
         [DllImport("kernel32.dll")]
         public static extern bool SetProcessWorkingSetSize(IntPtr hProcess, int min, int max);
+
+        // ---- Cursor position (for clipboard popup at mouse) --------------------
+        [DllImport("user32.dll")]
+        public static extern bool GetCursorPos(out POINT lpPoint);
+        [StructLayout(LayoutKind.Sequential)]
+        public struct POINT { public int X, Y; }
 
         // ---- Console OEM code page ---------------------------------------------
         // powercfg writes its output using the system OEM code page (the active

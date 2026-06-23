@@ -248,8 +248,15 @@ namespace PowerAudioManager
     // Popup panel that lists clipboard history; click an item to copy it back.
     public static class ClipboardHistoryPanel
     {
-        public static void Show(Window owner)
+        public static void Show(Window owner) { ShowAt(owner, 0, 0); }
+
+        // Show the panel. If x/y are provided (screen device pixels, e.g. from
+        // GetCursorPos), position the window near the cursor instead of centred
+        // on the owner — so the clipboard hotkey pops the list where the mouse is.
+        public static void ShowAt(Window owner, int cursorX, int cursorY)
         {
+            bool atCursor = cursorX != 0 || cursorY != 0;
+
             var outer = new DockPanel { Margin = new Thickness(12) };
 
             var header = new TextBlock {
@@ -269,6 +276,36 @@ namespace PowerAudioManager
             scroller.Content = list;
 
             var dlg = OneBoxWindow.Create(owner, "剪贴板历史", 360, 420, outer, true);
+            // When invoked from the clipboard hotkey, place the window at the
+            // cursor (just below-right of it), clamped to the work area. Override
+            // the owner-centred startup location OneBoxWindow set.
+            if (atCursor)
+            {
+                dlg.WindowStartupLocation = WindowStartupLocation.Manual;
+                dlg.Loaded += (s, e) =>
+                {
+                    double dpi = 96.0;
+                    try
+                    {
+                        var src = System.Windows.PresentationSource.FromVisual(dlg);
+                        if (src != null && src.CompositionTarget != null)
+                            dpi = 96.0 * src.CompositionTarget.TransformToDevice.M11;
+                    }
+                    catch { }
+                    double scale = 96.0 / dpi;
+                    double w = dlg.ActualWidth > 0 ? dlg.ActualWidth : dlg.Width;
+                    double h = dlg.ActualHeight > 0 ? dlg.ActualHeight : dlg.Height;
+                    double left = cursorX * scale + 8;
+                    double top = cursorY * scale + 8;
+                    var wa = SystemParameters.WorkArea;
+                    if (left + w > wa.Right) left = wa.Right - w;
+                    if (top + h > wa.Bottom) top = wa.Bottom - h;
+                    if (left < wa.Left) left = wa.Left;
+                    if (top < wa.Top) top = wa.Top;
+                    dlg.Left = left;
+                    dlg.Top = top;
+                };
+            }
 
             Action render = null;
             render = () =>
