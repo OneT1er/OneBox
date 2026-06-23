@@ -234,6 +234,21 @@ namespace PowerAudioManager
             lock (_lock) { return new List<ClipItem>(_items); }
         }
 
+        // Remove a single history entry by its index in GetItems() (0 = newest).
+        // Deletes the on-disk image for image items. Used by the right-click
+        // "delete this entry" action in the clipboard panel.
+        public static void RemoveAt(int index)
+        {
+            lock (_lock)
+            {
+                if (index < 0 || index >= _items.Count) return;
+                var it = _items[index];
+                if (it.IsImage) { try { File.Delete(it.ImagePath); } catch { } }
+                _items.RemoveAt(index);
+            }
+            Save();
+        }
+
         public static void Clear()
         {
             lock (_lock)
@@ -260,7 +275,7 @@ namespace PowerAudioManager
             var outer = new DockPanel { Margin = new Thickness(12) };
 
             var header = new TextBlock {
-                Text = "最近复制的内容（点击复制）",
+                Text = "最近复制的内容（左键复制 · 右键删除）",
                 Foreground = Brushes.White, FontSize = 12, Margin = new Thickness(0, 0, 0, 8) };
             DockPanel.SetDock(header, Dock.Top);
             outer.Children.Add(header);
@@ -319,9 +334,10 @@ namespace PowerAudioManager
                         FontSize = 11, Margin = new Thickness(0, 8, 0, 0) });
                     return;
                 }
-                foreach (var item in items)
+                for (int idx = 0; idx < items.Count; idx++)
                 {
-                    var captured = item;
+                    var captured = items[idx];
+                    int capturedIndex = idx;
                     Button btn;
                     if (captured.IsImage)
                     {
@@ -354,7 +370,7 @@ namespace PowerAudioManager
                             Margin = new Thickness(0, 0, 0, 4),
                             FontSize = 11,
                             Cursor = Cursors.Hand,
-                            ToolTip = "点击复制此图片"
+                            ToolTip = "左键复制 · 右键删除"
                         };
                     }
                     else
@@ -382,6 +398,12 @@ namespace PowerAudioManager
                         }
                         catch { }
                         dlg.Close();
+                    };
+                    // Right-click: delete this single entry (no close).
+                    btn.MouseRightButtonUp += (s, e) => {
+                        ClipboardHistory.RemoveAt(capturedIndex);
+                        render();
+                        e.Handled = true;
                     };
                     list.Children.Add(btn);
                 }

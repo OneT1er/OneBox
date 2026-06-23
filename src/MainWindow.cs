@@ -200,9 +200,6 @@ namespace PowerAudioManager
                 try { UpdateChecker.CheckAsync(this, false); } catch { }
                 try { RestartAutoCleanTimer(); } catch { }
                 try { StartAutoCollapse(); } catch { }
-                // Refresh the gallery strip when a new screenshot lands.
-                ScreenshotService.Captured -= OnScreenshotCaptured;
-                ScreenshotService.Captured += OnScreenshotCaptured;
                 // Register hotkey window hook
                 _hotkeyHwnd = hwnd;
                 System.Windows.Interop.HwndSource.FromHwnd(hwnd).AddHook(WndProc);
@@ -588,60 +585,19 @@ namespace PowerAudioManager
 
         void BuildGalleryButton(StackPanel contentPanel)
         {
-            if (contentPanel.Children.Count > 0) contentPanel.Children.Add(MakeDivider());
-            var header = new TextBlock { Foreground = new SolidColorBrush(AccentColor), FontSize = 12, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 0, 0, 6) };
-            header.Inlines.Add(new Run("🖼") { FontFamily = EmojiFont });
-            header.Inlines.Add(new Run(" 最近截图"));
-            contentPanel.Children.Add(header);
-
-            // Horizontal thumbnail strip of the N most recent screenshots.
-            int count = AppPrefs.GetInt("Gallery.RecentCount", 10);
-            var scroller = new ScrollViewer
-            {
-                VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
-                HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
-                MaxHeight = 84,
-                Margin = new Thickness(0, 0, 0, 4)
+            var gContent = new TextBlock { FontSize = 12, Foreground = new SolidColorBrush(TextSecondary) };
+            gContent.Inlines.Add(new Run("🖼") { FontFamily = EmojiFont });
+            gContent.Inlines.Add(new Run("  截图图库"));
+            var gBtn = new Button {
+                Content = gContent,
+                Padding = new Thickness(10, 6, 10, 6),
+                Cursor = Cursors.Hand,
+                Margin = new Thickness(0, 6, 0, 0),
+                ToolTip = "查看已保存的截图"
             };
-            var wrap = new StackPanel { Orientation = Orientation.Horizontal };
-            scroller.Content = wrap;
-            contentPanel.Children.Add(scroller);
-
-            // Load thumbnails on a background thread, stream them in.
-            System.Threading.ThreadPool.QueueUserWorkItem(_ =>
-            {
-                var files = ScreenshotService.GetRecent(count);
-                foreach (var path in files)
-                {
-                    var p = path;
-                    var thumb = ScreenshotService.LoadThumbnail(p, 144, 144);
-                    if (thumb == null) continue;
-                    Dispatcher.BeginInvoke(new Action(() =>
-                    {
-                        var img = new System.Windows.Controls.Image
-                        {
-                            Source = thumb,
-                            Width = 72, Height = 72,
-                            Stretch = Stretch.UniformToFill,
-                            Margin = new Thickness(0, 0, 6, 0),
-                            Cursor = Cursors.Hand,
-                            ToolTip = System.IO.Path.GetFileName(p)
-                        };
-                        img.MouseLeftButtonDown += (s, e) => { try { System.Diagnostics.Process.Start("explorer.exe", "/select,\"" + p + "\""); } catch { } };
-                        wrap.Children.Add(img);
-                    }));
-                }
-                Dispatcher.BeginInvoke(new Action(() =>
-                {
-                    if (wrap.Children.Count == 0)
-                        wrap.Children.Add(new TextBlock { Text = "（暂无截图）", Foreground = new SolidColorBrush(TextSecondary), FontSize = 11, VerticalAlignment = VerticalAlignment.Center });
-                }));
-            });
-
-            var openRootBtn = new Button { Content = "打开截图文件夹", Padding = new Thickness(10, 4, 10, 4), FontSize = 11, Cursor = Cursors.Hand, Margin = new Thickness(0, 4, 0, 0) };
-            StyleButton(openRootBtn, false);
-            openRootBtn.Click += (s, e) => { try { System.Diagnostics.Process.Start("explorer.exe", "\"" + ScreenshotService.RootDir() + "\""); } catch { } };
-            contentPanel.Children.Add(openRootBtn);
+            StyleButton(gBtn, false);
+            gBtn.Click += (s, e) => ScreenshotGallery.Show(this);
+            contentPanel.Children.Add(gBtn);
         }
 
 
@@ -1306,6 +1262,29 @@ namespace PowerAudioManager
             Native.UnregisterHotKey(_hotkeyHwnd, Native.HOTKEY_ID_CLIPBOARD);
         }
 
+        // Test whether a hotkey combo (encoded: hi16 mods, lo16 VK) can be
+        // registered (i.e. not already taken by another app). Registers on a
+        // scratch id, unregisters immediately, returns true if it succeeded.
+        // Used by the settings dialogs so the user gets immediate feedback when
+        // a combo is occupied instead of silently failing to fire later.
+        internal bool TestHotkey(int encoded)
+        {
+            if (_hotkeyHwnd == IntPtr.Zero) return true;
+            if (encoded == 0) return true;
+            int mods = (encoded >> 16) & 0xFFFF;
+            uint vk = (uint)(encoded & 0xFFFF);
+            uint winMods = 0;
+            if ((mods & 1) != 0) winMods |= Native.MOD_ALT;
+            if ((mods & 2) != 0) winMods |= Native.MOD_CONTROL;
+            if ((mods & 4) != 0) winMods |= Native.MOD_SHIFT;
+            if ((mods & 8) != 0) winMods |= Native.MOD_WIN;
+            int testId = 0xBE00; // scratch id, never used by real hotkeys
+            Native.UnregisterHotKey(_hotkeyHwnd, testId);
+            bool ok = Native.RegisterHotKey(_hotkeyHwnd, testId, winMods, vk);
+            Native.UnregisterHotKey(_hotkeyHwnd, testId);
+            return ok;
+        }
+
         internal void RefreshHotkeys()
         {
             if (_hotkeyHwnd == IntPtr.Zero) return;
@@ -1365,13 +1344,6 @@ namespace PowerAudioManager
         void ToggleCollapse(object sender, RoutedEventArgs e)
         {
             SetExpanded(!_isExpanded, true);
-        }
-
-        // A new screenshot was saved — refresh the embedded gallery strip so it
-        // shows up immediately. Cheap to rebuild (thumbnails load async).
-        void OnScreenshotCaptured()
-        {
-            try { if (ModuleVisible("Gallery") && IsVisible) RebuildUI(); } catch { }
         }
 
         // Core expand/collapse, reused by the manual button and auto-collapse.

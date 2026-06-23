@@ -42,6 +42,7 @@ namespace PowerAudioManager
             tabs.Items.Add(BuildMemoryTab(owner, dlg, fg, lightText));
             tabs.Items.Add(BuildTranslateTab(owner, dlg, fg, lightText));
             tabs.Items.Add(BuildScreenshotTab(owner, dlg, fg, lightText));
+            tabs.Items.Add(BuildClipboardTab(owner, dlg, fg, lightText));
 
             if (openTab >= 0 && openTab < tabs.Items.Count) tabs.SelectedIndex = openTab;
 
@@ -127,45 +128,6 @@ namespace PowerAudioManager
 
             stack.Children.Add(new Border { Height = 1, Background = new SolidColorBrush(Color.FromRgb(80, 75, 120)), Margin = new Thickness(0, 4, 0, 12) });
 
-            stack.Children.Add(new TextBlock { Text = "剪贴板历史快捷键", Foreground = Brushes.White, FontWeight = FontWeights.SemiBold, FontSize = 13, Margin = new Thickness(0, 0, 0, 6) });
-            int curClipHk = AppPrefs.GetInt("Clipboard.Hotkey", 0);
-            var clipHkLabel = new TextBlock
-            {
-                Text = curClipHk != 0 ? HotkeyCaptureDialog.Format(curClipHk) : "（未设置）",
-                Foreground = curClipHk != 0 ? Brushes.White : fg,
-                FontSize = 13, FontWeight = FontWeights.SemiBold,
-                VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(0, 0, 12, 0)
-            };
-            var setClipHkBtn = new Button { Content = "设置快捷键", Height = 28, FontSize = 12, Margin = new Thickness(0, 0, 8, 0), Padding = new Thickness(10, 0, 10, 0) };
-            AppResources.StyleDialogButton(setClipHkBtn, false);
-            var clearClipHkBtn = new Button { Content = "清除", Height = 28, FontSize = 12, Padding = new Thickness(10, 0, 10, 0) };
-            AppResources.StyleDialogButton(clearClipHkBtn, false);
-            setClipHkBtn.Click += (s, e) =>
-            {
-                var captured = HotkeyCaptureDialog.Show(dlg, curClipHk);
-                if (captured.HasValue)
-                {
-                    curClipHk = captured.Value;
-                    clipHkLabel.Text = HotkeyCaptureDialog.Format(curClipHk);
-                    clipHkLabel.Foreground = Brushes.White;
-                }
-            };
-            clearClipHkBtn.Click += (s, e) =>
-            {
-                curClipHk = 0;
-                clipHkLabel.Text = "（未设置）";
-                clipHkLabel.Foreground = fg;
-            };
-            var clipHkRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 4) };
-            clipHkRow.Children.Add(clipHkLabel);
-            clipHkRow.Children.Add(setClipHkBtn);
-            clipHkRow.Children.Add(clearClipHkBtn);
-            stack.Children.Add(clipHkRow);
-            stack.Children.Add(new TextBlock { Text = "按下快捷键从鼠标位置弹出剪贴板历史。", Foreground = fg, FontSize = 10, Margin = new Thickness(0, 0, 0, 16) });
-
-            stack.Children.Add(new Border { Height = 1, Background = new SolidColorBrush(Color.FromRgb(80, 75, 120)), Margin = new Thickness(0, 4, 0, 12) });
-
             var autoStartCb = new CheckBox { Content = "开机自启", Foreground = Brushes.White, FontSize = 12, Margin = new Thickness(0, 0, 0, 16) };
             autoStartCb.IsChecked = IsAutoStartEnabled();
             stack.Children.Add(autoStartCb);
@@ -179,7 +141,6 @@ namespace PowerAudioManager
                 AppPrefs.SetBool("LockPosition", lockCb.IsChecked == true);
                 AppPrefs.SetBool("AutoCollapse", autoCb.IsChecked == true);
                 AppPrefs.SetBool("AutoExpandAfterManual", expandAfterManualCb.IsChecked == true);
-                AppPrefs.SetInt("Clipboard.Hotkey", curClipHk);
                 int d; if (int.TryParse(delayBox.Text, out d) && d >= 0) AppPrefs.SetInt("AutoCollapseDelay", d);
                 if (autoStartCb.IsChecked != IsAutoStartEnabled()) ToggleAutoStart(autoStartCb.IsChecked == true);
 
@@ -438,16 +399,7 @@ namespace PowerAudioManager
             rootRow.Children.Add(browseBtn);
             rootRow.Children.Add(rootBox);
             stack.Children.Add(rootRow);
-            stack.Children.Add(new TextBlock { Text = "截图按前台应用名自动建子文件夹存放。", Foreground = fg, FontSize = 10, Margin = new Thickness(0, 0, 0, 12) });
-
-            // Recent count for the embedded gallery strip.
-            var recentRow = new DockPanel { Margin = new Thickness(0, 0, 0, 16) };
-            recentRow.Children.Add(new TextBlock { Text = "悬浮窗图库显示最近", Foreground = fg, FontSize = 12, VerticalAlignment = VerticalAlignment.Center });
-            var recentBox = new TextBox { Width = 50, MinHeight = 24, Margin = new Thickness(8, 0, 8, 0), Background = new SolidColorBrush(Color.FromRgb(42, 39, 60)), Foreground = Brushes.White, BorderBrush = new SolidColorBrush(Color.FromRgb(80, 75, 120)) };
-            recentBox.Text = AppPrefs.GetInt("Gallery.RecentCount", 10).ToString();
-            recentRow.Children.Add(recentBox);
-            recentRow.Children.Add(new TextBlock { Text = "张截图", Foreground = fg, FontSize = 12, VerticalAlignment = VerticalAlignment.Center });
-            stack.Children.Add(recentRow);
+            stack.Children.Add(new TextBlock { Text = "截图按前台应用名自动建子文件夹存放。", Foreground = fg, FontSize = 10, Margin = new Thickness(0, 0, 0, 16) });
 
             stack.Children.Add(new Border { Height = 1, Background = new SolidColorBrush(Color.FromRgb(80, 75, 120)), Margin = new Thickness(0, 0, 0, 12) });
 
@@ -470,9 +422,21 @@ namespace PowerAudioManager
                 var captured = HotkeyCaptureDialog.Show(dlg, curHotkey);
                 if (captured.HasValue)
                 {
-                    curHotkey = captured.Value;
-                    hkLabel.Text = HotkeyCaptureDialog.Format(curHotkey);
-                    hkLabel.Foreground = Brushes.White;
+                    int enc = captured.Value;
+                    bool ok = (owner is MainWindow) ? ((MainWindow)owner).TestHotkey(enc) : true;
+                    if (ok)
+                    {
+                        curHotkey = enc;
+                        hkLabel.Text = HotkeyCaptureDialog.Format(curHotkey);
+                        hkLabel.Foreground = Brushes.White;
+                    }
+                    else
+                    {
+                        curHotkey = enc;
+                        hkLabel.Text = HotkeyCaptureDialog.Format(curHotkey) + "（被占用）";
+                        hkLabel.Foreground = new SolidColorBrush(Color.FromRgb(240, 170, 170));
+                        MessageBox.Show(dlg, "该快捷键已被其他程序占用，OneBox 无法注册。\n你可以换一个组合，或先释放占用它的程序。", "快捷键被占用", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    }
                 }
             };
             clearHkBtn.Click += (s, e) =>
@@ -493,7 +457,6 @@ namespace PowerAudioManager
             {
                 AppPrefs.SetString("Screenshot.RootDir", rootBox.Text.Trim());
                 AppPrefs.SetInt("Screenshot.Hotkey", curHotkey);
-                int rc; if (int.TryParse(recentBox.Text, out rc) && rc >= 0) AppPrefs.SetInt("Gallery.RecentCount", rc);
                 if (owner is MainWindow) { ((MainWindow)owner).RefreshHotkeys(); ((MainWindow)owner).RebuildUI(); }
                 dlg.DialogResult = true; dlg.Close();
             };
@@ -501,6 +464,78 @@ namespace PowerAudioManager
             stack.Children.Add(btns);
 
             return new TabItem { Header = " 截图 ", Content = Scroll(stack) };
+        }
+
+        // ---- 剪贴板 tab ---------------------------------------------------------
+
+        static TabItem BuildClipboardTab(Window owner, Window dlg, SolidColorBrush fg, SolidColorBrush lightText)
+        {
+            var stack = new StackPanel { Margin = new Thickness(20) };
+
+            stack.Children.Add(new TextBlock { Text = "剪贴板历史快捷键", Foreground = Brushes.White, FontWeight = FontWeights.SemiBold, FontSize = 13, Margin = new Thickness(0, 0, 0, 6) });
+            int curClipHk = AppPrefs.GetInt("Clipboard.Hotkey", 0);
+            var clipHkLabel = new TextBlock
+            {
+                Text = curClipHk != 0 ? HotkeyCaptureDialog.Format(curClipHk) : "（未设置）",
+                Foreground = curClipHk != 0 ? Brushes.White : fg,
+                FontSize = 13, FontWeight = FontWeights.SemiBold,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, 12, 0)
+            };
+            var setClipHkBtn = new Button { Content = "设置快捷键", Height = 28, FontSize = 12, Margin = new Thickness(0, 0, 8, 0), Padding = new Thickness(10, 0, 10, 0) };
+            AppResources.StyleDialogButton(setClipHkBtn, false);
+            var clearClipHkBtn = new Button { Content = "清除", Height = 28, FontSize = 12, Padding = new Thickness(10, 0, 10, 0) };
+            AppResources.StyleDialogButton(clearClipHkBtn, false);
+            setClipHkBtn.Click += (s, e) =>
+            {
+                var captured = HotkeyCaptureDialog.Show(dlg, curClipHk);
+                if (captured.HasValue)
+                {
+                    int enc = captured.Value;
+                    // Test-register immediately so we can tell the user if the combo
+                    // is already taken by another app — otherwise they'd bind it and
+                    // silently never get it to fire.
+                    bool ok = (owner is MainWindow) ? ((MainWindow)owner).TestHotkey(enc) : true;
+                    if (ok)
+                    {
+                        curClipHk = enc;
+                        clipHkLabel.Text = HotkeyCaptureDialog.Format(curClipHk);
+                        clipHkLabel.Foreground = Brushes.White;
+                    }
+                    else
+                    {
+                        // Still show what they pressed, but warn it's taken.
+                        curClipHk = enc;
+                        clipHkLabel.Text = HotkeyCaptureDialog.Format(curClipHk) + "（被占用）";
+                        clipHkLabel.Foreground = new SolidColorBrush(Color.FromRgb(240, 170, 170));
+                        MessageBox.Show(dlg, "该快捷键已被其他程序占用，OneBox 无法注册。\n你可以换一个组合，或先释放占用它的程序。", "快捷键被占用", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    }
+                }
+            };
+            clearClipHkBtn.Click += (s, e) =>
+            {
+                curClipHk = 0;
+                clipHkLabel.Text = "（未设置）";
+                clipHkLabel.Foreground = fg;
+            };
+            var clipHkRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 4) };
+            clipHkRow.Children.Add(clipHkLabel);
+            clipHkRow.Children.Add(setClipHkBtn);
+            clipHkRow.Children.Add(clearClipHkBtn);
+            stack.Children.Add(clipHkRow);
+            stack.Children.Add(new TextBlock { Text = "按下快捷键从鼠标位置弹出剪贴板历史。左键复制，右键删除单条。", Foreground = fg, FontSize = 10, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 0) });
+
+            var btns = MakeButtons();
+            ((Button)btns.Children[0]).Click += (s, e) =>
+            {
+                AppPrefs.SetInt("Clipboard.Hotkey", curClipHk);
+                if (owner is MainWindow) ((MainWindow)owner).RefreshHotkeys();
+                dlg.DialogResult = true; dlg.Close();
+            };
+            ((Button)btns.Children[1]).Click += (s, e) => { dlg.DialogResult = false; dlg.Close(); };
+            stack.Children.Add(btns);
+
+            return new TabItem { Header = " 剪贴板 ", Content = Scroll(stack) };
         }
 
         // ---- shared helpers ----------------------------------------------------
