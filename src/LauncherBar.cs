@@ -22,7 +22,7 @@ namespace PowerAudioManager
     // (which lives in MainWindow).
     internal static class LauncherBar
     {
-        const int LauncherSlots = 8;
+        const int LauncherSlots = 4;
         const string LauncherPrefKey = "Launcher.Paths";
 
         // Build the launcher section into contentPanel. requestRebuild is
@@ -36,7 +36,7 @@ namespace PowerAudioManager
             header.Inlines.Add(new Run("🚀") { FontFamily = AppResources.EmojiFont });
             header.Inlines.Add(new Run(" 快捷启动"));
             contentPanel.Children.Add(header);
-            var row = new WrapPanel { Orientation = Orientation.Horizontal };
+            var row = new StackPanel { Orientation = Orientation.Horizontal };
             var paths = LoadLauncherPaths();
             for (int i = 0; i < LauncherSlots; i++)
             {
@@ -102,7 +102,7 @@ namespace PowerAudioManager
         {
             var btn = new Button {
                 Width = 44, Height = 44,
-                Margin = new Thickness(0, 0, 6, 6),
+                Margin = new Thickness(0, 0, 6, 0),
                 Cursor = Cursors.Hand,
                 Background = new SolidColorBrush(MainWindow.CardColor),
                 BorderBrush = new SolidColorBrush(MainWindow.BorderColor),
@@ -114,21 +114,8 @@ namespace PowerAudioManager
                 var img = ExtractIcon(path);
                 if (img != null)
                     btn.Content = new System.Windows.Controls.Image { Source = img, Width = 24, Height = 24 };
-                else if (path.StartsWith("http://", StringComparison.OrdinalIgnoreCase) || path.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
-                {
-                    btn.Content = "🌐";
-                    btn.FontSize = 18;
-                }
-                else if (System.IO.Directory.Exists(path))
-                {
-                    btn.Content = "📁";
-                    btn.FontSize = 18;
-                }
                 else
-                {
                     btn.Content = "•";
-                    btn.FontSize = 18;
-                }
             }
             else
             {
@@ -164,10 +151,10 @@ namespace PowerAudioManager
                     e.Handled = true;
                 }
             };
-            // Drag-and-drop: drop an exe / shortcut / folder / URL onto the slot to assign it.
+            // Drag-and-drop: drop an exe / shortcut onto the slot to assign it.
             btn.DragEnter += (s, e) =>
             {
-                if (e.Data.GetDataPresent(DataFormats.FileDrop) || e.Data.GetDataPresent(DataFormats.Text) || e.Data.GetDataPresent(DataFormats.StringFormat))
+                if (e.Data.GetDataPresent(DataFormats.FileDrop))
                 {
                     e.Effects = DragDropEffects.Copy;
                     btn.BorderBrush = new SolidColorBrush(MainWindow.AccentColor);
@@ -195,24 +182,6 @@ namespace PowerAudioManager
                         // Resolve .lnk shortcuts to their target so the icon/launch works.
                         string resolved = ResolveShortcut(dropped);
                         SetLauncherSlotPath(index, resolved, paths, requestRebuild);
-                    }
-                }
-                else if (e.Data.GetDataPresent(DataFormats.Text) || e.Data.GetDataPresent(DataFormats.StringFormat))
-                {
-                    string text = null;
-                    if (e.Data.GetDataPresent(DataFormats.Text)) text = e.Data.GetData(DataFormats.Text) as string;
-                    else text = e.Data.GetData(DataFormats.StringFormat) as string;
-
-                    if (!string.IsNullOrEmpty(text))
-                    {
-                        if (text.StartsWith("http://", StringComparison.OrdinalIgnoreCase) || text.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
-                        {
-                            SetLauncherSlotPath(index, text, paths, requestRebuild);
-                        }
-                        else if (System.IO.Directory.Exists(text))
-                        {
-                            SetLauncherSlotPath(index, text, paths, requestRebuild);
-                        }
                     }
                 }
                 e.Handled = true;
