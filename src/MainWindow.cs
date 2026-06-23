@@ -30,6 +30,7 @@ namespace PowerAudioManager
         private StackPanel _powerSection;
         private StackPanel _audioSection;
         private bool _isExpanded = true;
+        private bool _collapsedManually; // true when collapsed via the button, not auto
         internal bool _topmost = false;
         internal Button _pinBtn;
         internal bool _lockPosition;
@@ -510,6 +511,9 @@ namespace PowerAudioManager
             // ---- Clipboard-history button -----------------------------------------
             if (ModuleVisible("Clipboard")) BuildClipboardButton(contentPanel);
 
+            // ---- Gallery button ---------------------------------------------------
+            if (ModuleVisible("Gallery")) BuildGalleryButton(contentPanel);
+
             _root.Children.Add(contentPanel);
             _mainBorder.Child = _root;
             Content = _mainBorder;
@@ -577,6 +581,23 @@ namespace PowerAudioManager
             StyleButton(cbBtn, false);
             cbBtn.Click += (s, e) => ClipboardHistoryPanel.Show(this);
             contentPanel.Children.Add(cbBtn);
+        }
+
+        void BuildGalleryButton(StackPanel contentPanel)
+        {
+            var gContent = new TextBlock { FontSize = 12, Foreground = new SolidColorBrush(TextSecondary) };
+            gContent.Inlines.Add(new Run("🖼") { FontFamily = EmojiFont });
+            gContent.Inlines.Add(new Run("  截图图库"));
+            var gBtn = new Button {
+                Content = gContent,
+                Padding = new Thickness(10, 6, 10, 6),
+                Cursor = Cursors.Hand,
+                Margin = new Thickness(0, 6, 0, 0),
+                ToolTip = "查看已保存的截图"
+            };
+            StyleButton(gBtn, false);
+            gBtn.Click += (s, e) => ScreenshotGallery.Show(this);
+            contentPanel.Children.Add(gBtn);
         }
 
 
@@ -1275,14 +1296,19 @@ namespace PowerAudioManager
 
         void ToggleCollapse(object sender, RoutedEventArgs e)
         {
-            SetExpanded(!_isExpanded);
+            SetExpanded(!_isExpanded, true);
         }
 
         // Core expand/collapse, reused by the manual button and auto-collapse.
-        // Keeps the bottom edge anchored so the window grows/shrinks in place.
-        void SetExpanded(bool expanded)
+        // manual=true means the user toggled it (by button); the auto-collapse
+        // timer passes false. A manually-collapsed window stays collapsed on hover
+        // unless the user opted into "AutoExpandAfterManual".
+        void SetExpanded(bool expanded) { SetExpanded(expanded, false); }
+        void SetExpanded(bool expanded, bool manual)
         {
             _isExpanded = expanded;
+            if (manual && !expanded) _collapsedManually = true;
+            if (expanded) _collapsedManually = false;
             // Pin bottom edge so the window collapses upward
             double bottom = Top + ActualHeight;
             if (_isExpanded)
@@ -1327,14 +1353,23 @@ namespace PowerAudioManager
         {
             if (!AppPrefs.GetBool("AutoCollapse", true)) return;
             _autoCollapseTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(Math.Max(0, AppPrefs.GetInt("AutoCollapseDelay", 8))) };
-            _autoCollapseTimer.Tick += (s, e) => { _autoCollapseTimer.Stop(); SetExpanded(false); };
+            _autoCollapseTimer.Tick += (s, e) => { _autoCollapseTimer.Stop(); SetExpanded(false, false); };
             MouseEnter += (s, e) =>
             {
                 if (_autoCollapseTimer != null) _autoCollapseTimer.Stop();
-                if (!_isExpanded) SetExpanded(true);
+                if (!_isExpanded)
+                {
+                    // A manually-collapsed window stays collapsed on hover unless the
+                    // user opted into auto-expanding after a manual collapse.
+                    if (_collapsedManually && !AppPrefs.GetBool("AutoExpandAfterManual", false)) return;
+                    SetExpanded(true);
+                }
             };
             MouseLeave += (s, e) =>
             {
+                // Don't auto-collapse a manually-collapsed window (it's already collapsed
+                // and the user wants it to stay that way until they expand it).
+                if (_collapsedManually) return;
                 if (_autoCollapseTimer != null && AppPrefs.GetBool("AutoCollapse", true))
                 {
                     _autoCollapseTimer.Interval = TimeSpan.FromSeconds(Math.Max(0, AppPrefs.GetInt("AutoCollapseDelay", 8)));

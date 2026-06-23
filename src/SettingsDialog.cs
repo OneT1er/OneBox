@@ -119,7 +119,11 @@ namespace PowerAudioManager
             delayRow.Children.Add(new TextBlock { Text = "秒后折叠（0=立即）", Foreground = fg, FontSize = 12, VerticalAlignment = VerticalAlignment.Center });
             stack.Children.Add(delayRow);
 
-            stack.Children.Add(new TextBlock { Text = "鼠标悬停悬浮窗自动展开。", Foreground = fg, FontSize = 10, Margin = new Thickness(0, 0, 0, 16) });
+            var expandAfterManualCb = new CheckBox { Content = "手动折叠后，鼠标悬停也自动展开", Foreground = fg, FontSize = 11, Margin = new Thickness(20, 0, 0, 8) };
+            expandAfterManualCb.IsChecked = AppPrefs.GetBool("AutoExpandAfterManual", false);
+            stack.Children.Add(expandAfterManualCb);
+
+            stack.Children.Add(new TextBlock { Text = "默认：手动折叠后保持折叠，鼠标悬停不展开；只有自动折叠的才悬停展开。", Foreground = fg, FontSize = 10, Margin = new Thickness(0, 0, 0, 16) });
 
             stack.Children.Add(new Border { Height = 1, Background = new SolidColorBrush(Color.FromRgb(80, 75, 120)), Margin = new Thickness(0, 4, 0, 12) });
 
@@ -135,6 +139,7 @@ namespace PowerAudioManager
                 AppPrefs.SetBool("Topmost", topmostCb.IsChecked == true);
                 AppPrefs.SetBool("LockPosition", lockCb.IsChecked == true);
                 AppPrefs.SetBool("AutoCollapse", autoCb.IsChecked == true);
+                AppPrefs.SetBool("AutoExpandAfterManual", expandAfterManualCb.IsChecked == true);
                 int d; if (int.TryParse(delayBox.Text, out d) && d >= 0) AppPrefs.SetInt("AutoCollapseDelay", d);
                 if (autoStartCb.IsChecked != IsAutoStartEnabled()) ToggleAutoStart(autoStartCb.IsChecked == true);
 
@@ -175,12 +180,14 @@ namespace PowerAudioManager
             var cbTr = MakeCb("翻译", "Translate");
             var cbLaunch = MakeCb("快捷启动栏", "Launcher");
             var cbClip = MakeCb("剪贴板历史", "Clipboard");
+            var cbGallery = MakeCb("截图图库", "Gallery");
             stack.Children.Add(cbPower);
             stack.Children.Add(cbAudio);
             stack.Children.Add(cbMem);
             stack.Children.Add(cbTr);
             stack.Children.Add(cbLaunch);
             stack.Children.Add(cbClip);
+            stack.Children.Add(cbGallery);
             stack.Children.Add(new TextBlock { Text = "隐藏后悬浮窗立即刷新；托盘菜单与全局快捷键不受影响。", Foreground = fg, FontSize = 10, Margin = new Thickness(0, 14, 0, 0), TextWrapping = TextWrapping.Wrap });
 
             var btns = MakeButtons();
@@ -192,6 +199,7 @@ namespace PowerAudioManager
                 AppPrefs.SetBool("UI.ShowTranslate", cbTr.IsChecked == true);
                 AppPrefs.SetBool("UI.ShowLauncher", cbLaunch.IsChecked == true);
                 AppPrefs.SetBool("UI.ShowClipboard", cbClip.IsChecked == true);
+                AppPrefs.SetBool("UI.ShowGallery", cbGallery.IsChecked == true);
                 if (owner is MainWindow) ((MainWindow)owner).RebuildUI();
                 dlg.DialogResult = true; dlg.Close();
             };
