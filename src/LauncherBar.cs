@@ -197,24 +197,22 @@ namespace PowerAudioManager
                         SetLauncherSlotPath(index, resolved, paths, requestRebuild);
                     }
                 }
-                else if (e.Data.GetDataPresent(DataFormats.Text))
+                else if (e.Data.GetDataPresent(DataFormats.Text) || e.Data.GetDataPresent(DataFormats.StringFormat))
                 {
-                    string text = e.Data.GetData(DataFormats.Text) as string;
-                    if (!string.IsNullOrEmpty(text) && (text.StartsWith("http://", StringComparison.OrdinalIgnoreCase) || text.StartsWith("https://", StringComparison.OrdinalIgnoreCase)))
+                    string text = null;
+                    if (e.Data.GetDataPresent(DataFormats.Text)) text = e.Data.GetData(DataFormats.Text) as string;
+                    else text = e.Data.GetData(DataFormats.StringFormat) as string;
+
+                    if (!string.IsNullOrEmpty(text))
                     {
-                        SetLauncherSlotPath(index, text, paths, requestRebuild);
-                    }
-                    else if (!string.IsNullOrEmpty(text) && System.IO.Directory.Exists(text))
-                    {
-                        SetLauncherSlotPath(index, text, paths, requestRebuild);
-                    }
-                }
-                else if (e.Data.GetDataPresent(DataFormats.StringFormat))
-                {
-                    string text = e.Data.GetData(DataFormats.StringFormat) as string;
-                    if (!string.IsNullOrEmpty(text) && (text.StartsWith("http://", StringComparison.OrdinalIgnoreCase) || text.StartsWith("https://", StringComparison.OrdinalIgnoreCase)))
-                    {
-                        SetLauncherSlotPath(index, text, paths, requestRebuild);
+                        if (text.StartsWith("http://", StringComparison.OrdinalIgnoreCase) || text.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+                        {
+                            SetLauncherSlotPath(index, text, paths, requestRebuild);
+                        }
+                        else if (System.IO.Directory.Exists(text))
+                        {
+                            SetLauncherSlotPath(index, text, paths, requestRebuild);
+                        }
                     }
                 }
                 e.Handled = true;
