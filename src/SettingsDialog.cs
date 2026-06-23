@@ -41,6 +41,7 @@ namespace PowerAudioManager
             tabs.Items.Add(BuildModulesTab(owner, dlg, fg, lightText));
             tabs.Items.Add(BuildMemoryTab(owner, dlg, fg, lightText));
             tabs.Items.Add(BuildTranslateTab(owner, dlg, fg, lightText));
+            tabs.Items.Add(BuildScreenshotTab(owner, dlg, fg, lightText));
 
             if (openTab >= 0 && openTab < tabs.Items.Count) tabs.SelectedIndex = openTab;
 
@@ -355,6 +356,92 @@ namespace PowerAudioManager
             stack.Children.Add(btns);
 
             return new TabItem { Header = " 翻译 ", Content = Scroll(stack) };
+        }
+
+        // ---- 截图 tab -----------------------------------------------------------
+
+        static TabItem BuildScreenshotTab(Window owner, Window dlg, SolidColorBrush fg, SolidColorBrush lightText)
+        {
+            var stack = new StackPanel { Margin = new Thickness(20) };
+
+            stack.Children.Add(new TextBlock { Text = "截图保存位置", Foreground = Brushes.White, FontWeight = FontWeights.SemiBold, FontSize = 13, Margin = new Thickness(0, 0, 0, 6) });
+            var rootRow = new DockPanel { Margin = new Thickness(0, 0, 0, 4), LastChildFill = true };
+            var rootBox = new TextBox
+            {
+                MinHeight = 26, FontSize = 12,
+                Background = new SolidColorBrush(Color.FromRgb(42, 39, 60)),
+                Foreground = Brushes.White,
+                BorderBrush = new SolidColorBrush(Color.FromRgb(80, 75, 120))
+            };
+            string savedRoot = AppPrefs.GetString("Screenshot.RootDir", "");
+            if (string.IsNullOrWhiteSpace(savedRoot))
+                savedRoot = System.IO.Path.Combine(System.Environment.GetFolderPath(System.Environment.SpecialFolder.MyPictures), "OneBoxScreenshots");
+            rootBox.Text = savedRoot;
+            var browseBtn = new Button { Content = "浏览…", Height = 26, FontSize = 12, Margin = new Thickness(8, 0, 0, 0), Padding = new Thickness(10, 0, 10, 0) };
+            AppResources.StyleDialogButton(browseBtn, false);
+            browseBtn.Click += (s, e) =>
+            {
+                var fbd = new System.Windows.Forms.FolderBrowserDialog { SelectedPath = rootBox.Text };
+                if (fbd.ShowDialog() == System.Windows.Forms.DialogResult.OK)
+                    rootBox.Text = fbd.SelectedPath;
+            };
+            DockPanel.SetDock(browseBtn, Dock.Right);
+            rootRow.Children.Add(browseBtn);
+            rootRow.Children.Add(rootBox);
+            stack.Children.Add(rootRow);
+            stack.Children.Add(new TextBlock { Text = "截图按前台应用名自动建子文件夹存放。", Foreground = fg, FontSize = 10, Margin = new Thickness(0, 0, 0, 16) });
+
+            stack.Children.Add(new Border { Height = 1, Background = new SolidColorBrush(Color.FromRgb(80, 75, 120)), Margin = new Thickness(0, 0, 0, 12) });
+
+            stack.Children.Add(new TextBlock { Text = "截图快捷键", Foreground = Brushes.White, FontWeight = FontWeights.SemiBold, FontSize = 13, Margin = new Thickness(0, 0, 0, 6) });
+            int curHotkey = AppPrefs.GetInt("Screenshot.Hotkey", 0);
+            var hkLabel = new TextBlock
+            {
+                Text = curHotkey != 0 ? HotkeyCaptureDialog.Format(curHotkey) : "（未设置）",
+                Foreground = curHotkey != 0 ? Brushes.White : fg,
+                FontSize = 13, FontWeight = FontWeights.SemiBold,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, 12, 0)
+            };
+            var setHkBtn = new Button { Content = "设置快捷键", Height = 28, FontSize = 12, Margin = new Thickness(0, 0, 8, 0), Padding = new Thickness(10, 0, 10, 0) };
+            AppResources.StyleDialogButton(setHkBtn, false);
+            var clearHkBtn = new Button { Content = "清除", Height = 28, FontSize = 12, Padding = new Thickness(10, 0, 10, 0) };
+            AppResources.StyleDialogButton(clearHkBtn, false);
+            setHkBtn.Click += (s, e) =>
+            {
+                var captured = HotkeyCaptureDialog.Show(dlg, curHotkey);
+                if (captured.HasValue)
+                {
+                    curHotkey = captured.Value;
+                    hkLabel.Text = HotkeyCaptureDialog.Format(curHotkey);
+                    hkLabel.Foreground = Brushes.White;
+                }
+            };
+            clearHkBtn.Click += (s, e) =>
+            {
+                curHotkey = 0;
+                hkLabel.Text = "（未设置）";
+                hkLabel.Foreground = fg;
+            };
+            var hkRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 8) };
+            hkRow.Children.Add(hkLabel);
+            hkRow.Children.Add(setHkBtn);
+            hkRow.Children.Add(clearHkBtn);
+            stack.Children.Add(hkRow);
+            stack.Children.Add(new TextBlock { Text = "普通窗口直接截取客户区；全屏游戏截图为黑屏时自动回退到 Game Bar（需在系统设置→游戏中启用捕获）。", Foreground = fg, FontSize = 10, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 0) });
+
+            var btns = MakeButtons();
+            ((Button)btns.Children[0]).Click += (s, e) =>
+            {
+                AppPrefs.SetString("Screenshot.RootDir", rootBox.Text.Trim());
+                AppPrefs.SetInt("Screenshot.Hotkey", curHotkey);
+                if (owner is MainWindow) ((MainWindow)owner).RefreshHotkeys();
+                dlg.DialogResult = true; dlg.Close();
+            };
+            ((Button)btns.Children[1]).Click += (s, e) => { dlg.DialogResult = false; dlg.Close(); };
+            stack.Children.Add(btns);
+
+            return new TabItem { Header = " 截图 ", Content = Scroll(stack) };
         }
 
         // ---- shared helpers ----------------------------------------------------

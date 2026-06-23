@@ -1179,6 +1179,14 @@ namespace PowerAudioManager
                     handled = true;
                     return IntPtr.Zero;
                 }
+                if (id == Native.HOTKEY_ID_SCREENSHOT)
+                {
+                    // Capture on a threadpool thread so the hotkey loop is never
+                    // blocked; the toast marshals back to the UI thread itself.
+                    System.Threading.ThreadPool.QueueUserWorkItem(_ => ScreenshotService.CaptureForeground());
+                    handled = true;
+                    return IntPtr.Zero;
+                }
                 string devName;
                 if (_hotkeyMap.TryGetValue(id, out devName))
                 {
@@ -1213,9 +1221,10 @@ namespace PowerAudioManager
             foreach (var id in _hotkeyMap.Keys) Native.UnregisterHotKey(_hotkeyHwnd, id);
             _hotkeyMap.Clear();
             Native.UnregisterHotKey(_hotkeyHwnd, Native.HOTKEY_ID_TRANSLATE);
+            Native.UnregisterHotKey(_hotkeyHwnd, Native.HOTKEY_ID_SCREENSHOT);
         }
 
-        void RefreshHotkeys()
+        internal void RefreshHotkeys()
         {
             if (_hotkeyHwnd == IntPtr.Zero) return;
             // Unregister all known IDs
@@ -1224,6 +1233,21 @@ namespace PowerAudioManager
             // Translate hotkey: Ctrl+Shift+T (VK_T = 0x54)
             Native.UnregisterHotKey(_hotkeyHwnd, Native.HOTKEY_ID_TRANSLATE);
             Native.RegisterHotKey(_hotkeyHwnd, Native.HOTKEY_ID_TRANSLATE, Native.MOD_CONTROL | Native.MOD_SHIFT, 0x54);
+            // Screenshot hotkey: user-bound (stored as Screenshot.Hotkey, same
+            // encoding as device hotkeys: hi16 = mods, lo16 = VK). No default.
+            Native.UnregisterHotKey(_hotkeyHwnd, Native.HOTKEY_ID_SCREENSHOT);
+            int shotEncoded = AppPrefs.GetInt("Screenshot.Hotkey", 0);
+            if (shotEncoded != 0)
+            {
+                int smods = (shotEncoded >> 16) & 0xFFFF;
+                uint svk = (uint)(shotEncoded & 0xFFFF);
+                uint swinMods = 0;
+                if ((smods & 1) != 0) swinMods |= Native.MOD_ALT;
+                if ((smods & 2) != 0) swinMods |= Native.MOD_CONTROL;
+                if ((smods & 4) != 0) swinMods |= Native.MOD_SHIFT;
+                if ((smods & 8) != 0) swinMods |= Native.MOD_WIN;
+                Native.RegisterHotKey(_hotkeyHwnd, Native.HOTKEY_ID_SCREENSHOT, swinMods, svk);
+            }
             int nextId = Native.HOTKEY_ID_BASE;
             foreach (var kv in DevicePrefs.GetAllHotkeys())
             {

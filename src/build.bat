@@ -33,6 +33,8 @@ if exist "%OUTDIR%\OneBox.exe" del /f /q "%OUTDIR%\OneBox.exe"
   /resource:"%SRC%icon-audio.png",PowerAudioManager.icon-audio.png ^
   "%SRC%App.cs" ^
   "%SRC%SettingsDialog.cs" ^
+  "%SRC%ScreenshotService.cs" ^
+  "%SRC%ScreenshotToast.cs" ^
   "%SRC%AppResources.cs" ^
   "%SRC%LauncherBar.cs" ^
   "%SRC%WindowScaling.cs" ^
