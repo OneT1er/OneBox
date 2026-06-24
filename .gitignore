@@ -25,3 +25,7 @@ commit.bat
 commit_msg.txt
 commit_ui.bat
 commit_ui.txt
+
+# Claude Code local working memory (not for the repo)
+.claude/memory/
+.claude/settings.local.json
