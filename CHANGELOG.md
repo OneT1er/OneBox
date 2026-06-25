@@ -1,5 +1,23 @@
 # 更新日志
 
+## v1.3.1 (2026-06-25)
+
+> 首个 .NET 8 正式版。集合两个 beta 的所有新特性，并全面重构 UI 为 Material Design 3（紫影深色主题）。
+
+### 新功能
+- **.NET 8 迁移**：框架依赖单文件发布，现代 C#，NuGet 包管理（Vortice.DXGI / CodePages）
+- **HDR 截图（高级）**：Vortice.DXGI 检测 + Game Bar 回退，jxr 保留，默认关闭
+- **图片翻译**：自定义热键 → 拖框选区 → 百度图片翻译 API → 擦除原文贴合译文整图，可复制译文
+- **剪贴板历史**：全局热键弹出，左键复制 / 右键删除单条
+- **UI 重构**：全面接入 MaterialDesignInXAML（MD3，紫影 #8E8CD8 深色主题）；悬浮窗按钮改 PackIcon 矢量图标；对话框控件 MD3 化；手写 ControlTemplate 清理净减 ~300 行
+
+### 修复
+- .NET 8 GBK 编码 936 抛异常（RegisterProvider 修复）
+- 框选截图全屏黑色（遮罩 `AllowsTransparency=true`）
+- Game Bar 截图快捷键配置顺序更正
+- PerformanceCounter 冷启动 ~5s 冻结（后台预热）
+- ApplicationIdle 冷启动推迟 ~6s（改 threading timer）
+
 ## v1.3.0-beta2 (2026-06-25) [预发布]
 
 ### 新功能：图片翻译
