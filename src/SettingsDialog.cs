@@ -477,7 +477,7 @@ namespace PowerAudioManager
             gbHkRow.Children.Add(gbHkSetBtn);
             gbHkRow.Children.Add(gbHkClearBtn);
             gbPanel.Children.Add(gbHkRow);
-            gbPanel.Children.Add(new TextBlock { Text = "游戏前台时系统会吞掉注入的 Win 键，导致默认 Win+Alt+PrtScn 触发不了 Game Bar。配置步骤：1) 先在 Game Bar 设置里把截图快捷键改成不含 Win 的组合（如 Alt+F12）；2) 再在这里点“设置快捷键”设成同一个组合。注意：被 Game Bar 注册的组合在 OneBox 里按 Alt+键可能捕获不到，可改用 Ctrl+ 组合并在 Game Bar 里设同款。", Foreground = fg, FontSize = 10, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 16) });
+            gbPanel.Children.Add(new TextBlock { Text = "游戏前台时系统会吞掉注入的 Win 键，导致默认 Win+Alt+PrtScn 触发不了 Game Bar。配置步骤：1) 先在这里点“设置快捷键”设一个不含 Win 的组合（如 Alt+F12）；2) 再去 Game Bar 设置里把截图快捷键改成同一个组合。注意：被 Game Bar 注册的组合在 OneBox 里按 Alt+键可能捕获不到，可改用 Ctrl+ 组合并在 Game Bar 里设同款。", Foreground = fg, FontSize = 10, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 16) });
 
             stack.Children.Add(gbPanel);
             gbToggle.Checked += (s, e) => gbPanel.IsEnabled = true;
@@ -532,7 +532,56 @@ namespace PowerAudioManager
             hkRow.Children.Add(setHkBtn);
             hkRow.Children.Add(clearHkBtn);
             stack.Children.Add(hkRow);
-            stack.Children.Add(new TextBlock { Text = "普通窗口直接截取客户区；全屏游戏截图为黑屏时自动回退到 Game Bar（需在系统设置→游戏中启用捕获）。", Foreground = fg, FontSize = 10, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 0) });
+            stack.Children.Add(new TextBlock { Text = "普通窗口直接截取客户区；全屏游戏截图为黑屏时自动回退到 Game Bar（需在系统设置→游戏中启用捕获）。", Foreground = fg, FontSize = 10, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 16) });
+
+            stack.Children.Add(new TextBlock { Text = "图片翻译快捷键（框选截图→翻译）", Foreground = Brushes.White, FontWeight = FontWeights.SemiBold, FontSize = 13, Margin = new Thickness(0, 0, 0, 6) });
+            int curItHotkey = AppPrefs.GetInt("Screenshot.ImageTranslateHotkey", 0);
+            var itHkLabel = new TextBlock
+            {
+                Text = curItHotkey != 0 ? HotkeyCaptureDialog.Format(curItHotkey) : "（未设置）",
+                Foreground = curItHotkey != 0 ? Brushes.White : fg,
+                FontSize = 13, FontWeight = FontWeights.SemiBold,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, 12, 0)
+            };
+            var itSetBtn = new Button { Content = "设置快捷键", Height = 28, FontSize = 12, Margin = new Thickness(0, 0, 8, 0), Padding = new Thickness(10, 0, 10, 0) };
+            AppResources.StyleDialogButton(itSetBtn, false);
+            var itClearBtn = new Button { Content = "清除", Height = 28, FontSize = 12, Padding = new Thickness(10, 0, 10, 0) };
+            AppResources.StyleDialogButton(itClearBtn, false);
+            itSetBtn.Click += (s, e) =>
+            {
+                var captured = HotkeyCaptureDialog.Show(dlg, curItHotkey);
+                if (captured.HasValue)
+                {
+                    int enc = captured.Value;
+                    bool ok = (owner is MainWindow) ? ((MainWindow)owner).TestHotkey(enc) : true;
+                    if (ok)
+                    {
+                        curItHotkey = enc;
+                        itHkLabel.Text = HotkeyCaptureDialog.Format(curItHotkey);
+                        itHkLabel.Foreground = Brushes.White;
+                    }
+                    else
+                    {
+                        curItHotkey = enc;
+                        itHkLabel.Text = HotkeyCaptureDialog.Format(curItHotkey) + "（被占用）";
+                        itHkLabel.Foreground = new SolidColorBrush(Color.FromRgb(240, 170, 170));
+                        MessageBox.Show(dlg, "该快捷键已被其他程序占用，OneBox 无法注册。\n你可以换一个组合，或先释放占用它的程序。", "快捷键被占用", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    }
+                }
+            };
+            itClearBtn.Click += (s, e) =>
+            {
+                curItHotkey = 0;
+                itHkLabel.Text = "（未设置）";
+                itHkLabel.Foreground = fg;
+            };
+            var itHkRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 8) };
+            itHkRow.Children.Add(itHkLabel);
+            itHkRow.Children.Add(itSetBtn);
+            itHkRow.Children.Add(itClearBtn);
+            stack.Children.Add(itHkRow);
+            stack.Children.Add(new TextBlock { Text = "按下后屏幕变暗，拖框选区，松开自动调用百度图片翻译（需先在翻译设置里配好 AppId/Key）。返回擦除原文、贴合译文的整图，可复制译文。", Foreground = fg, FontSize = 10, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 0) });
 
             var btns = MakeButtons();
             ((Button)btns.Children[0]).Click += (s, e) =>
@@ -542,6 +591,7 @@ namespace PowerAudioManager
                 AppPrefs.SetString("Screenshot.GameBarDir", gbBox.Text.Trim());
                 AppPrefs.SetInt("Screenshot.GameBarHotkey", curGbHotkey);
                 AppPrefs.SetInt("Screenshot.Hotkey", curHotkey);
+                AppPrefs.SetInt("Screenshot.ImageTranslateHotkey", curItHotkey);
                 if (owner is MainWindow) { ((MainWindow)owner).RefreshHotkeys(); ((MainWindow)owner).RebuildUI(); }
                 dlg.DialogResult = true; dlg.Close();
             };

@@ -1,5 +1,17 @@
 # 更新日志
 
+## v1.3.0-beta2 (2026-06-25) [预发布]
+
+### 新功能：图片翻译
+- 框选截图翻译：自定义热键 → 屏幕拖框选区 → 调用百度图片翻译 API → 显示擦除原文、贴合译文的整图
+- 百度图片翻译 API（`picture/translate`，paste=1 整图贴合），复用文本翻译的 AppId/Key（Bearer 鉴权）
+- 结果窗口：贴合图 + 复制译文 / 选择复制 / Ctrl+滚轮缩放
+- 新增模块：`ImageTranslateService`（API）、`RegionCaptureService`（全屏框选遮罩）、`ImageTranslateWindow`（结果 UI）
+
+### 修复
+- Game Bar 截图快捷键说明：配置顺序更正为「先在 OneBox 设快捷键，再去 Game Bar 设同款」
+- 框选截图全屏黑色：遮罩窗口补 `AllowsTransparency=true`（否则半透明背景被当纯黑渲染，CopyFromScreen 截到遮罩），截图前隐藏遮罩
+
 ## v1.3.0-beta1 (2026-06-25) [预发布]
 
 > ⚠️ 预发布版本。重大重构：从 .NET Framework 4 + 裸 csc.exe 迁移到 .NET 8 + .csproj + NuGet。

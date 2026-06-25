@@ -1027,6 +1027,62 @@ namespace PowerAudioManager
             catch { }
         }
 
+        // Image translate: region-capture overlay -> Baidu image API -> result window.
+        // Region capture runs on the UI thread (needs a window + dispatcher frame); the
+        // API call runs on a threadpool thread; the result window shows on the UI thread.
+        void HandleImageTranslateHotkey()
+        {
+            byte[] png = null;
+            try { png = RegionCaptureService.CaptureRegion(); }
+            catch (Exception ex) { AppLog.Log("ImageTranslate capture", ex); ImageTranslateWindow.Show(this, null, null, "框选截图失败: " + ex.Message); return; }
+            if (png == null) return; // cancelled or empty
+            string from = AppPrefs.GetString("Translate.From", "auto");
+            string to = AppPrefs.GetString("Translate.To", "zh");
+            byte[] pngCaptured = png;
+            System.Threading.ThreadPool.QueueUserWorkItem(_ =>
+            {
+                ImageTranslateService.ImageResult res = null;
+                try { res = ImageTranslateService.Translate(pngCaptured, from, to); }
+                catch (Exception ex) { res = new ImageTranslateService.ImageResult { Error = ex.Message }; }
+                Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    ImageTranslateWindow.Show(this, res.PasteImage, res.Dst, res.Error);
+                }));
+            });
+        }
+
+        // Image translate from the current clipboard image (entry point for a UI button /
+        // clipboard-image-translate action, if wired up later).
+        public void TranslateClipboardImage()
+        {
+            try
+            {
+                if (!System.Windows.Forms.Clipboard.ContainsImage()) { ImageTranslateWindow.Show(this, null, null, "剪贴板里没有图片"); return; }
+                using (var img = System.Windows.Forms.Clipboard.GetImage())
+                {
+                    if (img == null) { ImageTranslateWindow.Show(this, null, null, "剪贴板里没有图片"); return; }
+                    using (var ms = new System.IO.MemoryStream())
+                    {
+                        img.Save(ms, System.Drawing.Imaging.ImageFormat.Png);
+                        byte[] png = ms.ToArray();
+                        string from = AppPrefs.GetString("Translate.From", "auto");
+                        string to = AppPrefs.GetString("Translate.To", "zh");
+                        System.Threading.ThreadPool.QueueUserWorkItem(_ =>
+                        {
+                            ImageTranslateService.ImageResult res = null;
+                            try { res = ImageTranslateService.Translate(png, from, to); }
+                            catch (Exception ex) { res = new ImageTranslateService.ImageResult { Error = ex.Message }; }
+                            Dispatcher.BeginInvoke(new Action(() =>
+                            {
+                                ImageTranslateWindow.Show(this, res.PasteImage, res.Dst, res.Error);
+                            }));
+                        });
+                    }
+                }
+            }
+            catch (Exception ex) { AppLog.Log("ImageTranslate clipboard", ex); }
+        }
+
         void UpdateMemoryUI()
         {
             if (_memStatusLabel == null) return;
@@ -1246,6 +1302,13 @@ namespace PowerAudioManager
                     handled = true;
                     return IntPtr.Zero;
                 }
+                if (id == Native.HOTKEY_ID_IMAGE_TRANSLATE)
+                {
+                    AppLog.Log("Hotkey", "image translate (region capture) triggered");
+                    HandleImageTranslateHotkey();
+                    handled = true;
+                    return IntPtr.Zero;
+                }
                 string devName;
                 if (_hotkeyMap.TryGetValue(id, out devName))
                 {
@@ -1283,6 +1346,7 @@ namespace PowerAudioManager
             Native.UnregisterHotKey(_hotkeyHwnd, Native.HOTKEY_ID_TRANSLATE);
             Native.UnregisterHotKey(_hotkeyHwnd, Native.HOTKEY_ID_SCREENSHOT);
             Native.UnregisterHotKey(_hotkeyHwnd, Native.HOTKEY_ID_CLIPBOARD);
+            Native.UnregisterHotKey(_hotkeyHwnd, Native.HOTKEY_ID_IMAGE_TRANSLATE);
         }
 
         // Test whether a hotkey combo (encoded: hi16 mods, lo16 VK) can be
@@ -1345,6 +1409,20 @@ namespace PowerAudioManager
                 if ((cmods & 4) != 0) cwinMods |= Native.MOD_SHIFT;
                 if ((cmods & 8) != 0) cwinMods |= Native.MOD_WIN;
                 Native.RegisterHotKey(_hotkeyHwnd, Native.HOTKEY_ID_CLIPBOARD, cwinMods, cvk);
+            }
+            // Image-translate (region capture) hotkey: user-bound (Screenshot.ImageTranslateHotkey). No default.
+            Native.UnregisterHotKey(_hotkeyHwnd, Native.HOTKEY_ID_IMAGE_TRANSLATE);
+            int itEnc = AppPrefs.GetInt("Screenshot.ImageTranslateHotkey", 0);
+            if (itEnc != 0)
+            {
+                int imods = (itEnc >> 16) & 0xFFFF;
+                uint ivk = (uint)(itEnc & 0xFFFF);
+                uint iwinMods = 0;
+                if ((imods & 1) != 0) iwinMods |= Native.MOD_ALT;
+                if ((imods & 2) != 0) iwinMods |= Native.MOD_CONTROL;
+                if ((imods & 4) != 0) iwinMods |= Native.MOD_SHIFT;
+                if ((imods & 8) != 0) iwinMods |= Native.MOD_WIN;
+                Native.RegisterHotKey(_hotkeyHwnd, Native.HOTKEY_ID_IMAGE_TRANSLATE, iwinMods, ivk);
             }
             int nextId = Native.HOTKEY_ID_BASE;
             foreach (var kv in DevicePrefs.GetAllHotkeys())

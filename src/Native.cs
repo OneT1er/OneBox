@@ -47,6 +47,7 @@ namespace PowerAudioManager
         public const int HOTKEY_ID_TRANSLATE = 0xBFFF;
         public const int HOTKEY_ID_SCREENSHOT = 0xBFFE;
         public const int HOTKEY_ID_CLIPBOARD = 0xBFD0;
+        public const int HOTKEY_ID_IMAGE_TRANSLATE = 0xBFD1;
 
         // ---- Working-set trim ---------------------------------------------------
         [DllImport("kernel32.dll")]
