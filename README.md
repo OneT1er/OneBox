@@ -2,7 +2,7 @@
 
 > 一个 Windows 桌面悬浮工具箱：电源计划、音频控制、内存清理、翻译、快捷启动、剪贴板历史，集成进一个可折叠的悬浮窗 + 系统托盘。
 
-紫影主题、圆角卡片、深色 UI，常驻任务栏，鼠标就近操作。单文件 exe，无需安装运行时。
+紫影主题、圆角卡片、深色 UI，常驻任务栏，鼠标就近操作。单文件 exe（框架依赖，需安装 .NET 8 桌面运行时）。
 
 <!-- 截图占位：把悬浮窗截图放到 docs/ 下并取消注释
 ![OneBox 悬浮窗](docs/screenshot.png)
@@ -50,8 +50,14 @@
 - 语言自动检测，支持中 / 英 / 日 / 韩 / 法 / 德 / 俄 / 西 / 阿
 - 长文本自动分块，避免 API 长度限制
 - 全局快捷键 `Ctrl+Shift+T` 一键翻译剪贴板内容
+- **图片翻译**：自定义快捷键框选屏幕区域，调用百度图片翻译 API，返回擦除原文、贴合译文的整图（可复制译文）
 - 翻译指令可自定义（意译 / 商务语气 / 保留术语等）
 - API Key 用 DPAPI 加密存储
+
+### 截图
+- 全局快捷键截取前台窗口客户区，按应用名自动建子目录归档
+- Steam 风格右下角完成弹窗，独立图库窗口查看最近截图
+- **高级 HDR 截图**（默认关闭）：HDR 显示器 / 全屏游戏回退 Game Bar（Vortice.DXGI 检测 HDR，Game Bar 读取位置与快捷键可配置，绕开"游戏前台吞 Win 键"）
 
 ### 快捷启动栏
 4 格启动栏，点击空格选择程序（`.exe` / `.lnk`，自动解析快捷方式目标并提取图标）；点击图标启动；右键清空；支持拖拽放入。
@@ -102,43 +108,53 @@
 
 ## 🔧 构建
 
-需要 Windows + .NET Framework 4.x（系统自带 `csc.exe`，无需额外安装）。
+需要 Windows + [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)。
 
 ```
 cd src
-build.bat
+dotnet build -c Release          # 开发构建
+dotnet publish -c Release -r win-x64 -p:SelfContained=false   # 单文件 exe（框架依赖）
 ```
 
-输出在 `src\output\OneBox.exe`。所有资源（图标）嵌入 exe，无需外部文件。
+开发构建输出 `src\bin\Debug\net8.0-windows10.0.19041.0\win-x64\OneBox.exe`；发布输出在 `publish\` 子目录。所有资源（图标）嵌入 exe，无需外部文件。运行需安装 [.NET 8 桌面运行时](https://dotnet.microsoft.com/download/dotnet/8.0)。
 
 ## 📁 项目结构
 
 ```
 OneBox/
 ├── src/
-│   ├── App.cs              # 入口、单实例、全局异常
-│   ├── MainWindow.cs       # 悬浮窗主界面、数据加载与渲染
-│   ├── AppResources.cs     # 系统字体 + 嵌入资源加载
-│   ├── LauncherBar.cs      # 快捷启动栏（拖拽 / .lnk 解析）
-│   ├── WindowScaling.cs    # 分辨率缩放 + 固定位置
-│   ├── TrayController.cs   # 系统托盘图标与菜单
-│   ├── SettingsDialog.cs   # 统一设置窗口（标签页）
-│   ├── AudioDevices.cs     # 音频设备枚举 / 切换 / 热插拔监听
-│   ├── VolumeControl.cs    # 音量控制
-│   ├── PowerPlanService.cs # 电源计划
-│   ├── MemoryCleaner.cs    # 内存清理（NT Native API）
-│   ├── TranslateService.cs # 百度翻译 API
-│   ├── Dialogs.cs          # 翻译窗口、快捷键捕获、统一窗口样式
-│   ├── ClipboardHistory.cs # 剪贴板历史（DPAPI 加密）
-│   ├── UpdateChecker.cs    # GitHub Release 自动更新
-│   ├── Native.cs           # Win32 P/Invoke
-│   ├── Prefs.cs            # 注册表配置存储
-│   ├── AdminUtils.cs       # 管理员权限 / 提权
-│   ├── Models.cs           # 数据模型
-│   ├── build.bat           # 构建脚本
-│   ├── app.manifest        # DPI 感知 / UAC
-│   └── app.config          # 运行时配置
+│   ├── App.cs                  # 入口、单实例、全局异常、编码注册
+│   ├── MainWindow.cs           # 悬浮窗主界面、数据加载与渲染、热键分发
+│   ├── AppResources.cs         # 系统字体 + 嵌入资源加载
+│   ├── LauncherBar.cs          # 快捷启动栏（拖拽 / .lnk 解析）
+│   ├── WindowScaling.cs        # 分辨率缩放 + 固定位置
+│   ├── TrayController.cs       # 系统托盘图标与菜单
+│   ├── SettingsDialog.cs       # 统一设置窗口（标签页）
+│   ├── AudioDevices.cs         # 音频设备枚举 / 切换 / 热插拔监听
+│   ├── VolumeControl.cs        # 音量控制
+│   ├── PowerPlanService.cs     # 电源计划
+│   ├── MemoryCleaner.cs        # 内存清理（NT Native API）
+│   ├── TranslateService.cs     # 百度文本翻译 API
+│   ├── ImageTranslateService.cs# 百度图片翻译 API
+│   ├── RegionCaptureService.cs # 框选截图遮罩（图片翻译用）
+│   ├── ImageTranslateWindow.cs # 图片翻译结果窗口
+│   ├── ScreenshotService.cs    # 前台截图 + HDR/Game Bar 回退
+│   ├── ScreenshotToast.cs      # 截图完成 Toast
+│   ├── ScreenshotGallery.cs    # 截图图库
+│   ├── Dialogs.cs              # 翻译窗口、快捷键捕获、统一窗口样式
+│   ├── ClipboardHistory.cs     # 剪贴板历史（DPAPI 加密）
+│   ├── UpdateChecker.cs        # GitHub Release 自动更新
+│   ├── Native.cs               # Win32 P/Invoke
+│   ├── Prefs.cs                # 注册表配置存储
+│   ├── AdminUtils.cs           # 管理员权限 / 提权
+│   ├── MemoryCleaner.cs        # 内存清理
+│   ├── Models.cs               # 数据模型
+│   ├── OneBox.csproj           # .NET 8 项目文件
+│   ├── app.manifest            # UAC / 兼容性（DPI 由 csproj 配置）
+│   ├── app.ico / app.png       # 图标资源
+│   └── icon-*.png              # 板块图标
 ├── .gitignore
+├── CHANGELOG.md
 ├── LICENSE
 └── README.md
 ```
@@ -161,15 +177,15 @@ OneBox/
 ```csharp
 public const string Owner = "OneT1er";
 public const string Repo = "OneBox";
-public static readonly Version CurrentVersion = new Version(1, 2, 1);
+public static readonly Version CurrentVersion = new Version(1, 3, 1);
 ```
 
-发新版时在 GitHub 创建 Release，tag 用 `v1.2.0` 格式（程序解析其中的版本号与 `CurrentVersion` 对比）。若 Release 附带 `OneBox.exe` 资产，支持应用内下载并自动替换升级；否则打开 Release 页面手动下载。
+发新版时在 GitHub 创建 Release，tag 用 `v1.3.0` 格式（程序解析其中的版本号与 `CurrentVersion` 对比）。若 Release 附带 `OneBox.exe` 资产，支持应用内下载并自动替换升级；否则打开 Release 页面手动下载。预发布版本不进 `releases/latest`，不影响稳定用户。
 
 ## 🛠️ 开发说明
 
-- 用系统自带的 `csc.exe`（C# 5 编译器）构建，**暂不支持 C# 6+ 语法**（无表达式体成员、字符串插值、`?.`、`nameof` 等）。lambda 和 `var` 可用。
-- WPF + WinForms 混用：主界面和对话框用 WPF，系统托盘用 WinForms（NotifyIcon）。
+- **.NET 8 + WPF + WinForms**：用 `dotnet build` 构建，现代 C# 语法。主界面和对话框用 WPF，系统托盘用 WinForms（NotifyIcon）。
+- NuGet 依赖：`Vortice.DXGI`（HDR 检测）、`System.Text.Encoding.CodePages`（GBK 编码，电源计划/升级脚本必需）。
 - 音频切换通过 MMDevice API + IPolicyConfig COM 接口实现。
 - 字体改用系统字体（设置里可选），不再打包字体文件。
 - 内存清理使用 NT Native API（`NtSetSystemInformation`），与 memreduct 同源。
