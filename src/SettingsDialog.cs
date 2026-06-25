@@ -401,6 +401,88 @@ namespace PowerAudioManager
             stack.Children.Add(rootRow);
             stack.Children.Add(new TextBlock { Text = "截图按前台应用名自动建子文件夹存放。", Foreground = fg, FontSize = 10, Margin = new Thickness(0, 0, 0, 16) });
 
+            // ---- Advanced: Game Bar screenshot (opt-in) ----
+            // Default off: OneBox just uses CopyFromScreen (simple, works for normal
+            // windows; HDR content may come back black). Enabling this turns on HDR
+            // detection + Game Bar fallback so HDR/game windows capture correctly.
+            stack.Children.Add(new TextBlock { Text = "高级：Game Bar 截图（HDR / 全屏游戏）", Foreground = Brushes.White, FontWeight = FontWeights.SemiBold, FontSize = 13, Margin = new Thickness(0, 0, 0, 6) });
+            bool gbEnabled = AppPrefs.GetBool("Screenshot.GameBarEnabled", false);
+            var gbToggle = new CheckBox { Content = "启用 Game Bar 截图回退（默认关闭，仅普通截图）", IsChecked = gbEnabled, Foreground = Brushes.White, FontSize = 12, Margin = new Thickness(0, 0, 0, 8) };
+            stack.Children.Add(gbToggle);
+
+            // The Game Bar config below is only relevant when enabled; wrap it so we
+            // can grey it out when the toggle is off.
+            var gbPanel = new StackPanel { Margin = new Thickness(0, 0, 0, 0) };
+            gbPanel.IsEnabled = gbEnabled;
+
+            gbPanel.Children.Add(new TextBlock { Text = "Game Bar 截图读取位置", Foreground = Brushes.White, FontWeight = FontWeights.SemiBold, FontSize = 13, Margin = new Thickness(0, 0, 0, 6) });
+            var gbRow = new DockPanel { Margin = new Thickness(0, 0, 0, 4), LastChildFill = true };
+            var gbBox = new TextBox
+            {
+                MinHeight = 26, FontSize = 12,
+                Background = new SolidColorBrush(Color.FromRgb(42, 39, 60)),
+                Foreground = Brushes.White,
+                BorderBrush = new SolidColorBrush(Color.FromRgb(80, 75, 120))
+            };
+            string savedGb = AppPrefs.GetString("Screenshot.GameBarDir", "");
+            if (string.IsNullOrWhiteSpace(savedGb))
+                savedGb = System.IO.Path.Combine(System.Environment.GetFolderPath(System.Environment.SpecialFolder.MyVideos), "Captures");
+            gbBox.Text = savedGb;
+            var gbBrowseBtn = new Button { Content = "浏览…", Height = 26, FontSize = 12, Margin = new Thickness(8, 0, 0, 0), Padding = new Thickness(10, 0, 10, 0) };
+            AppResources.StyleDialogButton(gbBrowseBtn, false);
+            gbBrowseBtn.Click += (s, e) =>
+            {
+                var fbd = new System.Windows.Forms.FolderBrowserDialog { SelectedPath = gbBox.Text };
+                if (fbd.ShowDialog() == System.Windows.Forms.DialogResult.OK)
+                    gbBox.Text = fbd.SelectedPath;
+            };
+            DockPanel.SetDock(gbBrowseBtn, Dock.Right);
+            gbRow.Children.Add(gbBrowseBtn);
+            gbRow.Children.Add(gbBox);
+            gbPanel.Children.Add(gbRow);
+            gbPanel.Children.Add(new TextBlock { Text = "Game Bar 生成截图后，从这里读取文件。若你的 Game Bar 图库位置被改过，请设为实际路径。留空则用默认的“视频\\Captures”。", Foreground = fg, FontSize = 10, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 16) });
+
+            gbPanel.Children.Add(new TextBlock { Text = "Game Bar 截图快捷键", Foreground = Brushes.White, FontWeight = FontWeights.SemiBold, FontSize = 13, Margin = new Thickness(0, 0, 0, 6) });
+            int curGbHotkey = AppPrefs.GetInt("Screenshot.GameBarHotkey", 0);
+            var gbHkLabel = new TextBlock
+            {
+                Text = curGbHotkey != 0 ? HotkeyCaptureDialog.Format(curGbHotkey) : "（未设置，用默认 Win+Alt+PrtScn）",
+                Foreground = curGbHotkey != 0 ? Brushes.White : fg,
+                FontSize = 13, FontWeight = FontWeights.SemiBold,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, 12, 0)
+            };
+            var gbHkSetBtn = new Button { Content = "设置快捷键", Height = 28, FontSize = 12, Margin = new Thickness(0, 0, 8, 0), Padding = new Thickness(10, 0, 10, 0) };
+            AppResources.StyleDialogButton(gbHkSetBtn, false);
+            var gbHkClearBtn = new Button { Content = "清除", Height = 28, FontSize = 12, Padding = new Thickness(10, 0, 10, 0) };
+            AppResources.StyleDialogButton(gbHkClearBtn, false);
+            gbHkSetBtn.Click += (s, e) =>
+            {
+                var captured = HotkeyCaptureDialog.Show(dlg, curGbHotkey);
+                if (captured.HasValue)
+                {
+                    curGbHotkey = captured.Value;
+                    gbHkLabel.Text = HotkeyCaptureDialog.Format(curGbHotkey);
+                    gbHkLabel.Foreground = Brushes.White;
+                }
+            };
+            gbHkClearBtn.Click += (s, e) =>
+            {
+                curGbHotkey = 0;
+                gbHkLabel.Text = "（未设置，用默认 Win+Alt+PrtScn）";
+                gbHkLabel.Foreground = fg;
+            };
+            var gbHkRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 8) };
+            gbHkRow.Children.Add(gbHkLabel);
+            gbHkRow.Children.Add(gbHkSetBtn);
+            gbHkRow.Children.Add(gbHkClearBtn);
+            gbPanel.Children.Add(gbHkRow);
+            gbPanel.Children.Add(new TextBlock { Text = "游戏前台时系统会吞掉注入的 Win 键，导致默认 Win+Alt+PrtScn 触发不了 Game Bar。配置步骤：1) 先在 Game Bar 设置里把截图快捷键改成不含 Win 的组合（如 Alt+F12）；2) 再在这里点“设置快捷键”设成同一个组合。注意：被 Game Bar 注册的组合在 OneBox 里按 Alt+键可能捕获不到，可改用 Ctrl+ 组合并在 Game Bar 里设同款。", Foreground = fg, FontSize = 10, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 16) });
+
+            stack.Children.Add(gbPanel);
+            gbToggle.Checked += (s, e) => gbPanel.IsEnabled = true;
+            gbToggle.Unchecked += (s, e) => gbPanel.IsEnabled = false;
+
             stack.Children.Add(new Border { Height = 1, Background = new SolidColorBrush(Color.FromRgb(80, 75, 120)), Margin = new Thickness(0, 0, 0, 12) });
 
             stack.Children.Add(new TextBlock { Text = "截图快捷键", Foreground = Brushes.White, FontWeight = FontWeights.SemiBold, FontSize = 13, Margin = new Thickness(0, 0, 0, 6) });
@@ -456,6 +538,9 @@ namespace PowerAudioManager
             ((Button)btns.Children[0]).Click += (s, e) =>
             {
                 AppPrefs.SetString("Screenshot.RootDir", rootBox.Text.Trim());
+                AppPrefs.SetBool("Screenshot.GameBarEnabled", gbToggle.IsChecked == true);
+                AppPrefs.SetString("Screenshot.GameBarDir", gbBox.Text.Trim());
+                AppPrefs.SetInt("Screenshot.GameBarHotkey", curGbHotkey);
                 AppPrefs.SetInt("Screenshot.Hotkey", curHotkey);
                 if (owner is MainWindow) { ((MainWindow)owner).RefreshHotkeys(); ((MainWindow)owner).RebuildUI(); }
                 dlg.DialogResult = true; dlg.Close();
@@ -606,7 +691,7 @@ namespace PowerAudioManager
                 using (var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(
                     @"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", true))
                 {
-                    if (enable) key.SetValue("OneBox", System.Reflection.Assembly.GetExecutingAssembly().Location);
+                    if (enable) key.SetValue("OneBox", Environment.ProcessPath);
                     else key.DeleteValue("OneBox", false);
                 }
             }

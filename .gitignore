@@ -1,5 +1,7 @@
 src/output/
 output/
+src/bin/
+src/obj/
 *.log
 *.user
 onebox-emoji-test.png

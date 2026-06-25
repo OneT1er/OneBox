@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Text.Json;
 using Microsoft.Win32;
 
 namespace PowerAudioManager
@@ -133,7 +134,7 @@ namespace PowerAudioManager
                 var cr = TranslateOnce(chunks[i], from, to, appId, key, instruction);
                 if (!string.IsNullOrEmpty(cr.Error))
                 {
-                    r.Error = "第 " + (i + 1) + "/" + chunks.Count + " 段失败: " + cr.Error;
+                    r.Error = $"第 {i + 1}/{chunks.Count} 段失败: {cr.Error}";
                     return r;
                 }
                 if (detected == null) detected = cr.DetectedFrom;
@@ -288,18 +289,14 @@ namespace PowerAudioManager
                 string fromArg = string.IsNullOrEmpty(from) ? "auto" : from;
                 string toArg = string.IsNullOrEmpty(to) ? "zh" : to;
 
-                var sb = new System.Text.StringBuilder();
-                sb.Append("{");
-                if (!string.IsNullOrEmpty(appId))
-                    sb.Append("\"appid\":\"").Append(JsonEscape(appId)).Append("\",");
-                sb.Append("\"from\":\"").Append(JsonEscape(fromArg)).Append("\",");
-                sb.Append("\"to\":\"").Append(JsonEscape(toArg)).Append("\",");
-                sb.Append("\"q\":\"").Append(JsonEscape(text)).Append("\"");
-                if (!string.IsNullOrEmpty(instruction))
-                    sb.Append(",\"instruction\":\"").Append(JsonEscape(instruction)).Append("\"");
-                sb.Append("}");
+                var payload = new Dictionary<string, object>();
+                if (!string.IsNullOrEmpty(appId)) payload["appid"] = appId;
+                payload["from"] = fromArg;
+                payload["to"] = toArg;
+                payload["q"] = text;
+                if (!string.IsNullOrEmpty(instruction)) payload["instruction"] = instruction;
 
-                var body = System.Text.Encoding.UTF8.GetBytes(sb.ToString());
+                var body = JsonSerializer.SerializeToUtf8Bytes(payload);
                 req.ContentLength = body.Length;
                 using (var s = req.GetRequestStream()) s.Write(body, 0, body.Length);
 
@@ -313,7 +310,7 @@ namespace PowerAudioManager
                     string err = root == null ? null : AsString(root, "error_code");
                     if (!string.IsNullOrEmpty(err) && err != "0" && err != "52000")
                     {
-                        r.Error = "百度: " + err + " " + AsString(root, "error_msg");
+                        r.Error = $"百度: {err} {AsString(root, "error_msg")}";
                         return r;
                     }
 
@@ -354,7 +351,7 @@ namespace PowerAudioManager
                     }
                 }
                 catch { }
-                r.Error = "网络错误: " + webEx.Message;
+                r.Error = $"网络错误: {webEx.Message}";
             }
             catch (Exception ex)
             {
@@ -363,70 +360,51 @@ namespace PowerAudioManager
             return r;
         }
 
-        static string JsonEscape(string s)
-        {
-            if (s == null) return "";
-            var sb = new System.Text.StringBuilder(s.Length + 8);
-            foreach (var ch in s)
-            {
-                switch (ch)
-                {
-                    case '\"': sb.Append("\\\""); break;
-                    case '\\': sb.Append("\\\\"); break;
-                    case '\b': sb.Append("\\b"); break;
-                    case '\f': sb.Append("\\f"); break;
-                    case '\n': sb.Append("\\n"); break;
-                    case '\r': sb.Append("\\r"); break;
-                    case '\t': sb.Append("\\t"); break;
-                    default:
-                        if (ch < 0x20) sb.AppendFormat("\\u{0:x4}", (int)ch);
-                        else sb.Append(ch);
-                        break;
-                }
-            }
-            return sb.ToString();
-        }
-
-        // Real JSON parsing via the in-box JavaScriptSerializer (System.Web.Extensions) —
-        // replaces the fragile IndexOf-based scanner, which mis-decoded escapes (\r, \b, \f,
-        // surrogate pairs) and couldn't handle nesting. JavaScriptSerializer decodes all
-        // standard escapes, nested objects and arrays correctly.
-        static System.Collections.Generic.Dictionary<string, object> ParseJson(string json)
+        // Real JSON parsing via System.Text.Json — decodes all standard escapes,
+        // nested objects and arrays correctly.
+        static JsonDocument ParseJson(string json)
         {
             if (string.IsNullOrEmpty(json)) return null;
-            try
-            {
-                return new System.Web.Script.Serialization.JavaScriptSerializer()
-                    .Deserialize<System.Collections.Generic.Dictionary<string, object>>(json);
-            }
+            try { return JsonDocument.Parse(json); }
             catch { return null; }
         }
 
-        static string AsString(System.Collections.Generic.Dictionary<string, object> d, string key)
+        static string AsString(JsonDocument d, string key)
         {
-            object v;
-            if (d == null || !d.TryGetValue(key, out v) || v == null) return null;
-            return v.ToString();
+            if (d == null) return null;
+            return AsString(d.RootElement, key);
+        }
+
+        static string AsString(JsonElement el, string key)
+        {
+            if (el.ValueKind != JsonValueKind.Object) return null;
+            if (el.TryGetProperty(key, out var p) && p.ValueKind == JsonValueKind.String)
+                return p.GetString();
+            return null;
         }
 
         // `result` is a single translated string in the AI translate response, but accept an
         // array of strings (one per input line) and join them on newlines as a safety net.
-        static string ExtractResult(System.Collections.Generic.Dictionary<string, object> d)
+        static string ExtractResult(JsonDocument d)
         {
-            object v;
-            if (d == null || !d.TryGetValue("result", out v) || v == null) return null;
-            var s = v as string;
-            if (s != null) return s;
-            var arr = v as System.Collections.IEnumerable;
-            if (arr != null)
+            if (d == null) return null;
+            return ExtractResult(d.RootElement);
+        }
+
+        static string ExtractResult(JsonElement el)
+        {
+            if (el.ValueKind != JsonValueKind.Object) return null;
+            if (!el.TryGetProperty("result", out var v)) return null;
+            if (v.ValueKind == JsonValueKind.String) return v.GetString();
+            if (v.ValueKind == JsonValueKind.Array)
             {
                 var sb = new System.Text.StringBuilder();
                 bool first = true;
-                foreach (var item in arr)
+                foreach (var item in v.EnumerateArray())
                 {
-                    if (item == null) continue;
+                    if (item.ValueKind == JsonValueKind.Null) continue;
                     if (!first) sb.Append(System.Environment.NewLine);
-                    sb.Append(item.ToString());
+                    sb.Append(item.ValueKind == JsonValueKind.String ? item.GetString() : item.ToString());
                     first = false;
                 }
                 return sb.ToString();
@@ -435,19 +413,18 @@ namespace PowerAudioManager
         }
 
         // Classic trans_result fallback: [{"src":"...","dst":"..."}, ...]
-        static List<string> ExtractDstList(System.Collections.Generic.Dictionary<string, object> d)
+        static List<string> ExtractDstList(JsonDocument d)
         {
             var list = new List<string>();
-            object v;
-            if (d == null || !d.TryGetValue("trans_result", out v)) return list;
-            var arr = v as System.Collections.IEnumerable;
-            if (arr == null) return list;
-            foreach (var item in arr)
+            if (d == null) return list;
+            if (d.RootElement.ValueKind != JsonValueKind.Object) return list;
+            if (!d.RootElement.TryGetProperty("trans_result", out var arr)) return list;
+            if (arr.ValueKind != JsonValueKind.Array) return list;
+            foreach (var item in arr.EnumerateArray())
             {
-                var dict = item as System.Collections.Generic.Dictionary<string, object>;
-                if (dict == null) continue;
-                object dst;
-                if (dict.TryGetValue("dst", out dst) && dst != null) list.Add(dst.ToString());
+                if (item.ValueKind != JsonValueKind.Object) continue;
+                if (item.TryGetProperty("dst", out var dst) && dst.ValueKind == JsonValueKind.String)
+                    list.Add(dst.GetString());
             }
             return list;
         }

@@ -21,12 +21,25 @@ namespace PowerAudioManager
         [STAThread]
         public static void Main(string[] args)
         {
+            // .NET 8 ships only ASCII/UTF-8/UTF-16 by default; code pages like 936
+            // (GBK, used for powercfg OEM output and the updater .bat) throw
+            // NotSupportedException unless the provider is registered. Do this first,
+            // before anything touches Encoding. (On .NET Framework 4 all Windows code
+            // pages were available by default — this is the migration regression that
+            // broke power-plan detection and in-app updates.)
+            try { System.Text.Encoding.RegisterProvider(System.Text.CodePagesEncodingProvider.Instance); } catch { }
+
+            // Warm up the memory PerformanceCounters on a background thread ASAP.
+            // Constructing them takes ~5s on .NET 8 cold start and GetStatus() runs on
+            // the UI thread, so starting this before the window builds keeps startup
+            // from freezing while the counters initialize in the background.
+            try { PowerAudioManager.MemoryCleaner.WarmupCounters(); } catch { }
+
             // Single-instance guard: a second launch (e.g. double-clicking the exe
             // or the autostart entry firing while already running) would otherwise
             // spawn a second floating window, a second tray icon, and re-register
             // the same global hotkeys (which silently fail). Bail out instead.
-            bool createdNew;
-            _singleInstance = new System.Threading.Mutex(true, "Local\\OneBox-SingleInstance", out createdNew);
+            _singleInstance = new System.Threading.Mutex(true, "Local\\OneBox-SingleInstance", out var createdNew);
             if (!createdNew)
             {
                 // Another instance owns the mutex. A previous owner that crashed
@@ -38,18 +51,18 @@ namespace PowerAudioManager
 
             AppDomain.CurrentDomain.UnhandledException += (s, ex) => {
                 try { System.IO.File.WriteAllText(System.IO.Path.GetTempPath() + "pam_crash.log",
-                    DateTime.Now + " UnhandledException: " + ex.ExceptionObject); } catch { }
+                    $"{DateTime.Now} UnhandledException: {ex.ExceptionObject}"); } catch { }
             };
             System.Windows.Forms.Application.ThreadException += (s, ex) => {
                 try { System.IO.File.AppendAllText(System.IO.Path.GetTempPath() + "pam_crash.log",
-                    System.Environment.NewLine + DateTime.Now + " ThreadException: " + ex.Exception); } catch { }
+                    $"{System.Environment.NewLine}{DateTime.Now} ThreadException: {ex.Exception}"); } catch { }
             };
             var app = new App();
-            app.DispatcherUnhandledException += (s, ex) => { try { System.IO.File.AppendAllText(System.IO.Path.GetTempPath() + "pam_crash.log", System.Environment.NewLine + DateTime.Now + " Dispatcher: " + ex.Exception); } catch { } ex.Handled = true; };
+            app.DispatcherUnhandledException += (s, ex) => { try { System.IO.File.AppendAllText(System.IO.Path.GetTempPath() + "pam_crash.log", $"{System.Environment.NewLine}{DateTime.Now} Dispatcher: {ex.Exception}"); } catch { } ex.Handled = true; };
             // global:: prefix bypasses Application.MainWindow property name collision
             var window = new global::PowerAudioManager.MainWindow();
-            try { window.Show(); } catch (Exception ex) { try { System.IO.File.AppendAllText(System.IO.Path.GetTempPath() + "pam_crash.log", DateTime.Now + " Show: " + ex); } catch { } throw; }
-            try { app.Run(); } catch (Exception ex) { try { System.IO.File.AppendAllText(System.IO.Path.GetTempPath() + "pam_crash.log", System.Environment.NewLine + DateTime.Now + " Run: " + ex); } catch { } throw; }
+            try { window.Show(); } catch (Exception ex) { try { System.IO.File.AppendAllText(System.IO.Path.GetTempPath() + "pam_crash.log", $"{DateTime.Now} Show: {ex}"); } catch { } throw; }
+            try { app.Run(); } catch (Exception ex) { try { System.IO.File.AppendAllText(System.IO.Path.GetTempPath() + "pam_crash.log", $"{System.Environment.NewLine}{DateTime.Now} Run: {ex}"); } catch { } throw; }
         }
     }
 
@@ -67,7 +80,7 @@ namespace PowerAudioManager
         {
             try
             {
-                var dir = System.IO.Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
+                var dir = System.IO.Path.GetDirectoryName(Environment.ProcessPath);
                 if (!string.IsNullOrEmpty(dir)) return System.IO.Path.Combine(dir, "OneBox.log");
             }
             catch { }
@@ -81,19 +94,19 @@ namespace PowerAudioManager
                 lock (_lock)
                 {
                     System.IO.File.AppendAllText(_path,
-                        DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + " " + message + System.Environment.NewLine);
+                        $"{DateTime.Now:yyyy-MM-dd HH:mm:ss} {message}{System.Environment.NewLine}");
                 }
             }
             catch { }
         }
         public static void Log(string context, Exception ex)
         {
-            Log(context + (ex == null ? "" : (": " + ex.GetType().Name + ": " + ex.Message)));
+            Log(ex == null ? context : $"{context}: {ex.GetType().Name}: {ex.Message}");
         }
         // Structured tag + detail, e.g. Log("Screenshot", "source=CopyFromScreen app=chrome saved=...").
         public static void Log(string context, string detail)
         {
-            Log("[" + context + "] " + detail);
+            Log($"[{context}] {detail}");
         }
     }
 

@@ -44,7 +44,7 @@ namespace PowerAudioManager
                     });
                 }
             }
-            catch { }
+            catch (Exception ex) { AppLog.Log("PowerPlan", ex); }
             return plans;
         }
 

@@ -52,7 +52,7 @@ namespace PowerAudioManager
             try
             {
                 var psi = new System.Diagnostics.ProcessStartInfo {
-                    FileName = System.Reflection.Assembly.GetExecutingAssembly().Location,
+                    FileName = Environment.ProcessPath,
                     Verb = "runas",
                     UseShellExecute = true
                 };

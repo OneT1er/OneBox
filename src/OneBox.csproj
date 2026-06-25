@@ -1,0 +1,45 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <RootNamespace>PowerAudioManager</RootNamespace>
+    <AssemblyName>OneBox</AssemblyName>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>app.ico</ApplicationIcon>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <SatelliteResourceLanguages>en;zh-Hans</SatelliteResourceLanguages>
+  </PropertyGroup>
+
+  <!-- Framework-dependent single-file publish: one OneBox.exe, requires the
+       .NET 8 Desktop Runtime on the user's machine. Build with:
+         dotnet publish -c Release -r win-x64 -p:SelfContained=false -->
+  <PropertyGroup>
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>false</SelfContained>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <IncludeAllContentForSelfExtract>true</IncludeAllContentForSelfExtract>
+    <!-- ReadyToRun precompiles IL to native ahead of time, cutting cold-start JIT
+         (the user-perceived "loads for a while" vs the old .NET Framework 4 NGen exe). -->
+    <PublishReadyToRun>true</PublishReadyToRun>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="app.ico" />
+    <EmbeddedResource Include="app.png" />
+    <EmbeddedResource Include="icon-power.png" />
+    <EmbeddedResource Include="icon-audio.png" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.Text.Encoding.CodePages" Version="10.0.9" />
+    <PackageReference Include="Vortice.DXGI" Version="3.8.3" />
+  </ItemGroup>
+
+</Project>

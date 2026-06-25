@@ -24,6 +24,7 @@ namespace PowerAudioManager
         private DispatcherTimer _refreshTimer;
         private DispatcherTimer _screenPoll;
         private DispatcherTimer _autoCleanTimer;
+        private System.Threading.Timer _initLoadTimer;
         private DateTime _lastCleanTime = DateTime.MinValue;
         private WindowScaling _scaling;
         private StackPanel _root;
@@ -232,10 +233,18 @@ namespace PowerAudioManager
                 // NOT run on later resolution changes (those honour 固定位置 and leave
                 // the window where the user put it).
                 Dispatcher.BeginInvoke(new Action(EnsureFullyVisible), DispatcherPriority.Loaded);
-                // Load plans/devices/memory async after the window is up so first paint
-                // isn't blocked by PerformanceCounter init (~300ms) or powercfg.
-                Dispatcher.BeginInvoke(new Action(() => { try { LoadData(); } catch { } }),
-                    System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+                // Load plans/devices/memory shortly after the window is up so first paint
+                // isn't blocked by PerformanceCounter init (~300ms) or powercfg. LoadData's
+                // heavy work runs on a threadpool thread, so a 50ms delay is well past
+                // first paint without blocking it. NOTE: was DispatcherPriority.ApplicationIdle,
+                // but on .NET 8 cold start the dispatcher doesn't reach idle for several
+                // seconds (JIT / other queued work), so the initial load was delayed ~6s and
+                // the floating window sat empty — "加载好一会". A threading timer fires
+                // deterministically and marshals back to the UI thread via BeginInvoke.
+                _initLoadTimer = new System.Threading.Timer(_ =>
+                {
+                    Dispatcher.BeginInvoke(new Action(() => { try { LoadData(); } catch (Exception ex) { AppLog.Log("Startup LoadData", ex); } }));
+                }, null, 50, System.Threading.Timeout.Infinite);
                 AppLog.Log("Startup", "OnLoaded done " + sw.ElapsedMilliseconds + "ms");
             }
             catch (Exception ex) { AppLog.Log("OnLoaded", ex); }

@@ -132,18 +132,48 @@ namespace PowerAudioManager
         // to be repurposed — i.e. "available-ish" cached memory. We reuse long-
         // lived PerformanceCounter instances (creating one per read leaks a kernel
         // perf-counter mapping; a cached one does not).
+        // PERF: constructing these 4 counters takes ~5s on .NET 8 cold start (WMI/COM
+        // init + JIT), vs negligible on .NET Framework 4. They MUST NOT be created on
+        // the UI thread — GetStatus() is called from LoadData's synchronous prologue
+        // (UpdateMemoryUI/UpdateTrayTooltip), so a lazy first-create there froze the
+        // floating window for ~5s at startup. Warm them on a background thread at
+        // startup (WarmupCounters); ReadCachedBytes returns 0 until ready rather than
+        // blocking. NextValue() itself is fast (~25ms first, ~0 after).
         static System.Diagnostics.PerformanceCounter _standbyCore, _standbyNormal, _standbyReserve, _modified;
+        static volatile bool _countersReady;
+        static readonly object _counterLock = new object();
+
+        // Fire-and-forget on a threadpool thread at startup so the UI thread never
+        // pays the ~5s creation cost. Safe to call multiple times.
+        public static void WarmupCounters()
+        {
+            if (_countersReady) return;
+            System.Threading.ThreadPool.QueueUserWorkItem(_ =>
+            {
+                try
+                {
+                    lock (_counterLock)
+                    {
+                        if (_countersReady) return;
+                        _standbyCore = new System.Diagnostics.PerformanceCounter("Memory", "Standby Cache Core Bytes", true);
+                        _standbyNormal = new System.Diagnostics.PerformanceCounter("Memory", "Standby Cache Normal Priority Bytes", true);
+                        _standbyReserve = new System.Diagnostics.PerformanceCounter("Memory", "Standby Cache Reserve Bytes", true);
+                        _modified = new System.Diagnostics.PerformanceCounter("Memory", "Modified Page List Bytes", true);
+                        // Prime NextValue (first call has its own ~25ms init) so the first
+                        // real read on the UI thread is instant.
+                        try { _standbyCore.NextValue(); _standbyNormal.NextValue(); _standbyReserve.NextValue(); _modified.NextValue(); } catch { }
+                        _countersReady = true;
+                    }
+                }
+                catch { /* non-fatal: cached bytes just reads 0 */ }
+            });
+        }
+
         static ulong ReadCachedBytes()
         {
             try
             {
-                if (_standbyCore == null)
-                {
-                    _standbyCore = new System.Diagnostics.PerformanceCounter("Memory", "Standby Cache Core Bytes", true);
-                    _standbyNormal = new System.Diagnostics.PerformanceCounter("Memory", "Standby Cache Normal Priority Bytes", true);
-                    _standbyReserve = new System.Diagnostics.PerformanceCounter("Memory", "Standby Cache Reserve Bytes", true);
-                    _modified = new System.Diagnostics.PerformanceCounter("Memory", "Modified Page List Bytes", true);
-                }
+                if (!_countersReady) return 0; // still warming up on the background thread — don't block the UI
                 return (ulong)(_standbyCore.NextValue() + _standbyNormal.NextValue() + _standbyReserve.NextValue() + _modified.NextValue());
             }
             catch { return 0; }

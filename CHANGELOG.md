@@ -1,5 +1,38 @@
 # 更新日志
 
+## v1.3.0-beta1 (2026-06-25) [预发布]
+
+> ⚠️ 预发布版本。重大重构：从 .NET Framework 4 + 裸 csc.exe 迁移到 .NET 8 + .csproj + NuGet。
+> 运行需安装 [.NET 8 桌面运行时](https://dotnet.microsoft.com/download/dotnet/8.0)。
+> 旧的"单文件 exe / 无运行时依赖"形态变更为"框架依赖单文件 exe"。
+
+### 重大变更：迁移到 .NET 8
+- 构建从 `build.bat` + 裸 csc.exe 迁移到 `OneBox.csproj` + `dotnet build`/`dotnet publish`
+- C#5 → 现代 C#（内插字符串、out var、表达式体等）
+- JSON：`JavaScriptSerializer` → `System.Text.Json`（UpdateChecker / TranslateService）
+- `Assembly.Location` → `Environment.ProcessPath`（单文件发布必需，6 处）
+- 单文件框架依赖发布（`PublishSingleFile` + ReadyToRun 预编译）
+- DPI 感知从 manifest 迁到 `<ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>`
+- 引入 NuGet：`Vortice.DXGI`（HDR 检测）、`System.Text.Encoding.CodePages`
+
+### 新功能：HDR 截图（高级，默认关闭）
+- Vortice.DXGI 检测前台窗口所在显示器是否 HDR（HDR10，ColorSpace==RGB_FULL_G2084_NONE_P2020）
+- 设置加"高级：Game Bar 截图"开关，默认关闭仅普通截图；开启后 HDR/全屏游戏回退 Game Bar
+- Game Bar 截图读取位置可配置（解决图库位置被改导致找不到文件）
+- Game Bar 截图快捷键可配置（绕开"游戏前台吞 Win 键"——改用不含 Win 的组合如 Alt+F12）
+- Game Bar 回退保留 HDR `.jxr` 文件（`WaitForFileReady` 防止复制半写文件）
+
+### 修复
+- 电源计划识别不到：.NET 8 默认不支持 GBK(936) 编码，`Encoding.RegisterProvider(CodePagesEncodingProvider)` 修复（同时修复应用内升级 .bat 写入）
+- 启动卡顿：PerformanceCounter 首次创建 ~5s 阻塞 UI 线程，改后台预热（`WarmupCounters`）
+- LoadData 启动延迟：`DispatcherPriority.ApplicationIdle` 在 .NET 8 冷启动被推迟 ~6s，改 `System.Threading.Timer`
+- 截图闪退：手写 DXGI vtable 索引错导致 AccessViolation，改用 Vortice 投影
+
+### 已知限制
+- 框架依赖发布：用户机器需装 .NET 8 桌面运行时，否则启动失败
+- Game Bar 截图快捷键：被 Game Bar 全局注册的 Alt+ 组合在 OneBox 设置里可能捕获不到，可用 Ctrl+ 组合
+- 截图 `.jxr` 缩略图：WPF 不自动色调映射，Toast/图库显示的是 SDR `.png` 预览
+
 ## v1.2.1 (2026-06-23)
 
 ### 优化

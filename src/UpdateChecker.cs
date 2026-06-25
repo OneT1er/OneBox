@@ -5,7 +5,8 @@ using System.Net;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
-using System.Web.Script.Serialization;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
@@ -39,10 +40,10 @@ namespace PowerAudioManager
         public const string Repo = "OneBox";
         // Bump this when you cut a new release. Must match the GitHub release tag
         // (e.g. tag "v1.2.0" -> CurrentVersion 1.2.0).
-        public static readonly Version CurrentVersion = new Version(1, 2, 1);
+        public static readonly Version CurrentVersion = new Version(1, 3, 0);
 
-        const string ApiUrl = "https://api.github.com/repos/" + Owner + "/" + Repo + "/releases/latest";
-        const string ReleasesPage = "https://github.com/" + Owner + "/" + Repo + "/releases/latest";
+        const string ApiUrl = $"https://api.github.com/repos/{Owner}/{Repo}/releases/latest";
+        const string ReleasesPage = $"https://github.com/{Owner}/{Repo}/releases/latest";
 
         // Fired from a worker thread; marshals to the UI thread before showing UI.
         public static void CheckAsync(Window owner, bool manual)
@@ -60,7 +61,7 @@ namespace PowerAudioManager
                     if (err != null)
                     {
                         AppLog.Log("UpdateChecker", err);
-                        if (manual) MessageBox.Show(owner, "检查更新失败：" + err.Message + "\n\n你可以直接访问：" + ReleasesPage,
+                        if (manual) MessageBox.Show(owner, $"检查更新失败：{err.Message}\n\n你可以直接访问：{ReleasesPage}",
                             "检查更新", MessageBoxButton.OK, MessageBoxImage.Warning);
                         return;
                     }
@@ -70,11 +71,11 @@ namespace PowerAudioManager
                         return;
                     }
                     bool newer = info.Version != null && info.Version > CurrentVersion;
-                    AppLog.Log("UpdateChecker", "latest=" + (info.Version == null ? info.TagName : info.Version.ToString()) + " current=" + CurrentVersion + " newer=" + newer);
+                    AppLog.Log("UpdateChecker", $"latest={(info.Version == null ? info.TagName : info.Version.ToString())} current={CurrentVersion} newer={newer}");
                     if (newer)
                         ShowUpdateDialog(owner, info);
                     else if (manual)
-                        MessageBox.Show(owner, "当前版本 " + CurrentVersion + " 已是最新。", "检查更新",
+                        MessageBox.Show(owner, $"当前版本 {CurrentVersion} 已是最新。", "检查更新",
                             MessageBoxButton.OK, MessageBoxImage.Information);
                     // Silent startup check: do nothing when up to date.
                 }));
@@ -112,28 +113,23 @@ namespace PowerAudioManager
 
         static ReleaseInfo ParseRelease(string json)
         {
-            var ser = new JavaScriptSerializer();
-            var dict = ser.DeserializeObject(json) as System.Collections.Generic.Dictionary<string, object>;
-            if (dict == null) return null;
+            GitHubRelease rel;
+            try { rel = JsonSerializer.Deserialize<GitHubRelease>(json, _jsonOpt); }
+            catch { return null; }
+            if (rel == null) return null;
             var info = new ReleaseInfo();
-            info.TagName = dict.ContainsKey("tag_name") ? dict["tag_name"] as string : null;
-            info.Name = dict.ContainsKey("name") ? dict["name"] as string : null;
-            info.Body = dict.ContainsKey("body") ? dict["body"] as string : null;
-            info.HtmlUrl = dict.ContainsKey("html_url") ? dict["html_url"] as string : ReleasesPage;
+            info.TagName = rel.TagName;
+            info.Name = rel.Name;
+            info.Body = rel.Body;
+            info.HtmlUrl = string.IsNullOrEmpty(rel.HtmlUrl) ? ReleasesPage : rel.HtmlUrl;
             // Find the OneBox.exe asset download URL among the release's assets.
-            object assetsObj;
-            if (dict.ContainsKey("assets")) assetsObj = dict["assets"]; else assetsObj = null;
-            var assets = assetsObj as System.Collections.ArrayList;
-            if (assets != null)
+            if (rel.Assets != null)
             {
-                foreach (var a in assets)
+                foreach (var a in rel.Assets)
                 {
-                    var adict = a as System.Collections.Generic.Dictionary<string, object>;
-                    if (adict == null) continue;
-                    string name = adict.ContainsKey("name") ? adict["name"] as string : null;
-                    if (name != null && name.ToLowerInvariant() == "onebox.exe")
+                    if (a != null && string.Equals(a.Name, "onebox.exe", StringComparison.OrdinalIgnoreCase))
                     {
-                        info.ExeDownloadUrl = adict.ContainsKey("browser_download_url") ? adict["browser_download_url"] as string : null;
+                        info.ExeDownloadUrl = a.BrowserDownloadUrl;
                         break;
                     }
                 }
@@ -144,11 +140,27 @@ namespace PowerAudioManager
                 var m = Regex.Match(info.TagName, @"(\d+(\.\d+){0,2})");
                 if (m.Success)
                 {
-                    Version v;
-                    if (Version.TryParse(m.Groups[1].Value, out v)) info.Version = v;
+                    if (Version.TryParse(m.Groups[1].Value, out var v)) info.Version = v;
                 }
             }
             return info;
+        }
+
+        static readonly JsonSerializerOptions _jsonOpt = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+
+        class GitHubRelease
+        {
+            [JsonPropertyName("tag_name")] public string TagName { get; set; }
+            [JsonPropertyName("name")] public string Name { get; set; }
+            [JsonPropertyName("body")] public string Body { get; set; }
+            [JsonPropertyName("html_url")] public string HtmlUrl { get; set; }
+            [JsonPropertyName("assets")] public System.Collections.Generic.List<GitHubAsset> Assets { get; set; }
+        }
+
+        class GitHubAsset
+        {
+            [JsonPropertyName("name")] public string Name { get; set; }
+            [JsonPropertyName("browser_download_url")] public string BrowserDownloadUrl { get; set; }
         }
 
         static void ShowUpdateDialog(Window owner, ReleaseInfo info)
@@ -176,7 +188,7 @@ namespace PowerAudioManager
 
             stack.Children.Add(new TextBlock
             {
-                Text = "当前版本 " + CurrentVersion + "，建议更新。",
+                Text = $"当前版本 {CurrentVersion}，建议更新。",
                 Foreground = fg, FontSize = 12, Margin = new Thickness(0, 0, 0, 12)
             });
 
@@ -243,7 +255,7 @@ namespace PowerAudioManager
                         if (err != null)
                         {
                             AppLog.Log("UpdateChecker download", err);
-                            progress.Text = "下载失败：" + err.Message + "。可点“前往下载”用浏览器下载。";
+                            progress.Text = $"下载失败：{err.Message}。可点“前往下载”用浏览器下载。";
                             download.Content = "前往下载";
                             download.IsEnabled = true;
                             later.IsEnabled = true;
@@ -253,7 +265,7 @@ namespace PowerAudioManager
                         progress.Text = "下载完成，即将安装并重启...";
                         // Hand off to the updater batch and exit.
                         try { LaunchUpdaterAndExit(tmpExe); }
-                        catch (Exception ex2) { AppLog.Log("UpdateChecker install", ex2); progress.Text = "安装失败：" + ex2.Message; }
+                        catch (Exception ex2) { AppLog.Log("UpdateChecker install", ex2); progress.Text = $"安装失败：{ex2.Message}"; }
                     }));
                 });
             };
@@ -274,7 +286,7 @@ namespace PowerAudioManager
             req.AllowAutoRedirect = true; // GitHub asset URLs redirect to S3
             // Random temp name (predictable names let a local user squat/swap the
             // file before we read it back).
-            string tmp = Path.Combine(Path.GetTempPath(), "OneBox_" + Path.GetRandomFileName() + ".exe");
+            string tmp = Path.Combine(Path.GetTempPath(), $"OneBox_{Path.GetRandomFileName()}.exe");
             using (var resp = (HttpWebResponse)req.GetResponse())
             using (var rs = resp.GetResponseStream())
             using (var fs = new FileStream(tmp, FileMode.Create, FileAccess.Write))
@@ -298,11 +310,11 @@ namespace PowerAudioManager
         // (a running exe is locked and cannot be overwritten).
         static void LaunchUpdaterAndExit(string downloadedExePath)
         {
-            string currentExe = System.Reflection.Assembly.GetExecutingAssembly().Location;
+            string currentExe = Environment.ProcessPath;
             string currentDir = Path.GetDirectoryName(currentExe);
             // Random batch name so a local attacker can't pre-place a malicious
             // OneBox_updater.bat in temp.
-            string batPath = Path.Combine(Path.GetTempPath(), "OneBox_" + Path.GetRandomFileName() + ".bat");
+            string batPath = Path.Combine(Path.GetTempPath(), $"OneBox_{Path.GetRandomFileName()}.bat");
             // PID list of the current process AND any child processes that might
             // hold the exe open. We wait on the current PID at minimum.
             int pid = System.Diagnostics.Process.GetCurrentProcess().Id;
@@ -311,7 +323,7 @@ namespace PowerAudioManager
             sb.AppendLine("chcp 65001 >nul");
             // Wait until the current OneBox exits (it holds a lock on the exe).
             sb.AppendLine(":wait");
-            sb.AppendLine("tasklist /fi \"PID eq " + pid + "\" 2>nul | find \"" + pid + "\" >nul");
+            sb.AppendLine($"tasklist /fi \"PID eq {pid}\" 2>nul | find \"{pid}\" >nul");
             sb.AppendLine("if not errorlevel 1 (");
             sb.AppendLine("  timeout /t 1 /nobreak >nul");
             sb.AppendLine("  goto wait");
@@ -319,7 +331,7 @@ namespace PowerAudioManager
             // Overwrite the exe. Retry a few times in case of a lingering lock.
             sb.AppendLine("set /a tries=0");
             sb.AppendLine(":copy");
-            sb.AppendLine("copy /Y \"" + downloadedExePath + "\" \"" + currentExe + "\" >nul 2>&1");
+            sb.AppendLine($"copy /Y \"{downloadedExePath}\" \"{currentExe}\" >nul 2>&1");
             sb.AppendLine("if errorlevel 1 (");
             sb.AppendLine("  set /a tries+=1");
             sb.AppendLine("  if %tries% LSS 10 (");
@@ -328,9 +340,9 @@ namespace PowerAudioManager
             sb.AppendLine("  )");
             sb.AppendLine(")");
             // Clean up the temp download.
-            sb.AppendLine("del /f /q \"" + downloadedExePath + "\" >nul 2>&1");
+            sb.AppendLine($"del /f /q \"{downloadedExePath}\" >nul 2>&1");
             // Relaunch the new version.
-            sb.AppendLine("start \"\" \"" + currentExe + "\"");
+            sb.AppendLine($"start \"\" \"{currentExe}\"");
             // Self-delete this batch.
             sb.AppendLine("(goto) 2>nul & del \"%~f0\"");
             File.WriteAllText(batPath, sb.ToString(), Encoding.GetEncoding(936)); // GBK so cmd renders the chcp path fine; ASCII-safe regardless

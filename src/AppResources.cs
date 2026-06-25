@@ -121,7 +121,7 @@ namespace PowerAudioManager
                     }
                 }
                 // Fallback: external file next to the exe.
-                var dir = Path.GetDirectoryName(asm.Location);
+                var dir = Path.GetDirectoryName(Environment.ProcessPath);
                 var path = Path.Combine(dir, fileName);
                 if (File.Exists(path))
                 {

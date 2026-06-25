@@ -252,7 +252,7 @@ namespace PowerAudioManager
                 {
                     if (enable)
                         key.SetValue("OneBox",
-                            Assembly.GetExecutingAssembly().Location);
+                            Environment.ProcessPath);
                     else
                         key.DeleteValue("OneBox", false);
                 }
