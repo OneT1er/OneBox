@@ -109,6 +109,10 @@ namespace PowerAudioManager
                 ToolTip = string.IsNullOrEmpty(path) ? "点击或拖入程序（exe / 快捷方式）" : path,
                 AllowDrop = true
             };
+            // MaterialDesign's implicit Button style sets MinWidth=88/MinHeight=36,
+            // which would stretch this 44x44 slot and clip its icon. ApplyIconButtonStyle
+            // neutralises those minsizes so the slot stays compact.
+            MainWindow.ApplyIconButtonStyle(btn);
             if (!string.IsNullOrEmpty(path))
             {
                 var img = ExtractIcon(path);

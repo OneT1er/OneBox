@@ -310,9 +310,8 @@ namespace PowerAudioManager
             titleStack.Children.Add(titleLabel);
             var pinBtn = new Button
             {
-                Content = _lockPosition ? "🔒" : "🔓", FontFamily = EmojiFont,  // 🔒 locked / 🔓 unlocked
+                Content = PinIcon(_lockPosition),
                 Width = 28, Height = 28,
-                FontSize = 12,
                 Foreground = new SolidColorBrush(_lockPosition ? AccentColor : TextSecondary),
                 Background = Brushes.Transparent,
                 BorderBrush = Brushes.Transparent,
@@ -320,41 +319,39 @@ namespace PowerAudioManager
                 VerticalAlignment = VerticalAlignment.Center,
                 ToolTip = "切换锁定窗口位置"
             };
-            ApplyFlatStyle(pinBtn);
+            ApplyIconButtonStyle(pinBtn);
             pinBtn.Click += (s, e) =>
             {
                 _lockPosition = !_lockPosition;
                 AppPrefs.SetBool("LockPosition", _lockPosition);
-                pinBtn.Content = _lockPosition ? "🔒" : "🔓";
+                pinBtn.Content = PinIcon(_lockPosition);
                 pinBtn.Foreground = new SolidColorBrush(_lockPosition ? AccentColor : TextSecondary);
                 if (_tray != null) _tray.SetLockChecked(_lockPosition);
             };
             _pinBtn = pinBtn;
             var collapseBtn = new Button
             {
-                Content = "▲",
+                Content = new PackIcon { Kind = PackIconKind.ChevronUp, Width = 16, Height = 16 },
                 Width = 28, Height = 28,
-                FontSize = 14,
                 Foreground = new SolidColorBrush(TextSecondary),
                 Background = Brushes.Transparent,
                 BorderBrush = Brushes.Transparent,
                 Cursor = Cursors.Hand,
                 VerticalAlignment = VerticalAlignment.Center
             };
-            ApplyFlatStyle(collapseBtn);
+            ApplyIconButtonStyle(collapseBtn);
             collapseBtn.Click += ToggleCollapse;
             var closeBtn = new Button
             {
-                Content = "✕",
+                Content = new PackIcon { Kind = PackIconKind.Close, Width = 16, Height = 16 },
                 Width = 28, Height = 28,
-                FontSize = 12,
                 Foreground = new SolidColorBrush(TextSecondary),
                 Background = Brushes.Transparent,
                 BorderBrush = Brushes.Transparent,
                 Cursor = Cursors.Hand,
                 VerticalAlignment = VerticalAlignment.Center
             };
-            ApplyFlatStyle(closeBtn);
+            ApplyIconButtonStyle(closeBtn);
             closeBtn.Click += (s, e) => Hide();
             DockPanel.SetDock(closeBtn, Dock.Right);
             DockPanel.SetDock(collapseBtn, Dock.Right);
@@ -426,16 +423,15 @@ namespace PowerAudioManager
             // Volume row
             var volRow = new DockPanel { Margin = new Thickness(0, 10, 0, 0), LastChildFill = true };
             _muteBtn = new Button {
-                Content = "\uD83D\uDD0A", FontFamily = EmojiFont,
+                Content = MuteIcon(false),
                 Width = 28, Height = 28,
-                FontSize = 14,
                 Background = Brushes.Transparent,
                 Foreground = new SolidColorBrush(TextSecondary),
                 BorderBrush = Brushes.Transparent,
                 Cursor = Cursors.Hand,
                 Margin = new Thickness(0, 0, 6, 0)
             };
-            ApplyFlatStyle(_muteBtn);
+            ApplyIconButtonStyle(_muteBtn);
             _muteBtn.Click += (s, e) => { VolumeControl.SetMute(!VolumeControl.GetMute()); UpdateVolumeUI(); };
             DockPanel.SetDock(_muteBtn, Dock.Left);
             volRow.Children.Add(_muteBtn);
@@ -906,7 +902,7 @@ namespace PowerAudioManager
             _volSliderUpdating = true;
             try { _volSlider.Value = VolumeControl.GetVolume() * 100; if (_volLabel != null) _volLabel.Text = ((int)_volSlider.Value).ToString() + "%"; } catch { }
             _volSliderUpdating = false;
-            _muteBtn.Content = VolumeControl.GetMute() ? "\uD83D\uDD07" : "\uD83D\uDD0A";
+            _muteBtn.Content = MuteIcon(VolumeControl.GetMute());
         }
 
         // Schedule a few delayed re-reads of the default endpoint volume after a device switch.
@@ -1183,10 +1179,42 @@ namespace PowerAudioManager
         // Stamp the MaterialDesign flat-button style onto a button. Looked up by
         // resource key (defined by the merged MaterialDesign3 defaults). Falls back
         // to no style if the key is absent so a theming hiccup never blanks a button.
+        // Use this for text buttons (清理/翻译/电源项) where MD's default padding reads fine.
         internal static void ApplyFlatStyle(Button btn)
         {
             var style = Application.Current.TryFindResource("MaterialDesignFlatButton") as Style;
             if (style != null) btn.Style = style;
+        }
+
+        // Variant for compact icon buttons (title-bar 🔒/▲/✕, mute, launcher slots):
+        // MaterialDesign's Button style sets MinWidth=88 / MinHeight=36 / generous
+        // Padding, which overrides a small button's Width/Height and pushes its
+        // content out of view (the icon "disappears"). Local values beat style
+        // setters, so we force MinWidth/MinHeight=0 and Padding=0 to keep the
+        // button at its intended compact size with the icon centred.
+        internal static void ApplyIconButtonStyle(Button btn)
+        {
+            ApplyFlatStyle(btn);
+            btn.MinWidth = 0;
+            btn.MinHeight = 0;
+            btn.Padding = new Thickness(0);
+            btn.HorizontalContentAlignment = HorizontalAlignment.Center;
+            btn.VerticalContentAlignment = VerticalAlignment.Center;
+        }
+
+        // PackIcon content for the title-bar lock button. Vector icons (not emoji)
+        // so they render regardless of the MaterialDesign flat-button style overriding
+        // FontFamily — emoji glyphs disappeared once the style swapped the font away
+        // from the Segoe UI Symbol fallback. Lock = position locked, LockOpen = free.
+        internal static PackIcon PinIcon(bool locked)
+        {
+            return new PackIcon { Kind = locked ? PackIconKind.Lock : PackIconKind.LockOpen, Width = 16, Height = 16 };
+        }
+
+        // PackIcon content for the mute button: VolumeHigh when audible, VolumeMute when muted.
+        internal static PackIcon MuteIcon(bool muted)
+        {
+            return new PackIcon { Kind = muted ? PackIconKind.VolumeMute : PackIconKind.VolumeHigh, Width = 16, Height = 16 };
         }
 
 

@@ -75,7 +75,7 @@ namespace PowerAudioManager
                     AppPrefs.SetBool("LockPosition", _owner._lockPosition);
                     if (_owner._pinBtn != null)
                     {
-                        _owner._pinBtn.Content = _owner._lockPosition ? "🔒" : "🔓";
+                        _owner._pinBtn.Content = MainWindow.PinIcon(_owner._lockPosition);
                         _owner._pinBtn.Foreground = new System.Windows.Media.SolidColorBrush(_owner._lockPosition ? MainWindow.AccentColor : MainWindow.TextSecondary);
                     }
                 };

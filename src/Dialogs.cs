@@ -12,6 +12,7 @@ using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using System.IO;
 using Microsoft.Win32;
+using MaterialDesignThemes.Wpf;
 
 namespace PowerAudioManager
 {
@@ -179,15 +180,15 @@ namespace PowerAudioManager
                 VerticalAlignment = VerticalAlignment.Center
             };
             var closeBtn = new Button {
-                Content = "\u2715",
+                Content = new PackIcon { Kind = PackIconKind.Close, Width = 16, Height = 16 },
                 Width = 36, Height = 36,
-                FontSize = 12,
                 Foreground = new SolidColorBrush(Color.FromRgb(190, 188, 220)),
                 Background = Brushes.Transparent,
                 BorderBrush = Brushes.Transparent,
                 Cursor = Cursors.Hand,
                 ToolTip = "关闭"
             };
+            MainWindow.ApplyIconButtonStyle(closeBtn);
             closeBtn.Click += (s, e) => Close();
             DockPanel.SetDock(closeBtn, Dock.Right);
             titleBar.Children.Add(closeBtn);
@@ -207,8 +208,8 @@ namespace PowerAudioManager
             var bar = new DockPanel { Margin = new Thickness(0, 0, 0, 8), LastChildFill = false };
             _fromBox = MakeLangBox(true);
             _toBox = MakeLangBox(false);
-            _btnSwap = new Button { Content = "\u21C4", Width = 32, Height = 28, FontSize = 14, Margin = new Thickness(4, 0, 4, 0), ToolTip = "交换源/目标语言" };
-            AppResources.StyleDialogButton(_btnSwap, false);
+            _btnSwap = new Button { Content = new PackIcon { Kind = PackIconKind.SwapHorizontal, Width = 16, Height = 16 }, Width = 32, Height = 28, Margin = new Thickness(4, 0, 4, 0), ToolTip = "交换源/目标语言", Foreground = new SolidColorBrush(Color.FromRgb(190, 188, 220)) };
+            MainWindow.ApplyIconButtonStyle(_btnSwap);
             _btnSwap.Click += (s, e) => SwapLanguages();
             DockPanel.SetDock(_fromBox, Dock.Left);
             DockPanel.SetDock(_btnSwap, Dock.Left);
@@ -221,8 +222,8 @@ namespace PowerAudioManager
             _btnGo.Click += (s, e) => RunTranslation(_input.Text);
             DockPanel.SetDock(_btnGo, Dock.Right);
             bar.Children.Add(_btnGo);
-            _btnSettings = new Button { Content = "\u2699", Width = 32, Height = 28, FontSize = 14, Margin = new Thickness(0, 0, 4, 0), ToolTip = "翻译 API 设置" };
-            AppResources.StyleDialogButton(_btnSettings, false);
+            _btnSettings = new Button { Content = new PackIcon { Kind = PackIconKind.Cog, Width = 16, Height = 16 }, Width = 32, Height = 28, Margin = new Thickness(0, 0, 4, 0), ToolTip = "翻译 API 设置", Foreground = new SolidColorBrush(Color.FromRgb(190, 188, 220)) };
+            MainWindow.ApplyIconButtonStyle(_btnSettings);
             _btnSettings.Click += (s, e) =>
             {
                 SettingsDialog.Show(this, 3); // 翻译 tab
@@ -407,10 +408,14 @@ namespace PowerAudioManager
                 VerticalAlignment = VerticalAlignment.Center
             };
             var closeBtn = new Button {
-                Content = "✕", Width = 36, Height = 36, FontSize = 12,
+                Content = new PackIcon { Kind = PackIconKind.Close, Width = 16, Height = 16 },
+                Width = 36, Height = 36,
                 Foreground = fg, Background = Brushes.Transparent,
                 BorderBrush = Brushes.Transparent, Cursor = Cursors.Hand, ToolTip = "关闭"
             };
+            // MD's Button style (MinWidth=88/MinHeight=36 + padding) would clip the
+            // icon in this 36x36 slot; ApplyIconButtonStyle neutralises those.
+            MainWindow.ApplyIconButtonStyle(closeBtn);
             closeBtn.Click += (s, e) => dlg.Close();
             DockPanel.SetDock(closeBtn, Dock.Right);
             titleBar.Children.Add(closeBtn);

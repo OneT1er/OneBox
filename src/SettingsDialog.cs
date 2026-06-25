@@ -154,7 +154,7 @@ namespace PowerAudioManager
                     if (mw._tray != null) mw._tray.SetLockChecked(mw._lockPosition);
                     if (mw._pinBtn != null)
                     {
-                        mw._pinBtn.Content = mw._lockPosition ? "🔒" : "🔓";
+                        mw._pinBtn.Content = MainWindow.PinIcon(mw._lockPosition);
                         mw._pinBtn.Foreground = new SolidColorBrush(mw._lockPosition ? MainWindow.AccentColor : MainWindow.TextSecondary);
                     }
                     mw.RefreshAutoCollapse();
