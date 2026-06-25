@@ -59,6 +59,11 @@ namespace PowerAudioManager
             };
             var app = new App();
             app.DispatcherUnhandledException += (s, ex) => { try { System.IO.File.AppendAllText(System.IO.Path.GetTempPath() + "pam_crash.log", $"{System.Environment.NewLine}{DateTime.Now} Dispatcher: {ex.Exception}"); } catch { } ex.Handled = true; };
+            // Bootstrap MaterialDesign (dark + 紫影 #8E8CD8) at application scope so
+            // every window — floating card and dialogs — shares one design language.
+            // Must run after `new App()` (Application.Current exists) and before the
+            // window is built, so the floating window resolves the styles on construct.
+            try { MaterialTheme.Apply(); } catch (Exception ex) { try { System.IO.File.AppendAllText(System.IO.Path.GetTempPath() + "pam_crash.log", $"{DateTime.Now} MaterialTheme: {ex}"); } catch { } }
             // global:: prefix bypasses Application.MainWindow property name collision
             var window = new global::PowerAudioManager.MainWindow();
             try { window.Show(); } catch (Exception ex) { try { System.IO.File.AppendAllText(System.IO.Path.GetTempPath() + "pam_crash.log", $"{DateTime.Now} Show: {ex}"); } catch { } throw; }

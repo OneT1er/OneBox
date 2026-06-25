@@ -12,6 +12,7 @@ using System.Windows.Documents;
 using System.Windows.Threading;
 using System.IO;
 using Microsoft.Win32;
+using MaterialDesignThemes.Wpf;
 
 namespace PowerAudioManager
 {
@@ -319,6 +320,7 @@ namespace PowerAudioManager
                 VerticalAlignment = VerticalAlignment.Center,
                 ToolTip = "切换锁定窗口位置"
             };
+            ApplyFlatStyle(pinBtn);
             pinBtn.Click += (s, e) =>
             {
                 _lockPosition = !_lockPosition;
@@ -339,6 +341,7 @@ namespace PowerAudioManager
                 Cursor = Cursors.Hand,
                 VerticalAlignment = VerticalAlignment.Center
             };
+            ApplyFlatStyle(collapseBtn);
             collapseBtn.Click += ToggleCollapse;
             var closeBtn = new Button
             {
@@ -351,6 +354,7 @@ namespace PowerAudioManager
                 Cursor = Cursors.Hand,
                 VerticalAlignment = VerticalAlignment.Center
             };
+            ApplyFlatStyle(closeBtn);
             closeBtn.Click += (s, e) => Hide();
             DockPanel.SetDock(closeBtn, Dock.Right);
             DockPanel.SetDock(collapseBtn, Dock.Right);
@@ -425,12 +429,13 @@ namespace PowerAudioManager
                 Content = "\uD83D\uDD0A", FontFamily = EmojiFont,
                 Width = 28, Height = 28,
                 FontSize = 14,
-                Background = new SolidColorBrush(CardColor),
+                Background = Brushes.Transparent,
                 Foreground = new SolidColorBrush(TextSecondary),
-                BorderBrush = new SolidColorBrush(BorderColor),
+                BorderBrush = Brushes.Transparent,
                 Cursor = Cursors.Hand,
                 Margin = new Thickness(0, 0, 6, 0)
             };
+            ApplyFlatStyle(_muteBtn);
             _muteBtn.Click += (s, e) => { VolumeControl.SetMute(!VolumeControl.GetMute()); UpdateVolumeUI(); };
             DockPanel.SetDock(_muteBtn, Dock.Left);
             volRow.Children.Add(_muteBtn);
@@ -449,10 +454,12 @@ namespace PowerAudioManager
                 Minimum = 0, Maximum = 100,
                 Value = VolumeControl.GetVolume() * 100,
                 VerticalAlignment = VerticalAlignment.Center,
-                Foreground = new SolidColorBrush(AccentColor),
-                Background = new SolidColorBrush(Color.FromRgb(60, 55, 90)),
-                Template = BuildVolumeSliderTemplate()
+                Margin = new Thickness(4, 0, 4, 0)
             };
+            // MaterialDesign slider:紫影 thumb + filled track come from the theme
+            // primary colour automatically. Key is the MD3 variant.
+            var sliderStyle = Application.Current.TryFindResource("MaterialDesign3.MaterialDesignSlider") as Style;
+            if (sliderStyle != null) _volSlider.Style = sliderStyle;
             _volSlider.ValueChanged += (s, e) => {
                 if (_volLabel != null) _volLabel.Text = ((int)_volSlider.Value).ToString() + "%";
                 if (!_volSliderUpdating) VolumeControl.SetVolume((float)(_volSlider.Value / 100.0));
@@ -879,54 +886,6 @@ namespace PowerAudioManager
             return btn;
         }
 
-        ControlTemplate BuildVolumeSliderTemplate()
-        {
-            // Fluent slider: thin 3px pill track, a larger 14px round thumb with a subtle
-            // dark ring so it reads against the accent fill.
-            string xaml =
-@"<ControlTemplate TargetType='Slider' xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation' xmlns:x='http://schemas.microsoft.com/winfx/2006/xaml'>
-  <Grid VerticalAlignment='Center' Height='20'>
-    <Border Height='3' VerticalAlignment='Center' CornerRadius='2'
-            Background='{TemplateBinding Background}'/>
-    <Track x:Name='PART_Track'>
-      <Track.DecreaseRepeatButton>
-        <RepeatButton IsTabStop='False' Focusable='False'
-          Command='{x:Static Slider.DecreaseLarge}'>
-          <RepeatButton.Template>
-            <ControlTemplate TargetType='RepeatButton'>
-              <Border Height='3' VerticalAlignment='Center' CornerRadius='2'
-                Background='{Binding Foreground, RelativeSource={RelativeSource AncestorType=Slider}}'/>
-            </ControlTemplate>
-          </RepeatButton.Template>
-        </RepeatButton>
-      </Track.DecreaseRepeatButton>
-      <Track.IncreaseRepeatButton>
-        <RepeatButton IsTabStop='False' Focusable='False'
-          Command='{x:Static Slider.IncreaseLarge}'>
-          <RepeatButton.Template>
-            <ControlTemplate TargetType='RepeatButton'>
-              <Border Background='Transparent'/>
-            </ControlTemplate>
-          </RepeatButton.Template>
-        </RepeatButton>
-      </Track.IncreaseRepeatButton>
-      <Track.Thumb>
-        <Thumb>
-          <Thumb.Template>
-            <ControlTemplate TargetType='Thumb'>
-              <Grid>
-                <Ellipse Width='16' Height='16' Fill='#00000000'/>
-                <Ellipse Width='14' Height='14' Fill='White' Stroke='#33000000' StrokeThickness='1'/>
-              </Grid>
-            </ControlTemplate>
-          </Thumb.Template>
-        </Thumb>
-      </Track.Thumb>
-    </Track>
-  </Grid>
-</ControlTemplate>";
-            return (ControlTemplate)System.Windows.Markup.XamlReader.Parse(xaml);
-        }
 
         // A soft Fluent separator: the existing BorderColor, but inset from the edges so it
         // reads as a divider between sections rather than a full-bleed line. No new colour.
@@ -939,32 +898,6 @@ namespace PowerAudioManager
                 Margin = new Thickness(2, 12, 2, 12),
                 Opacity = 0.6
             };
-        }
-
-        // Rounded button template (corner radius 8) — Material-style pill shape for
-        // every action button. Background/Border/Content/Padding all bind through.
-        static ControlTemplate _roundedBtn;
-        static ControlTemplate RoundedButtonTemplate()
-        {
-            if (_roundedBtn != null) return _roundedBtn;
-            string xaml =
-@"<ControlTemplate TargetType='Button' xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'>
-  <Border CornerRadius='8' Background='{TemplateBinding Background}' BorderBrush='{TemplateBinding BorderBrush}' BorderThickness='{TemplateBinding BorderThickness}'>
-    <ContentPresenter Margin='{TemplateBinding Padding}' HorizontalAlignment='{TemplateBinding HorizontalContentAlignment}' VerticalAlignment='Center' RecognizesAccessKey='True'/>
-  </Border>
-</ControlTemplate>";
-            _roundedBtn = (ControlTemplate)System.Windows.Markup.XamlReader.Parse(xaml);
-            return _roundedBtn;
-        }
-
-        // Smooth hover: animate the Background brush colour instead of swapping it
-        // instantly. ~180ms matches Material's standard ease for surface state changes.
-        static void AnimateButtonBg(Button btn, Color to)
-        {
-            var b = btn.Background as SolidColorBrush;
-            if (b == null) { btn.Background = new SolidColorBrush(to); return; }
-            b.BeginAnimation(SolidColorBrush.ColorProperty,
-                new System.Windows.Media.Animation.ColorAnimation(to, TimeSpan.FromMilliseconds(180)));
         }
 
         void UpdateVolumeUI()
@@ -1215,39 +1148,45 @@ namespace PowerAudioManager
         // power plan / audio device button).
         void StyleButton(Button btn, bool isActive) { StyleButton(btn, isActive, false); }
 
+        // Apply MaterialDesign's flat button style (transparent fill, hover ripple,
+        // no elevation shadow — important inside the floating window's transparent
+        // AllowsTransparency card, where raised-button shadows render wrong). The
+        // three visual states are expressed purely via Background, which the flat
+        // template paints as a filled pill:
+        //   isActive → accent fill (selected plan/device)
+        //   primary  → 紫影 fill (call-to-action: 清理/翻译)
+        //   default  → card-tier fill
         void StyleButton(Button btn, bool isActive, bool primary)
         {
-            btn.Template = RoundedButtonTemplate();
+            ApplyFlatStyle(btn);
             if (isActive)
             {
                 btn.Background = new SolidColorBrush(ActiveBg);
                 btn.Foreground = Brushes.White;
                 btn.FontWeight = FontWeights.SemiBold;
-                btn.BorderBrush = new SolidColorBrush(AccentColor);
-                btn.BorderThickness = new Thickness(1);
                 return;
             }
             if (primary)
             {
-                // Filled accent button — the main call-to-action (清理/翻译).
                 btn.Background = new SolidColorBrush(AccentColor);
                 btn.Foreground = Brushes.White;
                 btn.FontWeight = FontWeights.SemiBold;
-                btn.BorderBrush = new SolidColorBrush(AccentColor);
-                btn.BorderThickness = new Thickness(0);
-                btn.MouseEnter += (s, e) => AnimateButtonBg(btn, AccentHover);
-                btn.MouseLeave += (s, e) => AnimateButtonBg(btn, AccentColor);
             }
             else
             {
                 btn.Background = new SolidColorBrush(CardColor);
                 btn.Foreground = new SolidColorBrush(TextSecondary);
                 btn.FontWeight = FontWeights.Normal;
-                btn.BorderBrush = new SolidColorBrush(BorderColor);
-                btn.BorderThickness = new Thickness(1);
-                btn.MouseEnter += (s, e) => AnimateButtonBg(btn, HoverColor);
-                btn.MouseLeave += (s, e) => AnimateButtonBg(btn, CardColor);
             }
+        }
+
+        // Stamp the MaterialDesign flat-button style onto a button. Looked up by
+        // resource key (defined by the merged MaterialDesign3 defaults). Falls back
+        // to no style if the key is absent so a theming hiccup never blanks a button.
+        internal static void ApplyFlatStyle(Button btn)
+        {
+            var style = Application.Current.TryFindResource("MaterialDesignFlatButton") as Style;
+            if (style != null) btn.Style = style;
         }
 
 
