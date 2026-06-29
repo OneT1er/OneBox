@@ -44,6 +44,7 @@ namespace PowerAudioManager
         [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
         [DllImport("user32.dll")] static extern bool GetClientRect(IntPtr hWnd, out RECT lpRect);
         [DllImport("user32.dll")] static extern bool ClientToScreen(IntPtr hWnd, ref POINT lpPoint);
+        [DllImport("user32.dll")] static extern uint GetDpiForWindow(IntPtr hWnd);
         [DllImport("user32.dll")] static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, IntPtr extraInfo);
         // OpenProcess + QueryFullProcessImageName: more reliable than Process.MainModule
         // (which throws Win32Exception for elevated / system processes the user can't
@@ -191,7 +192,20 @@ namespace PowerAudioManager
                 int h = br.Y - tl.Y;
                 if (w <= 0 || h <= 0) { error = "前台窗口无客户区"; AppLog.Log("Screenshot", $"fail: empty client area, app={exeName}"); goto done; }
 
-                AppLog.Log("Screenshot", $"start app={exeName} size={w}x{h}");
+                // DPI correction: GetClientRect returns physical pixels under PerMonitorV2.
+                // On a 150% display a 1920-wide window reports 2880px. Capture at physical
+                // resolution then downscale to logical (DIP) pixels so the output matches
+                // what the user sees as "1080p".
+                uint windowDpi = 96;
+                try { windowDpi = GetDpiForWindow(hwnd); } catch { }
+                if (windowDpi < 96) windowDpi = 96;
+                double dpiScale = windowDpi / 96.0;
+                int dipW = (int)Math.Round(w / dpiScale);
+                int dipH = (int)Math.Round(h / dpiScale);
+                if (dipW < 1) dipW = 1;
+                if (dipH < 1) dipH = 1;
+
+                AppLog.Log("Screenshot", $"start app={exeName} size={w}x{h} dpi={windowDpi}{(dpiScale != 1.0 ? " dip=" + dipW + "x" + dipH : "")}");
 
                 // Game Bar screenshot is an ADVANCED, opt-in feature (default off).
                 // When off, we just CopyFromScreen — simple and works for normal
@@ -226,15 +240,30 @@ namespace PowerAudioManager
                     goto done;
                 }
 
-                // 1) CopyFromScreen.
+                // 1) CopyFromScreen (physical pixels), then downscale to DIP
+                //    so the output matches the user's perceived resolution (e.g. 1920×1080
+                //    on a 150% display whose physical client area is 2880×1620).
                 Bitmap bmp = null;
                 bool bad = false;
                 try
                 {
-                    bmp = new Bitmap(w, h, PixelFormat.Format32bppArgb);
-                    using (var g = Graphics.FromImage(bmp))
+                    using (var raw = new Bitmap(w, h, PixelFormat.Format32bppArgb))
                     {
-                        g.CopyFromScreen(x, y, 0, 0, new System.Drawing.Size(w, h), CopyPixelOperation.SourceCopy);
+                        using (var g = Graphics.FromImage(raw))
+                            g.CopyFromScreen(x, y, 0, 0, new System.Drawing.Size(w, h), CopyPixelOperation.SourceCopy);
+                        if (dpiScale != 1.0)
+                        {
+                            bmp = new Bitmap(dipW, dipH, PixelFormat.Format32bppArgb);
+                            using (var g = Graphics.FromImage(bmp))
+                            {
+                                g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                                g.DrawImage(raw, 0, 0, dipW, dipH);
+                            }
+                        }
+                        else
+                        {
+                            bmp = new Bitmap(raw);
+                        }
                     }
                     int blackPct; double stdDev, mean;
                     SampleQuality(bmp, out blackPct, out stdDev, out mean);

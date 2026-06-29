@@ -128,9 +128,49 @@ namespace PowerAudioManager
 
             stack.Children.Add(new Border { Height = 1, Background = new SolidColorBrush(Color.FromRgb(80, 75, 120)), Margin = new Thickness(0, 4, 0, 12) });
 
-            var autoStartCb = new CheckBox { Content = "开机自启", Foreground = Brushes.White, FontSize = 12, Margin = new Thickness(0, 0, 0, 16) };
-            autoStartCb.IsChecked = IsAutoStartEnabled();
+            // ---- 窗口缩放 ----
+            var scaleLbl = new TextBlock { Text = "窗口缩放", Foreground = Brushes.White, FontSize = 12, Margin = new Thickness(0, 0, 0, 4) };
+            stack.Children.Add(scaleLbl);
+            var scaleRow = new DockPanel { Margin = new Thickness(0, 0, 0, 4) };
+            double curScale = 1.0;
+            AppPrefs.GetDouble("WindowScale.Factor", out curScale);
+            if (curScale < 0.8 || curScale > 2.0) curScale = 0; // 0 = auto
+            bool isAuto = curScale == 0;
+            var scaleSlider = new Slider { Minimum = 80, Maximum = 200, Value = isAuto ? 100 : (int)(curScale * 100), TickFrequency = 5, IsSnapToTickEnabled = true, Width = 160, VerticalAlignment = VerticalAlignment.Center };
+            var scalePctLabel = new TextBlock { Text = isAuto ? "自动" : $"{(int)(curScale * 100)}%", Foreground = fg, FontSize = 11, Width = 40, TextAlignment = TextAlignment.Right, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0) };
+            var scaleAutoCb = new CheckBox { Content = "自动", Foreground = fg, FontSize = 11, IsChecked = isAuto, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0) };
+            scaleAutoCb.Checked += (_, _) => { scaleSlider.IsEnabled = false; scalePctLabel.Text = "自动"; };
+            scaleAutoCb.Unchecked += (_, _) => { scaleSlider.IsEnabled = true; scalePctLabel.Text = $"{(int)scaleSlider.Value}%"; };
+            scaleSlider.ValueChanged += (_, _) => { if (scaleSlider.IsEnabled) scalePctLabel.Text = $"{(int)scaleSlider.Value}%"; };
+            scaleSlider.IsEnabled = !isAuto;
+            DockPanel.SetDock(scalePctLabel, Dock.Right);
+            DockPanel.SetDock(scaleAutoCb, Dock.Right);
+            scaleRow.Children.Add(scalePctLabel);
+            scaleRow.Children.Add(scaleAutoCb);
+            scaleRow.Children.Add(scaleSlider);
+            stack.Children.Add(scaleRow);
+            stack.Children.Add(new TextBlock { Text = "拖动滑块调整窗口大小，或直接拖拽悬浮窗右下角。", Foreground = fg, FontSize = 10, Margin = new Thickness(0, 0, 0, 16) });
+
+            stack.Children.Add(new Border { Height = 1, Background = new SolidColorBrush(Color.FromRgb(80, 75, 120)), Margin = new Thickness(0, 4, 0, 12) });
+
+            var autoStartCb = new ComboBox
+            {
+                Foreground = Brushes.White,
+                FontSize = 12,
+                Margin = new Thickness(0, 0, 0, 16),
+                MinWidth = 180
+            };
+            autoStartCb.Items.Add("关闭");
+            autoStartCb.Items.Add("注册表 (普通权限)");
+            autoStartCb.Items.Add("计划任务 (管理员权限)");
+            autoStartCb.Items.Add("服务 (SYSTEM 权限)");
+            int curMethod = (int)AutoStartService.GetCurrent();
+            autoStartCb.SelectedIndex = Math.Clamp(curMethod, 0, 3);
+            var autoLbl = new TextBlock { Text = "开机自启方式", Foreground = Brushes.White, FontSize = 12, Margin = new Thickness(0, 0, 0, 4) };
+            stack.Children.Add(autoLbl);
             stack.Children.Add(autoStartCb);
+
+            stack.Children.Add(new TextBlock { Text = "注册表：最简单，无额外权限。计划任务：以最高权限运行，无 UAC 弹窗。服务：SYSTEM 账户运行，开机即启。", Foreground = fg, FontSize = 10, Margin = new Thickness(0, 0, 0, 16), TextWrapping = TextWrapping.Wrap });
 
             var btns = MakeButtons();
             var ok = (Button)btns.Children[0];
@@ -142,9 +182,25 @@ namespace PowerAudioManager
                 AppPrefs.SetBool("AutoCollapse", autoCb.IsChecked == true);
                 AppPrefs.SetBool("AutoExpandAfterManual", expandAfterManualCb.IsChecked == true);
                 int d; if (int.TryParse(delayBox.Text, out d) && d >= 0) AppPrefs.SetInt("AutoCollapseDelay", d);
-                if (autoStartCb.IsChecked != IsAutoStartEnabled()) ToggleAutoStart(autoStartCb.IsChecked == true);
-
                 var mw = owner as MainWindow;
+                // Window scale
+                if (scaleAutoCb.IsChecked == true)
+                { try { mw?._scaling?.ResetManualScale(); } catch { } }
+                else
+                { try { mw?._scaling?.ApplyManualScale(scaleSlider.Value / 100.0); } catch { } }
+
+                var newMethod = (AutoStartMethod)(Math.Clamp(autoStartCb.SelectedIndex, 0, 3));
+                if (newMethod != AutoStartService.GetCurrent())
+                {
+                    string err = AutoStartService.Enable(newMethod);
+                    if (err != null)
+                    {
+                        System.Windows.MessageBox.Show(err, "开机自启", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Warning);
+                        // Revert combo to actual current state
+                        autoStartCb.SelectedIndex = (int)AutoStartService.GetCurrent();
+                    }
+                    else if (mw != null && mw._tray != null) mw._tray.UpdateAutoStart();
+                }
                 if (mw != null)
                 {
                     // Apply new font + lock/topmost + auto-collapse settings live.
@@ -723,29 +779,5 @@ namespace PowerAudioManager
             return new ScrollViewer { Content = stack, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Padding = new Thickness(0) };
         }
 
-        static bool IsAutoStartEnabled()
-        {
-            try
-            {
-                using (var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(
-                    @"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", false))
-                    return key != null && key.GetValue("OneBox") != null;
-            }
-            catch { return false; }
-        }
-
-        static void ToggleAutoStart(bool enable)
-        {
-            try
-            {
-                using (var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(
-                    @"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", true))
-                {
-                    if (enable) key.SetValue("OneBox", Environment.ProcessPath);
-                    else key.DeleteValue("OneBox", false);
-                }
-            }
-            catch { }
-        }
     }
 }

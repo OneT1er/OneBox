@@ -27,7 +27,7 @@ namespace PowerAudioManager
         private DispatcherTimer _autoCleanTimer;
         private System.Threading.Timer _initLoadTimer;
         private DateTime _lastCleanTime = DateTime.MinValue;
-        private WindowScaling _scaling;
+        internal WindowScaling _scaling;
         private StackPanel _root;
         private StackPanel _powerSection;
         private StackPanel _audioSection;
@@ -541,6 +541,7 @@ namespace PowerAudioManager
             if (ModuleVisible("Gallery")) BuildGalleryButton(contentPanel);
 
             _root.Children.Add(contentPanel);
+
             _mainBorder.Child = _root;
             Content = _mainBorder;
         }

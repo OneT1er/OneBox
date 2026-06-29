@@ -25,6 +25,7 @@ namespace PowerAudioManager
         readonly Window _window;
         readonly Func<Border> _getMainBorder;
         double _currentScale = -1; // -1 forces first apply
+        double? _manualScale;      // user override from drag or settings slider
 
         public WindowScaling(Window window, Func<Border> getMainBorder)
         {
@@ -45,6 +46,13 @@ namespace PowerAudioManager
                 double scale = 0.5 + (phys - 1920.0) * (0.5 / 1920.0);
                 if (scale < 0.85) scale = 0.85;
                 if (scale > 2.0) scale = 2.0;
+
+                // Manual override from user-dragged resize or settings slider.
+                if (_manualScale.HasValue)
+                    scale = _manualScale.Value;
+                else if (AppPrefs.GetDouble("WindowScale.Factor", out double saved) && saved >= 0.8 && saved <= 2.0)
+                    scale = saved;
+
                 // Under Per-Monitor V2 the DIP->pixel DPI scaling already magnifies
                 // the window (e.g. 1.5x on 4K @150%). Divide it out so the
                 // LayoutTransform only adds the magnification DPI doesn't already
@@ -69,6 +77,25 @@ namespace PowerAudioManager
                     mainBorder.LayoutTransform = new ScaleTransform(layoutScale, layoutScale);
             }
             catch (Exception ex) { AppLog.Log("ApplyScaling", ex); }
+        }
+
+        // Called when the user drag-resizes the window or moves the settings slider.
+        public void ApplyManualScale(double scale)
+        {
+            if (scale < 0.8) scale = 0.8;
+            if (scale > 2.0) scale = 2.0;
+            _manualScale = scale;
+            AppPrefs.SetDouble("WindowScale.Factor", scale);
+            ApplyScaling();
+        }
+
+        // Revert to automatic scaling based on screen resolution.
+        public void ResetManualScale()
+        {
+            _manualScale = null;
+            try { using (var k = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\PowerAudioManager\App", true)) k?.DeleteValue("WindowScale.Factor", false); } catch { }
+            _currentScale = -1; // force re-apply
+            ApplyScaling();
         }
 
         public void OnUserPreferenceChanged(object sender, UserPreferenceChangedEventArgs e)

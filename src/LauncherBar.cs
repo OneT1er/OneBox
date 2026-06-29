@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
+using System.Net.Http;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -12,17 +14,16 @@ using System.Windows.Media;
 
 namespace PowerAudioManager
 {
-    // Quick-launch bar: a row of 4 slots. Each slot holds an exe / shortcut;
-    // click to launch, right-click to clear, drag-and-drop an exe or .lnk to
-    // assign. Paths persist in the registry (Launcher.Paths, '|'-separated).
-    // .lnk targets are resolved via WScript.Shell COM late-binding.
+    // Quick-launch bar: up to 8 slots (auto-wraps via WrapPanel). Each slot holds
+    // an exe / shortcut / folder / URL; click to launch, right-click to clear,
+    // drag-and-drop to assign. Paths persist in the registry (Launcher.Paths,
+    // '|'-separated). Only filled slots + 1 empty placeholder are shown.
     //
     // Extracted from MainWindow: it owns no window state — the host passes a
-    // requestRebuild callback so assigning/clearing a slot can rebuild the UI
-    // (which lives in MainWindow).
+    // requestRebuild callback so assigning/clearing a slot can rebuild the UI.
     internal static class LauncherBar
     {
-        const int LauncherSlots = 4;
+        const int MaxSlots = 8;
         const string LauncherPrefKey = "Launcher.Paths";
 
         // Build the launcher section into contentPanel. requestRebuild is
@@ -36,14 +37,17 @@ namespace PowerAudioManager
             header.Inlines.Add(new Run("🚀") { FontFamily = AppResources.EmojiFont });
             header.Inlines.Add(new Run(" 快捷启动"));
             contentPanel.Children.Add(header);
-            var row = new StackPanel { Orientation = Orientation.Horizontal };
+            var wrap = new WrapPanel { Margin = new Thickness(0, 0, 0, 2) };
             var paths = LoadLauncherPaths();
-            for (int i = 0; i < LauncherSlots; i++)
+            // Show filled slots + 1 empty placeholder, capped at MaxSlots.
+            int shown = Math.Min(MaxSlots, paths.Count + 1);
+            if (shown < 1) shown = 1;
+            for (int i = 0; i < shown; i++)
             {
                 string p = i < paths.Count ? paths[i] : null;
-                row.Children.Add(MakeLauncherSlot(i, p, paths, requestRebuild));
+                wrap.Children.Add(MakeLauncherSlot(i, p, paths, requestRebuild));
             }
-            contentPanel.Children.Add(row);
+            contentPanel.Children.Add(wrap);
         }
 
         static List<string> LoadLauncherPaths()
@@ -79,11 +83,27 @@ namespace PowerAudioManager
             catch { }
         }
 
+        // ---- Icon helpers ---------------------------------------------------
+
+        static bool IsUrl(string s)
+        {
+            return s != null && (s.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+                              || s.StartsWith("https://", StringComparison.OrdinalIgnoreCase));
+        }
+
+        static bool IsFolder(string s)
+        {
+            try { return !string.IsNullOrEmpty(s) && Directory.Exists(s); }
+            catch { return false; }
+        }
+
         // Extract a small icon from an exe/dll/lnk for the launcher slot.
+        // Returns null for URLs and folders (handled separately).
         static ImageSource ExtractIcon(string path)
         {
             try
             {
+                if (IsUrl(path) || IsFolder(path)) return null;
                 var ico = System.Drawing.Icon.ExtractAssociatedIcon(path);
                 if (ico != null)
                 {
@@ -98,28 +118,45 @@ namespace PowerAudioManager
             return null;
         }
 
+        // ---- Slot button ----------------------------------------------------
+
         static Button MakeLauncherSlot(int index, string path, List<string> paths, Action requestRebuild)
         {
             var btn = new Button {
                 Width = 44, Height = 44,
-                Margin = new Thickness(0, 0, 6, 0),
+                Margin = new Thickness(0, 0, 6, 6),
                 Cursor = Cursors.Hand,
                 Background = new SolidColorBrush(MainWindow.CardColor),
                 BorderBrush = new SolidColorBrush(MainWindow.BorderColor),
-                ToolTip = string.IsNullOrEmpty(path) ? "点击或拖入程序（exe / 快捷方式）" : path,
+                ToolTip = string.IsNullOrEmpty(path) ? "拖入程序 / 快捷方式 / 文件夹 / URL" : path,
                 AllowDrop = true
             };
-            // MaterialDesign's implicit Button style sets MinWidth=88/MinHeight=36,
-            // which would stretch this 44x44 slot and clip its icon. ApplyIconButtonStyle
-            // neutralises those minsizes so the slot stays compact.
             MainWindow.ApplyIconButtonStyle(btn);
+
             if (!string.IsNullOrEmpty(path))
             {
                 var img = ExtractIcon(path);
                 if (img != null)
+                {
                     btn.Content = new System.Windows.Controls.Image { Source = img, Width = 24, Height = 24 };
+                }
+                else if (IsUrl(path))
+                {
+                    btn.Content = "🌐";
+                    btn.FontSize = 20;
+                    btn.ToolTip = path;
+                    FetchFavicon(path, btn);
+                }
+                else if (IsFolder(path))
+                {
+                    btn.Content = "📁";
+                    btn.FontSize = 20;
+                    btn.ToolTip = path;
+                }
                 else
+                {
                     btn.Content = "•";
+                }
             }
             else
             {
@@ -127,38 +164,51 @@ namespace PowerAudioManager
                 btn.FontSize = 18;
                 btn.Foreground = new SolidColorBrush(MainWindow.TextSecondary);
             }
+
             btn.Click += (s, e) =>
             {
                 if (string.IsNullOrEmpty(path))
                 {
-                    // Pick an executable
                     var dlg = new Microsoft.Win32.OpenFileDialog {
                         Filter = "程序|*.exe;*.lnk|所有文件|*.*",
                         Title = "选择要添加的程序" };
                     if (dlg.ShowDialog() == true)
-                        SetLauncherSlotPath(index, dlg.FileName, paths, requestRebuild);
+                    {
+                        // Compact-add: append to the end.
+                        string resolved = ResolveShortcut(dlg.FileName);
+                        paths.Add(resolved);
+                        SaveLauncherPaths(paths);
+                        requestRebuild();
+                    }
                 }
                 else
                 {
-                    try { Process.Start(path); }
+                    try
+                    {
+                        var psi = new ProcessStartInfo(path) { UseShellExecute = true };
+                        Process.Start(psi);
+                    }
                     catch (Exception ex) { AppLog.Log("Launch " + path, ex); }
                 }
             };
+
             btn.MouseRightButtonUp += (s, e) =>
             {
-                // Right-click clears the slot
                 if (!string.IsNullOrEmpty(path))
                 {
-                    if (index < paths.Count) paths[index] = "";
+                    paths.RemoveAt(index);
                     SaveLauncherPaths(paths);
                     requestRebuild();
                     e.Handled = true;
                 }
             };
-            // Drag-and-drop: drop an exe / shortcut onto the slot to assign it.
+
+            // ---- Drag & Drop ------------------------------------------------
             btn.DragEnter += (s, e) =>
             {
-                if (e.Data.GetDataPresent(DataFormats.FileDrop))
+                if (e.Data.GetDataPresent(DataFormats.FileDrop) ||
+                    e.Data.GetDataPresent(DataFormats.Text) ||
+                    e.Data.GetDataPresent(DataFormats.StringFormat))
                 {
                     e.Effects = DragDropEffects.Copy;
                     btn.BorderBrush = new SolidColorBrush(MainWindow.AccentColor);
@@ -177,30 +227,106 @@ namespace PowerAudioManager
             {
                 btn.BorderBrush = new SolidColorBrush(MainWindow.BorderColor);
                 btn.BorderThickness = new Thickness(1);
+                string dropped = null;
+
                 if (e.Data.GetDataPresent(DataFormats.FileDrop))
                 {
                     var files = (string[])e.Data.GetData(DataFormats.FileDrop);
-                    if (files != null && files.Length > 0)
-                    {
-                        string dropped = files[0];
-                        // Resolve .lnk shortcuts to their target so the icon/launch works.
-                        string resolved = ResolveShortcut(dropped);
-                        SetLauncherSlotPath(index, resolved, paths, requestRebuild);
-                    }
+                    if (files != null && files.Length > 0) dropped = files[0];
+                }
+                else if (e.Data.GetDataPresent(DataFormats.Text))
+                {
+                    dropped = e.Data.GetData(DataFormats.Text) as string;
+                }
+                else if (e.Data.GetDataPresent(DataFormats.StringFormat))
+                {
+                    dropped = e.Data.GetData(DataFormats.StringFormat) as string;
+                }
+
+                if (!string.IsNullOrEmpty(dropped))
+                {
+                    dropped = dropped.Trim();
+                    // Resolve .lnk targets; keep URLs and folder paths as-is.
+                    string resolved = ResolveShortcut(dropped);
+                    // Compact-add to the end of the list.
+                    paths.Add(resolved);
+                    SaveLauncherPaths(paths);
+                    requestRebuild();
                 }
                 e.Handled = true;
             };
             return btn;
         }
 
-        // Assign a path to a launcher slot (clamps the list, saves, rebuilds).
-        static void SetLauncherSlotPath(int index, string path, List<string> paths, Action requestRebuild)
+        // ---- Favicon fetch --------------------------------------------------
+
+        // Fetches the website's own favicon (tries /favicon.ico, then parses
+        // <link rel=icon> from the HTML). Result cached to %TEMP%\OneBoxFavicons.
+        static async void FetchFavicon(string url, Button btn)
         {
-            if (string.IsNullOrEmpty(path)) return;
-            while (paths.Count <= index) paths.Add("");
-            if (paths.Count > index) paths[index] = path; else paths.Add(path);
-            SaveLauncherPaths(paths);
-            requestRebuild();
+            try
+            {
+                var uri = new Uri(url);
+                string domain = uri.Host;
+                string cacheDir = Path.Combine(Path.GetTempPath(), "OneBoxFavicons");
+                Directory.CreateDirectory(cacheDir);
+                string cacheFile = Path.Combine(cacheDir, domain + ".ico");
+
+                if (!File.Exists(cacheFile))
+                {
+                    using (var client = new HttpClient())
+                    {
+                        client.Timeout = TimeSpan.FromSeconds(5);
+                        byte[] bytes = null;
+
+                        // 1) Try the standard /favicon.ico.
+                        try { bytes = await client.GetByteArrayAsync($"{uri.Scheme}://{domain}/favicon.ico"); }
+                        catch { }
+
+                        // 2) Parse HTML for <link rel="icon" href="...">.
+                        if (bytes == null || bytes.Length < 100)
+                        {
+                            try
+                            {
+                                var html = await client.GetStringAsync($"{uri.Scheme}://{domain}/");
+                                var match = System.Text.RegularExpressions.Regex.Match(html,
+                                    @"<link[^>]+rel=[""'](?:shortcut\s+)?icon[""'][^>]+href=[""']([^""']+)",
+                                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                                if (match.Success)
+                                {
+                                    var href = System.Net.WebUtility.HtmlDecode(match.Groups[1].Value);
+                                    var iconUri = new Uri(new Uri($"{uri.Scheme}://{domain}/"), href);
+                                    try { bytes = await client.GetByteArrayAsync(iconUri); } catch { }
+                                }
+                            }
+                            catch { }
+                        }
+
+                        if (bytes != null && bytes.Length >= 100)
+                            File.WriteAllBytes(cacheFile, bytes);
+                        else
+                            return; // no icon found → keep 🌐
+                    }
+                }
+
+                // Load cached icon on UI thread.
+                btn.Dispatcher.Invoke(() =>
+                {
+                    try
+                    {
+                        var bmp = new System.Windows.Media.Imaging.BitmapImage();
+                        bmp.BeginInit();
+                        bmp.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad;
+                        bmp.StreamSource = new FileStream(cacheFile, FileMode.Open, FileAccess.Read);
+                        bmp.DecodePixelWidth = 24;
+                        bmp.EndInit();
+                        bmp.Freeze();
+                        btn.Content = new Image { Source = bmp, Width = 24, Height = 24 };
+                    }
+                    catch { /* keep 🌐 */ }
+                });
+            }
+            catch { /* network error → keep 🌐 */ }
         }
 
         // Resolve a .lnk shortcut to its target path. Falls back to the original path
@@ -209,10 +335,11 @@ namespace PowerAudioManager
         static string ResolveShortcut(string path)
         {
             if (string.IsNullOrEmpty(path)) return path;
+            // URLs and folders pass through unchanged.
+            if (IsUrl(path) || IsFolder(path)) return path;
             try
             {
                 if (!path.EndsWith(".lnk", StringComparison.OrdinalIgnoreCase)) return path;
-                // WScript.Shell.CreateShortcut parses .lnk files via COM late-binding.
                 Type shellType = Type.GetTypeFromProgID("WScript.Shell");
                 if (shellType == null) return path;
                 object shell = Activator.CreateInstance(shellType);

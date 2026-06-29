@@ -61,10 +61,28 @@ namespace PowerAudioManager
                 _menu.ShowImageMargin = true;
                 _menu.Padding = new Padding(2, 4, 2, 4);
                 _menu.Items.Add("显示窗口", null, (s, e) => _owner.ShowWindow());
-                var autoItem = new ToolStripMenuItem("开机自启") { CheckOnClick = true, Checked = IsAutoStartEnabled() };
-                autoItem.Click += (s, e) => ToggleAutoStart(autoItem.Checked);
+                var autoItem = new ToolStripMenuItem("开机自启") { CheckOnClick = true, Checked = AutoStartService.GetCurrent() != AutoStartMethod.None };
+                autoItem.Click += (s, e) =>
+                {
+                    if (autoItem.Checked)
+                    {
+                        // Turn ON: use the last-used method (default Registry).
+                        var last = AppPrefs.GetInt("AutoStart.LastMethod", 1);
+                        if (last < 1 || last > 3) last = 1;
+                        string err = AutoStartService.Enable((AutoStartMethod)last);
+                        if (err != null)
+                        {
+                            System.Windows.MessageBox.Show(err, "开机自启", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Warning);
+                            autoItem.Checked = false;
+                        }
+                    }
+                    else
+                    {
+                        AutoStartService.Disable();
+                    }
+                };
                 _menu.Items.Add(autoItem);
-                _menu.Opening += (s, e) => autoItem.Checked = IsAutoStartEnabled();
+                _menu.Opening += (s, e) => autoItem.Checked = AutoStartService.GetCurrent() != AutoStartMethod.None;
                 _menu.Items.Add(new ToolStripSeparator());
                 _topmostItem = new ToolStripMenuItem("窗口置顶") { CheckOnClick = true, Checked = _owner._topmost };
                 _topmostItem.Click += (s, e) => { _owner._topmost = _topmostItem.Checked; _owner.Topmost = _owner._topmost; AppPrefs.SetBool("Topmost", _owner._topmost); };
@@ -230,31 +248,15 @@ namespace PowerAudioManager
 
         // ---- Autostart ---------------------------------------------------------
 
-        static bool IsAutoStartEnabled()
+        public void UpdateAutoStart()
         {
             try
             {
-                using (var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(
-                    @"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", false))
+                if (_menu?.Items == null) return;
+                foreach (var item in _menu.Items)
                 {
-                    return key != null && key.GetValue("OneBox") != null;
-                }
-            }
-            catch { return false; }
-        }
-
-        static void ToggleAutoStart(bool enable)
-        {
-            try
-            {
-                using (var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(
-                    @"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", true))
-                {
-                    if (enable)
-                        key.SetValue("OneBox",
-                            Environment.ProcessPath);
-                    else
-                        key.DeleteValue("OneBox", false);
+                    if (item is ToolStripMenuItem mi && mi.Text == "开机自启")
+                        { mi.Checked = AutoStartService.GetCurrent() != AutoStartMethod.None; break; }
                 }
             }
             catch { }

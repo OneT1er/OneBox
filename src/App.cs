@@ -17,6 +17,7 @@ namespace PowerAudioManager
     public class App : Application
     {
         static System.Threading.Mutex _singleInstance;
+        static System.Threading.EventWaitHandle _activateEvent;
 
         [STAThread]
         public static void Main(string[] args)
@@ -29,25 +30,42 @@ namespace PowerAudioManager
             // broke power-plan detection and in-app updates.)
             try { System.Text.Encoding.RegisterProvider(System.Text.CodePagesEncodingProvider.Instance); } catch { }
 
+            // --service flag: run as a Windows Service (session-login launcher),
+            // not as the normal GUI app. The service monitors session changes and
+            // spawns OneBox.exe (without --service) in each interactive session.
+            if (args.Length > 0 && args[0] == "--service")
+            {
+                try { PowerAudioManager.OneBoxService.RunService(); } catch { }
+                return;
+            }
+
             // Warm up the memory PerformanceCounters on a background thread ASAP.
             // Constructing them takes ~5s on .NET 8 cold start and GetStatus() runs on
             // the UI thread, so starting this before the window builds keeps startup
             // from freezing while the counters initialize in the background.
             try { PowerAudioManager.MemoryCleaner.WarmupCounters(); } catch { }
 
-            // Single-instance guard: a second launch (e.g. double-clicking the exe
-            // or the autostart entry firing while already running) would otherwise
-            // spawn a second floating window, a second tray icon, and re-register
-            // the same global hotkeys (which silently fail). Bail out instead.
-            _singleInstance = new System.Threading.Mutex(true, "Local\\OneBox-SingleInstance", out var createdNew);
-            if (!createdNew)
+            // Single-instance guard: a second launch activates the existing window
+            // and exits, instead of spawning a second floating window + tray icon.
+            // Uses Mutex.TryOpenExisting (performs an open-only probe — no ownership
+            // ambiguity) followed by EventWaitHandle to wake the first instance.
+            if (System.Threading.Mutex.TryOpenExisting("Local\\OneBox-SingleInstance", out var _existingMutex))
             {
-                // Another instance owns the mutex. A previous owner that crashed
-                // leaves an abandoned mutex — in that case we still take it.
-                try { _singleInstance.WaitOne(0); createdNew = true; }
-                catch (System.Threading.AbandonedMutexException) { createdNew = true; }
-                if (!createdNew) return;
+                _existingMutex.Dispose();
+                // Signal the existing instance to activate its window.
+                try
+                {
+                    using (var ev = System.Threading.EventWaitHandle.OpenExisting("Local\\OneBox-Activate"))
+                        ev.Set();
+                }
+                catch { }
+                return;
             }
+            // We are the first instance — create the guard mutex and hold it forever.
+            _singleInstance = new System.Threading.Mutex(true, "Local\\OneBox-SingleInstance");
+            // Create the activation event that second instances will signal.
+            _activateEvent = new System.Threading.EventWaitHandle(false,
+                System.Threading.EventResetMode.AutoReset, "Local\\OneBox-Activate");
 
             AppDomain.CurrentDomain.UnhandledException += (s, ex) => {
                 try { System.IO.File.WriteAllText(System.IO.Path.GetTempPath() + "pam_crash.log",
@@ -67,6 +85,36 @@ namespace PowerAudioManager
             // global:: prefix bypasses Application.MainWindow property name collision
             var window = new global::PowerAudioManager.MainWindow();
             try { window.Show(); } catch (Exception ex) { try { System.IO.File.AppendAllText(System.IO.Path.GetTempPath() + "pam_crash.log", $"{DateTime.Now} Show: {ex}"); } catch { } throw; }
+            // Background listener: when a second instance starts, it signals
+            // _activateEvent; we bring the existing window to the foreground.
+            var wref = new System.WeakReference<Window>(window);
+            new System.Threading.Thread(() =>
+            {
+                while (_activateEvent != null)
+                {
+                    try
+                    {
+                        if (!_activateEvent.WaitOne(5000)) continue;
+                        app.Dispatcher.BeginInvoke(new Action(() =>
+                        {
+                            try
+                            {
+                                if (wref.TryGetTarget(out var w) && w != null)
+                                {
+                                    if (w.WindowState == System.Windows.WindowState.Minimized)
+                                        w.WindowState = System.Windows.WindowState.Normal;
+                                    w.Show();
+                                    w.Activate();
+                                    w.Topmost = true;   // force-to-foreground trick
+                                    w.Topmost = false;
+                                }
+                            }
+                            catch { }
+                        }));
+                    }
+                    catch { }
+                }
+            }) { IsBackground = true, Name = "ActivateListener" }.Start();
             try { app.Run(); } catch (Exception ex) { try { System.IO.File.AppendAllText(System.IO.Path.GetTempPath() + "pam_crash.log", $"{System.Environment.NewLine}{DateTime.Now} Run: {ex}"); } catch { } throw; }
         }
     }
