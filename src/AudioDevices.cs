@@ -100,8 +100,8 @@ namespace PowerAudioManager
                 }
                 catch { }
 
-                // Belt-and-suspenders: COM callbacks can be flaky across STA boundaries.
-                // Poll the default device id every second; if it changed, fire OnChange.
+                // 双保险：COM 回调在 STA 边界间可能不稳定。
+                // 每秒轮询默认设备 ID，变化时触发 OnChange。
                 _lastDefaultId = GetCurrentDefaultId();
                 _pollTimer = new DispatcherTimer(DispatcherPriority.Background)
                 { Interval = TimeSpan.FromSeconds(1) };
@@ -120,7 +120,7 @@ namespace PowerAudioManager
             {
                 try { if (_pollTimer != null) _pollTimer.Stop(); } catch { }
                 try { _enumerator.UnregisterEndpointNotificationCallback(this); } catch { }
-                // Release the COM enumerator RCW so it doesn't linger until GC.
+                // 释放 COM 枚举器 RCW，避免等到 GC 才回收。
                 try { if (_enumerator != null) { Marshal.ReleaseComObject(_enumerator); _enumerator = null; } } catch { }
             }
             public void OnDeviceStateChanged(string deviceId, int newState) { Fire(); }
@@ -181,7 +181,7 @@ namespace PowerAudioManager
                             if (subKey == null) continue;
                             int state = 0;
                             try { state = (int)subKey.GetValue("DeviceState", 0); } catch { }
-                            if (state != 1) continue; // ACTIVE only
+                            if (state != 1) continue;
                             using (var propsKey = subKey.OpenSubKey("Properties"))
                             {
                                 if (propsKey == null) continue;
@@ -214,9 +214,8 @@ namespace PowerAudioManager
             return result;
         }
 
-        // Read default render endpoint guid from registry (key set by Windows when default changes).
-        // Format under \\MMDevices\\Audio\\Render: each device has Properties\\{...},14 or  is in {1d}, {2}
-        // The default endpoint is the one whose Role->0 value matches; simpler approach: query via MMDeviceEnumerator? we already have COM but want avoid heavy use. Use registry: there is "DefaultEndpointId" under HKEY_CURRENT_USER\\Software\\Microsoft\\Multimedia\\Audio\\.. but most reliable is reading from each device's Properties\\\"{....1da5d803-d492-4edd-8c23-e0c0ffee7f0e}\\\\,7"=1 means active default? That field is unreliable. Cleanest: enumerate active devices and check the user-level role registry under HKCU.
+        // 通过 COM MMDeviceEnumerator 获取默认音频渲染端点 GUID（Windows 在默认设备变更时写入注册表）。
+        // 设备位于 \\MMDevices\\Audio\\Render 下，最可靠的方式是直接用 COM 获取并提取 GUID 部分。
         static string FindDefaultRenderId()
         {
             object im = null;
@@ -232,7 +231,7 @@ namespace PowerAudioManager
                     string id;
                     dev.GetId(out id);
                     if (string.IsNullOrEmpty(id)) return null;
-                    // id looks like "{0.0.0.00000000}.{guid}" — return only the guid portion
+                    // id 格式为 "{0.0.0.00000000}.{guid}"，仅返回 guid 部分
                     int dot = id.IndexOf("}.");
                     if (dot >= 0 && dot + 2 < id.Length) return id.Substring(dot + 2);
                     return id;

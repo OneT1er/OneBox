@@ -11,20 +11,15 @@ using System.Windows.Media.Imaging;
 
 namespace PowerAudioManager
 {
-    // Foreground-window screenshot service.
+    // 前台窗口截图服务。
+    // 策略：
+    //  1. Graphics.CopyFromScreen 截取前台窗口客户区（Per-Monitor V2 下为物理像素）。
+    //  2. 若结果为（接近）全黑，则窗口很可能是 GDI 无法读取的全屏独占游戏——
+    //     回退到 Game Bar（Win+Alt+PrtScn），监听 Captures 文件夹，将文件移入对应应用子目录。
+    //  3. 否则将截图保存为 <root>\<exe>\<timestamp>.png。
+    //  4. 弹出 Steam 风格的右下角 Toast，显示缩略图 + 路径。
     //
-    // Strategy (per the design):
-    //  1. Capture the foreground window's client area with Graphics.CopyFromScreen
-    //     (native resolution under Per-Monitor V2 — physical pixels).
-    //  2. If the result is (near-)all-black, the window is likely a fullscreen
-    //     exclusive game that GDI can't read — fall back to Game Bar
-    //     (Win+Alt+PrtScn), watch the Captures folder, and move the file into the
-    //     per-app subfolder.
-    //  3. Otherwise save the captured PNG to <root>\<exe>\<timestamp>.png.
-    //  4. Pop a Steam-style bottom-right toast with the thumbnail + path.
-    //
-    // Runs on a threadpool thread (invoked from the WM_HOTKEY handler) so the
-    // hotkey loop is never blocked. The toast marshals back to the UI thread.
+    // 在 ThreadPool 上运行（从 WM_HOTKEY 触发），保证热键循环不阻塞。Toast 通过 UI 线程回调。
     internal static class ScreenshotService
     {
         const string RootPrefKey = "Screenshot.RootDir";
@@ -32,24 +27,19 @@ namespace PowerAudioManager
         const string GameBarHotkeyPrefKey = "Screenshot.GameBarHotkey";
         const string GameBarEnabledPrefKey = "Screenshot.GameBarEnabled";
         const string DefaultRoot = "OneBoxScreenshots";
-        // Game Bar can take a while to write its capture — especially under HDR,
-        // where it captures, tonemaps/encodes, and writes both .png and .jxr.
-        // Observed ~16s for an HDR screenshot on a fast machine, so allow up to 25s
-        // (conditional: returns as soon as a file appears). Runs on a threadpool
-        // thread so this never blocks the UI/hotkey loop.
+        // Game Bar 写文件较慢，HDR 下尤甚——需捕获、色调映射/编码，同时写入 .png 和 .jxr。
+        // 实测 HDR 截图在高速机器上约需 16s，故最长等待 25s
+        //（有文件出现即返回）。在 ThreadPool 上等待，不阻塞 UI/热键。
         const int GameBarWaitMs = 25000;
 
-        // ---- Win32 ----
         [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
         [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
         [DllImport("user32.dll")] static extern bool GetClientRect(IntPtr hWnd, out RECT lpRect);
         [DllImport("user32.dll")] static extern bool ClientToScreen(IntPtr hWnd, ref POINT lpPoint);
         [DllImport("user32.dll")] static extern uint GetDpiForWindow(IntPtr hWnd);
         [DllImport("user32.dll")] static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, IntPtr extraInfo);
-        // OpenProcess + QueryFullProcessImageName: more reliable than Process.MainModule
-        // (which throws Win32Exception for elevated / system processes the user can't
-        // OpenProcess with QUERY_LIMITED_INFORMATION). This reads most processes and
-        // avoids the "Unknown" folder for protected foreground apps.
+        // OpenProcess + QueryFullProcessImageName：比 Process.MainModule 更可靠
+        //（后者对提权/系统进程抛 Win32Exception）。此方式可读取大多数进程，避免受保护前台应用落入 Unknown 目录。
         [DllImport("kernel32.dll", SetLastError = true)] static extern IntPtr OpenProcess(uint access, bool inherit, uint pid);
         [DllImport("kernel32.dll", SetLastError = true)] static extern bool CloseHandle(IntPtr h);
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern bool QueryFullProcessImageName(IntPtr h, int flags, System.Text.StringBuilder buf, ref uint size);
@@ -57,13 +47,10 @@ namespace PowerAudioManager
         [StructLayout(LayoutKind.Sequential)] struct RECT { public int Left, Top, Right, Bottom; }
         [StructLayout(LayoutKind.Sequential)] struct POINT { public int X, Y; }
 
-        // ---- HDR display detection (via Vortice.DXGI) ----
-        // True if the monitor hosting the foreground window is currently in HDR
-        // (HDR10 color space). The previous hand-written DXGI vtable interop had a
-        // wrong index and raised an uncatchable AccessViolationException (crash on
-        // every screenshot); Vortice generates the COM bindings from the headers so
-        // the vtable is correct. Best-effort: any failure returns false, and the
-        // image-quality heuristics below are the safety net.
+        // ---- HDR 显示器检测（通过 Vortice.DXGI）----
+        // 检测前台窗口所在显示器是否处于 HDR（HDR10 色彩空间）。
+        // 之前手写 DXGI vtable 互操作因索引错误导致不可捕获的 AccessViolationException（每次截图崩溃）；
+        // Vortice 从头文件生成 COM 绑定，vtable 正确。尽力而为：失败返回 false，后续图像质量启发式检测是兜底。
         static bool IsHdrDisplay(IntPtr hwnd)
         {
             try
@@ -93,7 +80,7 @@ namespace PowerAudioManager
                                         try
                                         {
                                             var d = o6.Description1;
-                                            // HDR10: DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020 == 12.
+                                            // HDR10：DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020，值为 12。
                                             if (d.AttachedToDesktop &&
                                                 d.ColorSpace == Vortice.DXGI.ColorSpaceType.RgbFullG2084NoneP2020 &&
                                                 c.X >= d.DesktopCoordinates.Left && c.X < d.DesktopCoordinates.Right &&
@@ -126,11 +113,10 @@ namespace PowerAudioManager
         const uint KEYEVENTF_KEYDOWN = 0;
         const uint KEYEVENTF_KEYUP = 0x0002;
 
-        // Hotkey encoding (shared with HotkeyCaptureDialog): high 16 bits = mods
-        // (bit0 Alt, bit1 Ctrl, bit2 Shift, bit3 Win), low 16 bits = VK code.
-        // Injects the combo via keybd_event: modifiers down, key down, then reverse.
-        // Modifiers WITHOUT Win are what makes this work in a game's foreground —
-        // injected Win is swallowed, but Alt/Ctrl/Shift are not.
+        // 热键编码（与 HotkeyCaptureDialog 共享）：高 16 位 = 修饰键
+        //（bit0 Alt, bit1 Ctrl, bit2 Shift, bit3 Win），低 16 位 = VK 码。
+        // 通过 keybd_event 注入组合键：按下修饰键 → 按下主键 → 反向释放。
+        // 不含 Win 的修饰键是游戏前台可用的关键——注入的 Win 键被系统吞掉，但 Alt/Ctrl/Shift 不受影响。
         static void SendGameBarHotkey(int encoded)
         {
             int mods = (encoded >> 16) & 0xFFFF;
@@ -140,12 +126,10 @@ namespace PowerAudioManager
             if ((mods & 1) != 0) downs.Add(VK_MENU);
             if ((mods & 4) != 0) downs.Add(VK_SHIFT);
             if ((mods & 8) != 0) downs.Add(VK_LWIN);
-            // press modifiers
             foreach (var m in downs) keybd_event(m, 0, KEYEVENTF_KEYDOWN, IntPtr.Zero);
-            // key down + up
             keybd_event((byte)vk, 0, KEYEVENTF_KEYDOWN, IntPtr.Zero);
             keybd_event((byte)vk, 0, KEYEVENTF_KEYUP, IntPtr.Zero);
-            // release modifiers in reverse
+            // 反向释放修饰键（顺序与按下相反）
             for (int i = downs.Count - 1; i >= 0; i--) keybd_event(downs[i], 0, KEYEVENTF_KEYUP, IntPtr.Zero);
         }
 
@@ -162,8 +146,7 @@ namespace PowerAudioManager
             return string.Join("+", parts.ToArray());
         }
 
-        // Fired (on the UI thread) after a screenshot is saved, so the gallery
-        // strip can refresh to include the new capture.
+        // 截图保存后在 UI 线程触发，供图库面板刷新。
         public static event Action Captured;
 
         public static void CaptureForeground()
@@ -192,10 +175,8 @@ namespace PowerAudioManager
                 int h = br.Y - tl.Y;
                 if (w <= 0 || h <= 0) { error = "前台窗口无客户区"; AppLog.Log("Screenshot", $"fail: empty client area, app={exeName}"); goto done; }
 
-                // DPI correction: GetClientRect returns physical pixels under PerMonitorV2.
-                // On a 150% display a 1920-wide window reports 2880px. Capture at physical
-                // resolution then downscale to logical (DIP) pixels so the output matches
-                // what the user sees as "1080p".
+                // DPI 修正：PerMonitorV2 下 GetClientRect 返回物理像素。
+                // 150% 缩放下 1920 宽的窗口报告 2880px。按物理分辨率截取后缩小到逻辑像素（DIP），使输出匹配用户感知的 1080p。
                 uint windowDpi = 96;
                 try { windowDpi = GetDpiForWindow(hwnd); } catch { }
                 if (windowDpi < 96) windowDpi = 96;
@@ -207,25 +188,19 @@ namespace PowerAudioManager
 
                 AppLog.Log("Screenshot", $"start app={exeName} size={w}x{h} dpi={windowDpi}{(dpiScale != 1.0 ? " dip=" + dipW + "x" + dipH : "")}");
 
-                // Game Bar screenshot is an ADVANCED, opt-in feature (default off).
-                // When off, we just CopyFromScreen — simple and works for normal
-                // windows (HDR content may come back black/washed, since GDI can't
-                // read HDR surfaces, but that's the trade-off for staying simple).
-                // When on, we detect HDR displays and fall back to Game Bar (which is
-                // HDR-aware and can capture game windows whose Win-key the OS swallows).
+                // Game Bar 截图是高级可选功能（默认关闭）。
+                // 关闭时仅使用 CopyFromScreen——简单、对普通窗口有效（HDR 内容可能返回黑色/泛白，因为 GDI 无法读取 HDR 表面，这是保持简洁的代价）。
+                // 开启时检测 HDR 显示器并回退到 Game Bar（其 HDR 感知，可截取系统吞 Win 键的游戏窗口）。
                 bool gameBarOn = AppPrefs.GetBool(GameBarEnabledPrefKey, false);
 
-                // Is the foreground window on an HDR (HDR10) monitor right now?
-                // Best-effort DXGI probe; on failure we lean on the image heuristics.
+                // 检测前台窗口是否位于 HDR（HDR10）显示器。尽力而为的 DXGI 探测；失败时依赖图像质量启发式检测兜底。
                 bool hdr = IsHdrDisplay(hwnd);
                 AppLog.Log("Screenshot", $"hdr={hdr} gameBar={gameBarOn} app={exeName}");
 
                 if (gameBarOn && hdr)
                 {
-                    // HDR surfaces are unreadable by GDI CopyFromScreen (comes back black/
-                    // washed), so skip it and go straight to Game Bar, which is HDR-aware:
-                    // it tonemaps to a correct SDR .png and, if the user enabled "capture in
-                    // HDR", also emits a .jxr we preserve. This is the pragmatic HDR path.
+                    // HDR 表面 GDI CopyFromScreen 无法读取（返回黑色/泛白），直接跳过进入 Game Bar——
+                    // 其 HDR 感知，可色调映射为正确的 SDR .png，若用户启用"HDR 捕获"还会生成 .jxr 予以保留。这是务实的 HDR 路径。
                     savedPath = CaptureViaGameBar(exeName);
                     if (savedPath != null)
                     {
@@ -240,9 +215,7 @@ namespace PowerAudioManager
                     goto done;
                 }
 
-                // 1) CopyFromScreen (physical pixels), then downscale to DIP
-                //    so the output matches the user's perceived resolution (e.g. 1920×1080
-                //    on a 150% display whose physical client area is 2880×1620).
+                // CopyFromScreen（物理像素），然后缩小到 DIP，输出匹配用户感知的分辨率。
                 Bitmap bmp = null;
                 bool bad = false;
                 try
@@ -267,16 +240,13 @@ namespace PowerAudioManager
                     }
                     int blackPct; double stdDev, mean;
                     SampleQuality(bmp, out blackPct, out stdDev, out mean);
-                    // All-black -> GDI-unreadable surface (fullscreen-exclusive game / HDR read fail).
+                    // 全黑 → GDI 无法读取的表面（全屏独占游戏 / HDR 读取失败）
                     bool black = blackPct >= 99;
-                    // Flat field (near-zero luminance variance) -> failed read that came back
-                    // grey/washed instead of black (typical of windowed HDR content under CopyFromScreen).
-                    // Only applied on HDR displays (non-HDR CopyFromScreen doesn't fail this way, and a
-                    // global flat check would misfire on legit uniform images like blank white pages).
-                    // Exclude near-white fields: failed reads are grey/dark, legit uniform images are
-                    // often bright, so this keeps e.g. a blank PDF page out of the fallback path.
+                    // 平场（亮度方差接近零）→ 读取失败返回灰色/泛白而非黑色（窗口化 HDR 内容 CopyFromScreen 的典型表现）。
+                    // 仅在 HDR 显示器上生效（非 HDR 的 CopyFromScreen 不会这样失败，全局平场检测会误杀合法纯色图像如空白页面）。
+                    // 排除近白平场：失败读取偏灰/暗，合法纯色图像通常较亮，避免空白 PDF 等落入回退路径。
                     bool flat = hdr && stdDev < 8.0 && mean < 240.0;
-                    if (hdr) { black = blackPct >= 92; } // more aggressive on HDR
+                    if (hdr) { black = blackPct >= 92; } // HDR 下阈值更激进
                     bad = black || flat;
                     AppLog.Log("Screenshot", $"quality blackPct={blackPct} stdDev={stdDev:0.0} mean={mean:0} bad={bad} app={exeName}");
                 }
@@ -284,9 +254,8 @@ namespace PowerAudioManager
 
                 if (gameBarOn && bad)
                 {
-                    // GDI-unreadable surface (fullscreen game / HDR content). Fall back to Game Bar,
-                    // which is HDR-aware; if the user enabled "capture in HDR" it also emits a .jxr
-                    // we preserve alongside the SDR .png preview.
+                    // GDI 无法读取的表面（全屏游戏 / HDR 内容）。回退到 HDR 感知的 Game Bar；
+                    // 若用户开启"HDR 捕获"，还会生成 .jxr 与 SDR .png 预览一同保留。
                     AppLog.Log("Screenshot", $"CopyFromScreen unreadable (black/flat{(hdr ? "/HDR" : "")}), falling back to Game Bar, app={exeName}");
                     bmp.Dispose();
                     savedPath = CaptureViaGameBar(exeName);
@@ -325,14 +294,10 @@ namespace PowerAudioManager
             }));
         }
 
-        // Sample the bitmap for two quality signals:
-        //  - blackPct: % of sampled pixels that are near-black (R+G+B < 24). A high
-        //    value means GDI read a fullscreen-exclusive / HDR surface as black.
-        //  - stdDev:   population stddev of per-sample luminance. A near-zero value
-        //    means a flat field — a failed read that came back uniform grey/white
-        //    instead of black (windowed HDR content under CopyFromScreen).
-        // Sampling every 8px keeps it cheap on 4K captures. Uses GetPixel (no unsafe
-        // block) so the project stays on the /unsafe-free csc command line.
+        // 采样位图提取两个质量指标：
+        //  - blackPct：近黑像素占比（R+G+B < 24），高值表示 GDI 将全屏独占/HDR 表面读为黑色。
+        //  - stdDev： 采样亮度总体标准差，接近零表示平场——读取失败返回均匀灰色/白色。
+        // 每隔 8px 采样，4K 下开销可控。使用 GetPixel（无需 unsafe 块）。
         static void SampleQuality(Bitmap bmp, out int blackPct, out double stdDev, out double mean)
         {
             blackPct = 0; stdDev = 0; mean = 0;
@@ -360,10 +325,9 @@ namespace PowerAudioManager
             catch { }
         }
 
-        // Resolve the foreground window's owning process exe name (no extension),
-        // with invalid path chars stripped so it's safe as a folder name. Uses
-        // QueryFullProcessImageName (PROCESS_QUERY_LIMITED_INFORMATION) which works
-        // for elevated/UWP-store apps where Process.MainModule throws access denied.
+        // 解析前台窗口所属进程的 exe 名称（无扩展名），去掉非法路径字符以保证文件夹名安全。
+        // 使用 QueryFullProcessImageName（PROCESS_QUERY_LIMITED_INFORMATION），
+        // 可处理提权/UWP 应用（Process.MainModule 对这些进程抛访问拒绝）。
         static string GetExeName(IntPtr hwnd)
         {
             try
@@ -405,12 +369,9 @@ namespace PowerAudioManager
             return path;
         }
 
-        // Trigger Game Bar screenshot (Win+Alt+PrtScn), then watch the Captures
-        // folder for freshly-created files and move/copy them into the per-app
-        // folder. Game Bar is HDR-aware: it emits an SDR .png (always) and, if the
-        // user enabled "capture in HDR", a .jxr (HDR) too. We keep the .png as the
-        // preview for the toast/gallery and preserve the .jxr alongside it.
-        // Returns the preview path (.png, or .jxr if that's all Game Bar produced).
+        // 触发 Game Bar 截图（Win+Alt+PrtScn），然后监听 Captures 文件夹中的新文件，复制到对应应用子目录。
+        // Game Bar HDR 感知：始终生成 SDR .png，若用户启用"HDR 捕获"还会生成 .jxr。
+        // 保留 .png 作为 toast/图库预览，同时保留 .jxr。返回预览路径（.png，若仅生成 .jxr 则返回 .jxr）。
         static string CaptureViaGameBar(string exeName)
         {
             string capturesDir = GameBarDir();
@@ -422,12 +383,9 @@ namespace PowerAudioManager
             foreach (var f in Directory.GetFiles(capturesDir)) before.Add(f);
             AppLog.Log("Screenshot", $"GameBar fallback: before={before.Count} files");
 
-            // Trigger Game Bar's screenshot shortcut. The default is Win+Alt+PrtScn,
-            // but the Win key is swallowed when a game is in the foreground (game mode
-            // / low-level hooks filter injected Win-key events — verified: injected
-            // VK_LWIN doesn't even register in GetAsyncKeyState). So we let the user
-            // remap Game Bar's screenshot shortcut to a Win-less combo (e.g. Alt+F12)
-            // and inject THAT instead. Falls back to Win+Alt+PrtScn if unset.
+            // 触发 Game Bar 截图快捷键。默认为 Win+Alt+PrtScn，
+            // 但游戏前台时 Win 键被吞（游戏模式/低级钩子过滤注入的 Win 键事件——已验证：注入的 VK_LWIN 在 GetAsyncKeyState 中读不到）。
+            // 故允许用户将 Game Bar 截图快捷键改为不含 Win 的组合（如 Alt+F12），注入该组合。未设置时回退 Win+Alt+PrtScn。
             int hk = AppPrefs.GetInt(GameBarHotkeyPrefKey, 0);
             if (hk != 0) SendGameBarHotkey(hk);
             else
@@ -465,13 +423,9 @@ namespace PowerAudioManager
             if (png == null && jxr == null) { AppLog.Log("Screenshot", $"GameBar fallback: no new file within {waited}ms, app={exeName} (dir now has {Directory.GetFiles(capturesDir).Length} files)"); return null; }
             AppLog.Log("Screenshot", $"GameBar fallback: png={png != null} jxr={jxr != null} after {waited}ms app={exeName}");
 
-            // Copy BOTH the .png (preview) and .jxr (HDR) into the per-app folder,
-            // leaving Game Bar's originals in place. Previously we *moved* the .png
-            // out of the Captures dir — but Game Bar watches that folder and removing
-            // its files mid-session appeared to make it stop responding to further
-            // Win+Alt+PrtScn triggers (every capture after the first produced no
-            // file). Copying keeps Game Bar's state intact. WaitForFileReady (in
-            // CopyInto) guards against grabbing a half-written file.
+            // 将 .png（预览）和 .jxr（HDR）双双复制到对应应用子目录，保留 Game Bar 原文件不动。
+            // 之前移动 .png 离开 Captures 目录——但 Game Bar 监听该文件夹，中途移走文件导致后续触发不再生成文件。
+            // 复制保持 Game Bar 状态完整。WaitForFileReady（在 CopyInto 中）防止复制到半写入文件。
             try
             {
                 string dir = Path.Combine(RootDir(), exeName);
@@ -500,12 +454,8 @@ namespace PowerAudioManager
             }
         }
 
-        // Game Bar writes its capture files progressively — a .png/.jxr appears in
-        // the directory while still being written. Copying/moving at that moment
-        // grabs a truncated file (observed: a 14MB .jxr copied as 1186 bytes).
-        // Wait until the file size is stable across two reads ~150ms apart AND the
-        // file can be opened for reading (no exclusive write lock), with a cap so
-        // we never hang. Returns true when the file looks complete.
+        // Game Bar 渐进写入——文件在目录中出现时仍在写入中。此时复制/移动会拿到截断文件（实测 14MB 的 .jxr 只复制到 1186 字节）。
+        // 等待文件大小在两次间隔约 150ms 的读取中稳定，且可被打开读取（无独占写锁），设置超时防止死等。
         static bool WaitForFileReady(string path, int timeoutMs)
         {
             long prev = -1;
@@ -541,14 +491,12 @@ namespace PowerAudioManager
             return null;
         }
 
-        // Encode a saved PNG path to a frozen WPF thumbnail source for the toast.
         public static BitmapSource LoadThumbnail(string path, int maxW, int maxH)
         {
             try
             {
-                // Use a FileStream (StreamSource) instead of UriSource: UriSource
-                // mangles non-ASCII paths (e.g. 中文 "图片" in the root dir) and the
-                // BitmapImage silently fails to load -> empty gallery.
+                // 必须用 FileStream（StreamSource）而非 UriSource：UriSource 对非 ASCII 路径（如根目录含中文"图片"）
+                // 处理错误，BitmapImage 静默加载失败 → 图库空白。
                 var bmp = new BitmapImage();
                 bmp.BeginInit();
                 bmp.CacheOption = BitmapCacheOption.OnLoad;
@@ -561,8 +509,7 @@ namespace PowerAudioManager
             catch { return null; }
         }
 
-        // The N most recent screenshots across all per-app subfolders (newest first),
-        // for the embedded gallery preview in the floating window.
+        // 获取所有应用子目录中最近 N 张截图（最新在前），供悬浮窗内嵌图库预览。
         public static System.Collections.Generic.List<string> GetRecent(int count)
         {
             var list = new System.Collections.Generic.List<string>();
@@ -588,10 +535,8 @@ namespace PowerAudioManager
             return s;
         }
 
-        // Where Game Bar (Win+Alt+PrtScn) writes its captures. Default is
-        // <Videos>\Captures, but the user can redirect the Videos library or change
-        // the Game Bar capture folder, so the default often points nowhere. Let the
-        // user override it in Settings; empty/missing falls back to the default.
+        // Game Bar（Win+Alt+PrtScn）截图保存位置。默认为 <Videos>\Captures，
+        // 但用户可能重定向了视频库或更换了 Game Bar 截图文件夹，默认路径常无效。允许在设置中覆盖。
         public static string GameBarDir()
         {
             var s = AppPrefs.GetString(GameBarDirPrefKey, "");

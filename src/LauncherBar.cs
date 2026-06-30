@@ -14,20 +14,14 @@ using System.Windows.Media;
 
 namespace PowerAudioManager
 {
-    // Quick-launch bar: up to 8 slots (auto-wraps via WrapPanel). Each slot holds
-    // an exe / shortcut / folder / URL; click to launch, right-click to clear,
-    // drag-and-drop to assign. Paths persist in the registry (Launcher.Paths,
-    // '|'-separated). Only filled slots + 1 empty placeholder are shown.
-    //
-    // Extracted from MainWindow: it owns no window state — the host passes a
-    // requestRebuild callback so assigning/clearing a slot can rebuild the UI.
+    // 快捷启动栏：最多 8 个槽位（WrapPanel 自动换行），支持 exe/快捷方式/文件夹/URL。
+    // 注册表 Launcher.Paths（'|' 分隔）持久化；只显示已填槽位 + 1 个空占位。
     internal static class LauncherBar
     {
         const int MaxSlots = 8;
         const string LauncherPrefKey = "Launcher.Paths";
 
-        // Build the launcher section into contentPanel. requestRebuild is
-        // invoked when a slot's path changes (so the host re-renders icons).
+        // requestRebuild 在槽位路径变更时回调，宿主据此重新渲染图标
         public static void Build(StackPanel contentPanel, Action requestRebuild)
         {
             if (contentPanel.Children.Count > 0) contentPanel.Children.Add(MainWindow.MakeDivider());
@@ -39,7 +33,7 @@ namespace PowerAudioManager
             contentPanel.Children.Add(header);
             var wrap = new WrapPanel { Margin = new Thickness(0, 0, 0, 2) };
             var paths = LoadLauncherPaths();
-            // Show filled slots + 1 empty placeholder, capped at MaxSlots.
+            // 已填槽位 + 1 个空占位，不超过 MaxSlots
             int shown = Math.Min(MaxSlots, paths.Count + 1);
             if (shown < 1) shown = 1;
             for (int i = 0; i < shown; i++)
@@ -83,8 +77,6 @@ namespace PowerAudioManager
             catch { }
         }
 
-        // ---- Icon helpers ---------------------------------------------------
-
         static bool IsUrl(string s)
         {
             return s != null && (s.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
@@ -97,8 +89,7 @@ namespace PowerAudioManager
             catch { return false; }
         }
 
-        // Extract a small icon from an exe/dll/lnk for the launcher slot.
-        // Returns null for URLs and folders (handled separately).
+        // 从 exe/dll/lnk 提取图标，URL 和文件夹返回 null（另外处理）
         static ImageSource ExtractIcon(string path)
         {
             try
@@ -117,8 +108,6 @@ namespace PowerAudioManager
             catch { }
             return null;
         }
-
-        // ---- Slot button ----------------------------------------------------
 
         static Button MakeLauncherSlot(int index, string path, List<string> paths, Action requestRebuild)
         {
@@ -174,7 +163,6 @@ namespace PowerAudioManager
                         Title = "选择要添加的程序" };
                     if (dlg.ShowDialog() == true)
                     {
-                        // Compact-add: append to the end.
                         string resolved = ResolveShortcut(dlg.FileName);
                         paths.Add(resolved);
                         SaveLauncherPaths(paths);
@@ -203,7 +191,6 @@ namespace PowerAudioManager
                 }
             };
 
-            // ---- Drag & Drop ------------------------------------------------
             btn.DragEnter += (s, e) =>
             {
                 if (e.Data.GetDataPresent(DataFormats.FileDrop) ||
@@ -246,9 +233,8 @@ namespace PowerAudioManager
                 if (!string.IsNullOrEmpty(dropped))
                 {
                     dropped = dropped.Trim();
-                    // Resolve .lnk targets; keep URLs and folder paths as-is.
+                    // 解析 .lnk 目标路径；URL 和文件夹原样保留
                     string resolved = ResolveShortcut(dropped);
-                    // Compact-add to the end of the list.
                     paths.Add(resolved);
                     SaveLauncherPaths(paths);
                     requestRebuild();
@@ -258,10 +244,7 @@ namespace PowerAudioManager
             return btn;
         }
 
-        // ---- Favicon fetch --------------------------------------------------
-
-        // Fetches the website's own favicon (tries /favicon.ico, then parses
-        // <link rel=icon> from the HTML). Result cached to %TEMP%\OneBoxFavicons.
+        // 抓取网站 favicon（先试 /favicon.ico，再解析 HTML <link rel=icon>），缓存到 %TEMP%\OneBoxFavicons
         static async void FetchFavicon(string url, Button btn)
         {
             try
@@ -279,11 +262,11 @@ namespace PowerAudioManager
                         client.Timeout = TimeSpan.FromSeconds(5);
                         byte[] bytes = null;
 
-                        // 1) Try the standard /favicon.ico.
+                        // 1) 先试标准 /favicon.ico
                         try { bytes = await client.GetByteArrayAsync($"{uri.Scheme}://{domain}/favicon.ico"); }
                         catch { }
 
-                        // 2) Parse HTML for <link rel="icon" href="...">.
+                        // 2) 再解析 HTML <link rel="icon" href="...">
                         if (bytes == null || bytes.Length < 100)
                         {
                             try
@@ -305,11 +288,11 @@ namespace PowerAudioManager
                         if (bytes != null && bytes.Length >= 100)
                             File.WriteAllBytes(cacheFile, bytes);
                         else
-                            return; // no icon found → keep 🌐
+                            return; // 未找到图标 → 保持 🌐
                     }
                 }
 
-                // Load cached icon on UI thread.
+                // 回到 UI 线程加载缓存图标
                 btn.Dispatcher.Invoke(() =>
                 {
                     try
@@ -329,13 +312,12 @@ namespace PowerAudioManager
             catch { /* network error → keep 🌐 */ }
         }
 
-        // Resolve a .lnk shortcut to its target path. Falls back to the original path
-        // if it's not a shortcut or resolution fails. Uses late binding via reflection
-        // (no dynamic / Microsoft.CSharp dependency).
+        // 解析 .lnk 快捷方式到目标路径；非快捷方式或解析失败回退原路径。
+        // 使用反射后期绑定（避免添加 dynamic / Microsoft.CSharp 依赖）
         static string ResolveShortcut(string path)
         {
             if (string.IsNullOrEmpty(path)) return path;
-            // URLs and folders pass through unchanged.
+            // URL 和文件夹原样返回
             if (IsUrl(path) || IsFolder(path)) return path;
             try
             {

@@ -8,18 +8,15 @@ using System.Windows;
 
 namespace PowerAudioManager
 {
-    // Baidu image-translation API (https://fanyi-api.baidu.com/ait/api/picture/translate).
-    // OCRs text in an image and returns a paste=1 "整图贴合" image (original text erased,
-    // translation overlaid) plus the full translated text. Reuses the same AppId/Key as
-    // the text translator (TranslateService) — the key is the Bearer token, verified to
-    // work for this endpoint too (no separate OAuth).
+    // 百度图片翻译 API。OCR 识别图中文字，返回 paste=1 整图贴合图（原文擦除、译文覆叠）
+    // 及完整译文。复用 TranslateService 的 AppId/Key，已验证 Bearer token 同样有效。
     public static class ImageTranslateService
     {
         const string Endpoint = "https://fanyi-api.baidu.com/ait/api/picture/translate";
 
         public class ImageResult
         {
-            public byte[] PasteImage;      // the tonemapped/overlaid PNG (paste=1), null on failure
+            public byte[] PasteImage;      // 整图贴合 PNG (paste=1)，失败为 null
             public string Dst;              // full translated text
             public string Src;              // full source OCR text
             public string Error;            // non-null on failure
@@ -47,7 +44,7 @@ namespace PowerAudioManager
                 req.Method = "POST";
                 req.ContentType = "application/json";
                 req.Headers["Authorization"] = "Bearer " + key;
-                req.Timeout = 30000; // image OCR can be slower than text
+                req.Timeout = 30000; // 图片 OCR 比文本翻译慢
                 req.ReadWriteTimeout = 30000;
 
                 string fromArg = string.IsNullOrEmpty(from) ? "auto" : from;
@@ -58,7 +55,7 @@ namespace PowerAudioManager
                     ["to"] = toArg,
                     ["appid"] = appId,
                     ["content"] = Convert.ToBase64String(imageBytes),
-                    ["paste"] = 1,          // 整图贴合: erase source, overlay translation
+                    ["paste"] = 1,          // 整图贴合
                     ["need_intervene"] = 0,
                     ["view_type"] = 0,       // 通用擦除
                     ["model_type"] = "nmt"
@@ -76,7 +73,6 @@ namespace PowerAudioManager
                 using (var doc = JsonDocument.Parse(json))
                 {
                     var root = doc.RootElement;
-                    // Baidu error responses carry error_code/error_msg.
                     if (root.ValueKind == JsonValueKind.Object && root.TryGetProperty("error_code", out var ec) &&
                         ec.ValueKind == JsonValueKind.String)
                     {

@@ -12,9 +12,7 @@ using System.Diagnostics;
 
 namespace PowerAudioManager
 {
-    // Standalone gallery window: a thumbnail grid of all screenshots under the
-    // root directory (newest first). Click a thumbnail to reveal it in Explorer.
-    // Opened from the floating window's 图库 button.
+    // 图库窗口：展示根目录下所有截图的缩略图网格（最新在前）。点击在资源管理器中定位，从悬浮窗"图库"按钮打开。
     internal static class ScreenshotGallery
     {
         const int ThumbSize = 120;
@@ -42,13 +40,13 @@ namespace PowerAudioManager
             var scroller = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
             var wrap = new WrapPanel();
             scroller.Content = wrap;
-            outer.Children.Add(scroller); // must be added BEFORE handing outer to OneBoxWindow
+            // 必须在传入 OneBoxWindow 之前添加到 outer，否则控件成为孤儿不显示。
+            outer.Children.Add(scroller);
 
             var dlg = OneBoxWindow.Create(owner, "图库", 600, 480, outer, true);
             openRootBtn.Click += (s, e) => { try { Process.Start("explorer.exe", "\"" + ScreenshotService.RootDir() + "\""); } catch { } };
 
-            // Load thumbnails (newest first) on a background thread so the dialog
-            // opens instantly; images stream in as they decode.
+            // 在后台线程加载缩略图，对话框立刻打开，图片随解码逐个出现。
             ThreadPool.QueueUserWorkItem(_ =>
             {
                 var files = ScreenshotService.GetRecent(10);

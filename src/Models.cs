@@ -27,7 +27,7 @@ namespace PowerAudioManager
         public string Name { get; set; }
         public bool IsDefault { get; set; }
         public bool IsHidden { get; set; }
-        public int HotkeyIndex { get; set; } // 1..9 mapped to Ctrl+Alt+digit; 0 = none
+        public int HotkeyIndex { get; set; } // 1..9 映射到 Ctrl+Alt+数字键；0 表示未设置
     }
 
 }

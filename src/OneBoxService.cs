@@ -45,7 +45,7 @@ namespace PowerAudioManager
             if (desc.Reason == SessionChangeReason.SessionLogon)
             {
                 AppLog.Log("Service", $"session-logon id={desc.SessionId}");
-                // Brief delay to let the session fully initialise (explorer, desktop).
+                // 短暂延迟让会话完全初始化（explorer、desktop）。
                 Task.Delay(5000).ContinueWith(_ => LaunchInSession(desc.SessionId));
             }
         }
@@ -64,7 +64,7 @@ namespace PowerAudioManager
 
                     var si = new STARTUPINFO();
                     si.cb = Marshal.SizeOf(typeof(STARTUPINFO));
-                    // Attach to the user's default desktop so the GUI is visible.
+                    // 附加到用户的默认桌面，这样 GUI 才可见。
                     var desktopPtr = Marshal.StringToHGlobalUni("winsta0\\default");
                     si.lpDesktop = desktopPtr;
 

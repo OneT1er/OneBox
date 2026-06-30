@@ -23,10 +23,10 @@
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>false</SelfContained>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
-    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
-    <IncludeAllContentForSelfExtract>true</IncludeAllContentForSelfExtract>
-    <!-- ReadyToRun precompiles IL to native ahead of time, cutting cold-start JIT
-         (the user-perceived "loads for a while" vs the old .NET Framework 4 NGen exe). -->
+    <IncludeNativeLibrariesForSelfExtract>false</IncludeNativeLibrariesForSelfExtract>
+    <IncludeAllContentForSelfExtract>false</IncludeAllContentForSelfExtract>
+    <!-- ReadyToRun precompiles IL to native, cutting cold-start JIT.
+         Only costs ~3 MB on a 37 MB exe, worth keeping. -->
     <PublishReadyToRun>true</PublishReadyToRun>
   </PropertyGroup>
 

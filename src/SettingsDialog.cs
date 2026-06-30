@@ -6,10 +6,6 @@ using System.Windows.Media;
 
 namespace PowerAudioManager
 {
-    // Unified settings window with tabs: 常规 / 板块 / 内存 / 翻译.
-    // Replaces the former ModulesSettingsDialog, CleanerSettingsDialog and
-    // TranslateSettingsDialog (now deleted). Opened from the tray "设置..." item
-    // and (翻译 tab) from the translate window's ⚙ button.
     internal static class SettingsDialog
     {
         public static void Show(Window owner)
@@ -17,15 +13,13 @@ namespace PowerAudioManager
             Show(owner, 0);
         }
 
-        // openTab: 0=常规 1=板块 2=内存 3=翻译
+        // openTab 参数：0=常规 1=板块 2=内存 3=翻译 4=截图 5=剪贴板
         public static void Show(Window owner, int openTab)
         {
-            // Dark font for tab headers / content.
             var fg = new SolidColorBrush(Color.FromRgb(190, 188, 220));
             var lightText = new SolidColorBrush(Color.FromRgb(220, 218, 245));
 
-            // The TabControl is the body OneBoxWindow.Create wraps (title bar +
-            // rounded border). Build it first, then create the window around it.
+            // TabControl 是 OneBoxWindow.Create 包装的主体（含标题栏 + 圆角边框），先构建再围绕它创建窗口。
             var tabs = new TabControl
             {
                 Margin = new Thickness(0),
@@ -49,8 +43,6 @@ namespace PowerAudioManager
             dlg.ShowDialog();
         }
 
-        // ---- 常规 tab ----------------------------------------------------------
-
         static TabItem BuildGeneralTab(Window owner, Window dlg, SolidColorBrush fg, SolidColorBrush lightText)
         {
             var stack = new StackPanel { Margin = new Thickness(20) };
@@ -72,7 +64,7 @@ namespace PowerAudioManager
             foreach (var fam in System.Windows.Media.Fonts.SystemFontFamilies.OrderBy(f => f.Source))
                 fontCombo.Items.Add(fam.Source);
             fontCombo.SelectedItem = currentFont;
-            // Live preview label: shows the selected font applied to sample text.
+            // 实时预览标签：将选中的字体应用到示例文本。
             var preview = new TextBlock
             {
                 Text = "OneBox 预览 1234",
@@ -128,7 +120,6 @@ namespace PowerAudioManager
 
             stack.Children.Add(new Border { Height = 1, Background = new SolidColorBrush(Color.FromRgb(80, 75, 120)), Margin = new Thickness(0, 4, 0, 12) });
 
-            // ---- 窗口缩放 ----
             var scaleLbl = new TextBlock { Text = "窗口缩放", Foreground = Brushes.White, FontSize = 12, Margin = new Thickness(0, 0, 0, 4) };
             stack.Children.Add(scaleLbl);
             var scaleRow = new DockPanel { Margin = new Thickness(0, 0, 0, 4) };
@@ -183,7 +174,6 @@ namespace PowerAudioManager
                 AppPrefs.SetBool("AutoExpandAfterManual", expandAfterManualCb.IsChecked == true);
                 int d; if (int.TryParse(delayBox.Text, out d) && d >= 0) AppPrefs.SetInt("AutoCollapseDelay", d);
                 var mw = owner as MainWindow;
-                // Window scale
                 if (scaleAutoCb.IsChecked == true)
                 { try { mw?._scaling?.ResetManualScale(); } catch { } }
                 else
@@ -196,14 +186,13 @@ namespace PowerAudioManager
                     if (err != null)
                     {
                         System.Windows.MessageBox.Show(err, "开机自启", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Warning);
-                        // Revert combo to actual current state
+                        // 恢复到实际当前状态
                         autoStartCb.SelectedIndex = (int)AutoStartService.GetCurrent();
                     }
                     else if (mw != null && mw._tray != null) mw._tray.UpdateAutoStart();
                 }
                 if (mw != null)
                 {
-                    // Apply new font + lock/topmost + auto-collapse settings live.
                     mw.Topmost = topmostCb.IsChecked == true;
                     mw._topmost = topmostCb.IsChecked == true;
                     mw._lockPosition = lockCb.IsChecked == true;
@@ -224,8 +213,6 @@ namespace PowerAudioManager
 
             return new TabItem { Header = " 常规 ", Content = Scroll(stack) };
         }
-
-        // ---- 板块 tab ----------------------------------------------------------
 
         static TabItem BuildModulesTab(Window owner, Window dlg, SolidColorBrush fg, SolidColorBrush lightText)
         {
@@ -266,8 +253,6 @@ namespace PowerAudioManager
 
             return new TabItem { Header = " 板块 ", Content = Scroll(stack) };
         }
-
-        // ---- 内存 tab ----------------------------------------------------------
 
         static TabItem BuildMemoryTab(Window owner, Window dlg, SolidColorBrush fg, SolidColorBrush lightText)
         {
@@ -345,8 +330,7 @@ namespace PowerAudioManager
             stack.Children.Add(cbReg);
             stack.Children.Add(cbCML);
 
-            // The two *-marked items can cause brief system freezes; warn when the
-            // user enables them (matching memreduct's confirmation prompt).
+            // 带 * 的两项可能导致系统短暂卡顿，启用时弹窗确认（与 MemReduct 行为一致）。
             ConfirmIfDangerous(cbSL, dlg, "清空整个 standby 列表可能导致系统短暂卡顿，确定启用？");
             ConfirmIfDangerous(cbMPL, dlg, "刷盘 Modified page list 可能导致系统短暂卡顿，确定启用？");
 
@@ -381,8 +365,7 @@ namespace PowerAudioManager
             return new TabItem { Header = " 内存 ", Content = Scroll(stack) };
         }
 
-        // When a "dangerous" cleaning option is checked, prompt for confirmation;
-        // if the user declines, uncheck it again.
+        // 勾选"危险"清理项时弹确认框，用户取消则取消勾选。
         static void ConfirmIfDangerous(CheckBox cb, Window dlg, string message)
         {
             cb.Checked += (s, e) =>
@@ -391,8 +374,6 @@ namespace PowerAudioManager
                 if (rc != MessageBoxResult.OK) cb.IsChecked = false;
             };
         }
-
-        // ---- 翻译 tab ----------------------------------------------------------
 
         static TabItem BuildTranslateTab(Window owner, Window dlg, SolidColorBrush fg, SolidColorBrush lightText)
         {
@@ -423,8 +404,6 @@ namespace PowerAudioManager
 
             return new TabItem { Header = " 翻译 ", Content = Scroll(stack) };
         }
-
-        // ---- 截图 tab -----------------------------------------------------------
 
         static TabItem BuildScreenshotTab(Window owner, Window dlg, SolidColorBrush fg, SolidColorBrush lightText)
         {
@@ -457,17 +436,13 @@ namespace PowerAudioManager
             stack.Children.Add(rootRow);
             stack.Children.Add(new TextBlock { Text = "截图按前台应用名自动建子文件夹存放。", Foreground = fg, FontSize = 10, Margin = new Thickness(0, 0, 0, 16) });
 
-            // ---- Advanced: Game Bar screenshot (opt-in) ----
-            // Default off: OneBox just uses CopyFromScreen (simple, works for normal
-            // windows; HDR content may come back black). Enabling this turns on HDR
-            // detection + Game Bar fallback so HDR/game windows capture correctly.
+            // 高级：Game Bar 截图默认关闭。开启后启用 HDR 检测 + Game Bar 回退，HDR/全屏游戏截图不走黑。
             stack.Children.Add(new TextBlock { Text = "高级：Game Bar 截图（HDR / 全屏游戏）", Foreground = Brushes.White, FontWeight = FontWeights.SemiBold, FontSize = 13, Margin = new Thickness(0, 0, 0, 6) });
             bool gbEnabled = AppPrefs.GetBool("Screenshot.GameBarEnabled", false);
             var gbToggle = new CheckBox { Content = "启用 Game Bar 截图回退（默认关闭，仅普通截图）", IsChecked = gbEnabled, Foreground = Brushes.White, FontSize = 12, Margin = new Thickness(0, 0, 0, 8) };
             stack.Children.Add(gbToggle);
 
-            // The Game Bar config below is only relevant when enabled; wrap it so we
-            // can grey it out when the toggle is off.
+            // Game Bar 配置仅在启用时有效，关闭开关时整体变灰。
             var gbPanel = new StackPanel { Margin = new Thickness(0, 0, 0, 0) };
             gbPanel.IsEnabled = gbEnabled;
 
@@ -657,8 +632,6 @@ namespace PowerAudioManager
             return new TabItem { Header = " 截图 ", Content = Scroll(stack) };
         }
 
-        // ---- 剪贴板 tab ---------------------------------------------------------
-
         static TabItem BuildClipboardTab(Window owner, Window dlg, SolidColorBrush fg, SolidColorBrush lightText)
         {
             var stack = new StackPanel { Margin = new Thickness(20) };
@@ -683,9 +656,7 @@ namespace PowerAudioManager
                 if (captured.HasValue)
                 {
                     int enc = captured.Value;
-                    // Test-register immediately so we can tell the user if the combo
-                    // is already taken by another app — otherwise they'd bind it and
-                    // silently never get it to fire.
+                    // 立即测试注册，检测快捷键是否被其他程序占用，避免绑定后静默失败。
                     bool ok = (owner is MainWindow) ? ((MainWindow)owner).TestHotkey(enc) : true;
                     if (ok)
                     {
@@ -695,7 +666,7 @@ namespace PowerAudioManager
                     }
                     else
                     {
-                        // Still show what they pressed, but warn it's taken.
+                        // 仍显示按键但标注被占用。
                         curClipHk = enc;
                         clipHkLabel.Text = HotkeyCaptureDialog.Format(curClipHk) + "（被占用）";
                         clipHkLabel.Foreground = new SolidColorBrush(Color.FromRgb(240, 170, 170));
@@ -728,8 +699,6 @@ namespace PowerAudioManager
 
             return new TabItem { Header = " 剪贴板 ", Content = Scroll(stack) };
         }
-
-        // ---- shared helpers ----------------------------------------------------
 
         static StackPanel MakeButtons()
         {

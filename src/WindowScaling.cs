@@ -6,26 +6,21 @@ using Microsoft.Win32;
 
 namespace PowerAudioManager
 {
-    // Handles the floating window's resolution-aware scaling and work-area
-    // clamping. Extracted from MainWindow so the window class doesn't carry
-    // DPI / display-geometry plumbing.
+    // 悬浮窗的缩放感知与工作区限制。从 MainWindow 抽取，避免窗口类承载 DPI/显示几何逻辑。
     //
-    // Scaling: linear map from the primary screen's physical width to a scale
-    // factor (1.0 at 1920px, 1.5 at 3840px), applied to the window width and as
-    // a LayoutTransform on the main border. Uses physical pixels
-    // (Screen.Bounds), which update reliably across resolution switches
-    // regardless of the process's DPI awareness.
+    // 缩放：从主屏幕物理宽度到缩放因子的线性映射（1920px → 1.0, 3840px → 1.5），
+    // 应用到窗口宽度和主 Border 的 LayoutTransform。使用物理像素（Screen.Bounds），
+    // 分辨率切换时可靠更新，不受进程 DPI 感知模式影响。
     //
-    // Clamping: keeps the window inside the current work area, snapping back to
-    // the top-right corner if it ends up off-screen (e.g. monitor unplugged,
-    // 4K -> 1080p switch).
+    // 限制：窗口保持在当前工作区内，若完全离开屏幕（如拔掉显示器、4K→1080p 切换）
+    // 则弹回右上角。
     internal sealed class WindowScaling
     {
         const double BaseWindowWidth = 280.0;
         readonly Window _window;
         readonly Func<Border> _getMainBorder;
-        double _currentScale = -1; // -1 forces first apply
-        double? _manualScale;      // user override from drag or settings slider
+        double _currentScale = -1; // -1 强制首次应用
+        double? _manualScale;
 
         public WindowScaling(Window window, Func<Border> getMainBorder)
         {
@@ -41,22 +36,19 @@ namespace PowerAudioManager
                 try { phys = System.Windows.Forms.Screen.PrimaryScreen.Bounds.Width; }
                 catch { }
                 if (phys <= 0) phys = 1920;
-                // scale = 1.0 at 1920px, 1.5 at 3840px (linear) — the TOTAL physical
-                // magnification we want vs the 1080p baseline.
+                // scale = 1.0 at 1920px, 1.5 at 3840px（线性）—— 相对于 1080p 基准的总物理放大倍数。
                 double scale = 0.5 + (phys - 1920.0) * (0.5 / 1920.0);
                 if (scale < 0.85) scale = 0.85;
                 if (scale > 2.0) scale = 2.0;
 
-                // Manual override from user-dragged resize or settings slider.
                 if (_manualScale.HasValue)
                     scale = _manualScale.Value;
                 else if (AppPrefs.GetDouble("WindowScale.Factor", out double saved) && saved >= 0.8 && saved <= 2.0)
                     scale = saved;
 
-                // Under Per-Monitor V2 the DIP->pixel DPI scaling already magnifies
-                // the window (e.g. 1.5x on 4K @150%). Divide it out so the
-                // LayoutTransform only adds the magnification DPI doesn't already
-                // provide — otherwise the window ends up double-scaled (too big).
+                // Per-Monitor V2 下 DIP→像素的 DPI 缩放已经放大了窗口（如 4K @150% 为 1.5x）。
+                // 除以 DPI 缩放比，使 LayoutTransform 仅补充 DPI 未提供的放大 ——
+                // 否则窗口会被双重缩放（过大）。
                 double dpiScale = 1.0;
                 try
                 {
@@ -79,7 +71,6 @@ namespace PowerAudioManager
             catch (Exception ex) { AppLog.Log("ApplyScaling", ex); }
         }
 
-        // Called when the user drag-resizes the window or moves the settings slider.
         public void ApplyManualScale(double scale)
         {
             if (scale < 0.8) scale = 0.8;
@@ -89,18 +80,17 @@ namespace PowerAudioManager
             ApplyScaling();
         }
 
-        // Revert to automatic scaling based on screen resolution.
         public void ResetManualScale()
         {
             _manualScale = null;
             try { using (var k = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\PowerAudioManager\App", true)) k?.DeleteValue("WindowScale.Factor", false); } catch { }
-            _currentScale = -1; // force re-apply
+            _currentScale = -1; // 强制重新应用
             ApplyScaling();
         }
 
         public void OnUserPreferenceChanged(object sender, UserPreferenceChangedEventArgs e)
         {
-            // DPI / desktop changes can also move the work area on us.
+            // DPI/桌面变更可能移动工作区。
             if (e.Category == UserPreferenceCategory.Desktop ||
                 e.Category == UserPreferenceCategory.General)
             {
@@ -113,19 +103,16 @@ namespace PowerAudioManager
             try { _window.Dispatcher.BeginInvoke(new Action(() => { ApplyScaling(); Reposition(); })); } catch { }
         }
 
-        // Fixed position (unconditional): on a display-config change we do NOT
-        // move the window — it stays exactly where the user left it, surviving
-        // resolution / DPI switches. We only rescue it if it has become fully
-        // off-screen (e.g. the monitor it lived on was unplugged), so the user
-        // can never lose the window entirely. Partial overhang is left as-is.
+        // 固定位置（无条件）：显示配置变更时窗口不移动，保持在用户放置的原位，
+        // 分辨率/DPI 切换后位置不变。仅在窗口完全离开屏幕（如所在显示器被拔掉）
+        // 时救回可见区域，防止用户彻底丢失窗口。部分超出屏幕则不做处理。
         public void Reposition()
         {
             EnsureVisible();
         }
 
-        // Nudge the window back on-screen only when it is completely outside the
-        // current work area. Anything else (e.g. one edge poking off after a
-        // resolution drop) is intentionally untouched to honour "固定位置".
+        // 仅在窗口完全超出当前工作区时将其推回屏幕内。部分超出（如分辨率降低后
+        // 一条边露出屏幕）刻意不处理，以遵循"固定位置"策略。
         public void EnsureVisible()
         {
             try
@@ -142,7 +129,6 @@ namespace PowerAudioManager
                     || top + h <= wa.Top + 8  || top >= wa.Bottom - 8;
                 if (offscreen)
                 {
-                    // Completely lost — snap back to the top-right of the primary work area.
                     _window.Left = wa.Right - w - 20;
                     _window.Top  = wa.Top + 20;
                 }
@@ -150,7 +136,7 @@ namespace PowerAudioManager
             catch (Exception ex) { AppLog.Log("EnsureVisible", ex); }
         }
 
-        // Work area in WPF DIPs (WinForms returns device pixels).
+        // 工作区转 WPF DIP（WinForms 返回设备像素）。
         struct Rect { public double Left, Top, Right, Bottom; public double Width { get { return Right - Left; } } public double Height { get { return Bottom - Top; } } }
         Rect GetWorkAreaDip()
         {
@@ -171,9 +157,8 @@ namespace PowerAudioManager
             return new Rect { Left = waLeft * scale, Top = waTop * scale, Right = waRight * scale, Bottom = waBottom * scale };
         }
 
-        // Kept for callers that still clamp on first layout / explicit re-clamp.
-        // Behaviour matches EnsureVisible (rescue only when fully off-screen) so the
-        // fixed-position guarantee holds on startup too.
+        // 保留给仍需首次布局/显式重新限制的调用方。行为与 EnsureVisible 一致（仅完全离开屏幕时救回），
+        // 确保启动时也遵循固定位置策略。
         public void ClampToWorkArea()
         {
             EnsureVisible();

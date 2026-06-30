@@ -141,7 +141,7 @@ namespace PowerAudioManager
                 {
                     if (encoded != 0)
                     {
-                        // Clear conflicts (any other device with same encoded value)
+                        // 清除冲突（任何其他设备使用了相同的编码值）
                         var s = encoded.ToString();
                         foreach (var existing in k.GetValueNames())
                         {
@@ -158,7 +158,7 @@ namespace PowerAudioManager
             catch { }
         }
 
-        // Backwards-compatible alias: if you still have callers passing 0..9 they still work
+        // 向后兼容别名：仍有调用者传入 0..9 时仍然可用
         public static void SetHotkey(string deviceName, int digit) { SetHotkeyKey(deviceName, digit); }
 
         public static List<KeyValuePair<string, int>> GetAllHotkeys()

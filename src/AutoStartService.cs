@@ -23,8 +23,6 @@ namespace PowerAudioManager
 
         static string ExePath => Environment.ProcessPath;
 
-        // ----- Detection ---------------------------------------------------
-
         public static AutoStartMethod GetCurrent()
         {
             if (IsServiceInstalled())
@@ -74,9 +72,8 @@ namespace PowerAudioManager
             {
                 using (var sc = new ServiceController(ServiceName))
                 {
-                    // The constructor does NOT throw for non-existent services.
-                    // Touching any property (e.g. Status) forces a handle open and
-                    // throws InvalidOperationException if the service is absent.
+                    // ServiceController 构造函数不会对不存在的服务抛异常。
+                    // 访问任何属性（如 Status）才会打开句柄，服务不存在时抛出 InvalidOperationException。
                     var _ = sc.Status;
                     return true;
                 }
@@ -84,18 +81,14 @@ namespace PowerAudioManager
             catch { return false; }
         }
 
-        // ----- Enable / Disable -------------------------------------------
-
-        /// <summary>Called by the elevated --elevate-autostart helper process.
-        /// Applies the change with full admin rights and returns.</summary>
         public static string ApplyAutoStart(AutoStartMethod method)
         {
-            return Enable(method); // runs as admin, so UAC-heavy ops will succeed
+            return Enable(method);
         }
 
-        // Launch a brief elevated OneBox.exe process to apply an auto-start
-        // change that needs admin (schtasks /rl highest, sc create/delete).
-        // The UAC dialog shows "OneBox" since we launch ourselves with runas.
+        // 启动一个短暂的提权 OneBox.exe 进程来执行需要管理员权限的自启动操作
+        // （schtasks /rl highest、sc create/delete）。
+        // UAC 弹窗显示 "OneBox"，因为使用 runas 启动自身。
         static string LaunchElevatedHelper(int methodInt)
         {
             try
@@ -108,18 +101,17 @@ namespace PowerAudioManager
                     UseShellExecute = true
                 };
                 Process.Start(psi);
-                return null; // the elevated process will handle it
+                return null;
             }
             catch (Win32Exception ex) when (ex.NativeErrorCode == 1223)
             { return "已取消 UAC 授权"; }
             catch (Exception ex) { return $"提权失败: {ex.Message}"; }
         }
 
-        /// <summary>Enable one method. Returns null on success, error string on failure.</summary>
         public static string Enable(AutoStartMethod method)
         {
-            // If the operation (enable + cleanup) needs admin and we don't have it,
-            // launch a brief elevated OneBox.exe helper.  UAC shows "OneBox".
+            // 如果操作（启用 + 清理）需要管理员权限而我们没有，
+            // 则启动一个短暂的提权辅助进程。
             if (!AdminUtils.IsAdmin())
             {
                 bool needElevate = method == AutoStartMethod.ScheduledTask
@@ -130,7 +122,7 @@ namespace PowerAudioManager
                     return LaunchElevatedHelper((int)method);
             }
 
-            // Always clean up the other methods first so only one is active.
+            // 先清理所有其他自启方式，确保同时只有一种生效。
             string cleanErr = DisableAll();
             if (cleanErr != null) return cleanErr;
 
@@ -152,8 +144,6 @@ namespace PowerAudioManager
         {
             return DisableAll();
         }
-
-        // ----- Registry ---------------------------------------------------
 
         static string EnableRegistry()
         {
@@ -180,9 +170,8 @@ namespace PowerAudioManager
             catch { }
         }
 
-        // ----- Task Scheduler ---------------------------------------------
         // schtasks /create /tn "OneBox" /tr "\"<path>\"" /sc onlogon /rl highest /f
-        // /rl highest → runs with admin privileges (UAC approved once at creation).
+        // /rl highest → 以管理员权限运行（创建时通过一次 UAC 授权）。
 
         static string EnableTask()
         {
@@ -231,9 +220,8 @@ namespace PowerAudioManager
             catch (Exception ex) { return $"计划任务删除失败: {ex.Message}"; }
         }
 
-        // ----- Service ----------------------------------------------------
-        // Service runs as SYSTEM (auto-admin). The service binary is OneBox.exe
-        // started with --service.  sc.exe manages service registration.
+        // 服务以 SYSTEM 身份运行（自动管理员）。服务二进制就是 OneBox.exe，
+        // 通过 --service 参数启动。sc.exe 管理服务注册。
 
         static string EnableService()
         {
@@ -242,7 +230,6 @@ namespace PowerAudioManager
 
             try
             {
-                // 1) Create the service
                 var create = new ProcessStartInfo
                 {
                     FileName = "sc.exe",
@@ -259,7 +246,6 @@ namespace PowerAudioManager
                         return $"服务创建失败 (exit={p?.ExitCode})。";
                     }
                 }
-                // 2) Set description
                 try
                 {
                     var desc = new ProcessStartInfo
@@ -272,7 +258,6 @@ namespace PowerAudioManager
                     Process.Start(desc)?.WaitForExit(3000);
                 }
                 catch { }
-                // 3) Start the service
                 try
                 {
                     using (var sc = new ServiceController(ServiceName))
@@ -321,16 +306,13 @@ namespace PowerAudioManager
             catch (Exception ex) { return $"服务删除失败: {ex.Message}"; }
         }
 
-        // ----- Helpers ----------------------------------------------------
-
-        /// <summary>Remove all auto-start methods. Returns the first error, or null.</summary>
         static string DisableAll()
         {
             string err = DisableService();
             if (err != null) return err;
             err = DisableTask();
             if (err != null) return err;
-            DisableRegistry(); // never fails (no UAC needed)
+            DisableRegistry(); // 注册表操作无需 UAC，不会失败
             return null;
         }
     }

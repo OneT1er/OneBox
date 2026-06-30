@@ -33,7 +33,6 @@ namespace PowerAudioManager
         public const uint SWP_NOACTIVATE = 0x0010;
         public const int DWMWA_USE_IMMERSIVE_DARK_MODE = 20;
 
-        // ---- Global hotkeys (RegisterHotKey / UnregisterHotKey) -----------------
         [DllImport("user32.dll")]
         public static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
         [DllImport("user32.dll")]
@@ -49,21 +48,16 @@ namespace PowerAudioManager
         public const int HOTKEY_ID_CLIPBOARD = 0xBFD0;
         public const int HOTKEY_ID_IMAGE_TRANSLATE = 0xBFD1;
 
-        // ---- Working-set trim ---------------------------------------------------
         [DllImport("kernel32.dll")]
         public static extern bool SetProcessWorkingSetSize(IntPtr hProcess, int min, int max);
 
-        // ---- Cursor position (for clipboard popup at mouse) --------------------
         [DllImport("user32.dll")]
         public static extern bool GetCursorPos(out POINT lpPoint);
         [StructLayout(LayoutKind.Sequential)]
         public struct POINT { public int X, Y; }
 
-        // ---- Console OEM code page ---------------------------------------------
-        // powercfg writes its output using the system OEM code page (the active
-        // console CP). On zh-CN Windows this is 936 (GBK); on other locales it
-        // differs. Reading with the real OEM CP avoids mojibake / broken GUID
-        // parsing on non-Chinese systems. Falls back to 936 if the call fails.
+        // powercfg 用系统 OEM 代码页输出。中文 Windows 为 936 (GBK)，其他语言不同。
+        // 用真实 OEM CP 读取可避免非中文系统上的乱码/GUID 解析错误。失败回退到 936。
         [DllImport("kernel32.dll")]
         public static extern uint GetOEMCP();
         public static int GetOemCodePage()

@@ -48,13 +48,9 @@ namespace PowerAudioManager
             return plans;
         }
 
-        // Run powercfg with the given args and return its stdout, or null on
-        // timeout/failure. Reads stdout asynchronously (BeginOutputReadLine) to
-        // avoid the classic deadlock where a full stdout pipe blocks the child
-        // while the parent is still in ReadToEnd — powercfg output is tiny so
-        // this never triggered in practice, but the pattern is correct. Output
-        // is decoded with the system OEM code page so parsing works on
-        // non-Chinese Windows too.
+        // 执行 powercfg 并返回 stdout，超时/失败返回 null。用 BeginOutputReadLine 异步读
+        // 以避免经典死锁（stdout 管道满时父进程在 ReadToEnd 阻塞子进程）。powercfg 输出小，
+        // 实践中未触发但模式正确。用系统 OEM 代码页解码，非中文 Windows 也能正常解析。
         static string RunPowercfg(string args)
         {
             try
@@ -69,11 +65,10 @@ namespace PowerAudioManager
                 using (var proc = Process.Start(psi))
                 {
                     var sb = new StringBuilder();
-                    // Capture asynchronously so a full pipe can't deadlock us.
                     proc.OutputDataReceived += (s, e) => { if (e.Data != null) sb.AppendLine(e.Data); };
                     proc.BeginOutputReadLine();
-                    if (!proc.WaitForExit(5000)) { try { proc.Kill(); } catch { } return null; } // don't hang the refresher
-                    proc.WaitForExit(); // let async drain finish
+                    if (!proc.WaitForExit(5000)) { try { proc.Kill(); } catch { } return null; } // 不挂起刷新线程
+                    proc.WaitForExit(); // 等待异步输出排空
                     return sb.ToString();
                 }
             }
@@ -104,10 +99,8 @@ namespace PowerAudioManager
                 };
                 using (var proc = Process.Start(psi))
                 {
-                    // Cap the wait like the readers above: if powercfg hangs during
-                    // a system-wide policy refresh we must not leave a threadpool
-                    // thread stuck forever (the async caller's onDone would never
-                    // fire). Treat a timeout as failure.
+                    // 超时保护：powercfg 在系统策略刷新时可能挂起，不能永久阻塞线程池线程。
+                    // 超时视为失败。
                     if (!proc.WaitForExit(5000)) { try { proc.Kill(); } catch { } return false; }
                     return proc.ExitCode == 0;
                 }
@@ -115,9 +108,7 @@ namespace PowerAudioManager
             catch { return false; }
         }
 
-        // Offload the (potentially 1-3s) powercfg call to a threadpool thread so the UI
-        // dispatcher isn't frozen during the system-wide policy refresh. `onDone` runs on
-        // the calling (UI) thread via dispatcher if one is supplied, otherwise inline.
+        // 将 powercfg 调用（可能 1-3s）卸载到线程池，避免冻结 UI。onDone 通过 dispatcher 在 UI 线程执行。
         public static void SetActivePlanAsync(string planGuid, System.Windows.Threading.Dispatcher dispatcher, Action<bool> onDone)
         {
             System.Threading.ThreadPool.QueueUserWorkItem(_ =>

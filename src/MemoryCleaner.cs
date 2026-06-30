@@ -96,8 +96,8 @@ namespace PowerAudioManager
 
         public static long GetTotalPhysicalKb()
         {
-            // Use GlobalMemoryStatusEx (allocation-free) instead of a PerformanceCounter,
-            // which leaks a kernel perf-counter mapping when never disposed.
+            // 用 GlobalMemoryStatusEx（无分配）替代 PerformanceCounter，
+            // 后者不释放会泄漏内核性能计数器映射。
             var s = GetStatus();
             return s == null ? 0 : (long)(s.AvailableBytes / 1024);
         }
@@ -107,7 +107,7 @@ namespace PowerAudioManager
             public ulong TotalBytes;
             public ulong AvailableBytes;
             public uint MemoryLoadPercent;
-            public ulong CachedBytes; // "已缓存" = Standby(all priorities) + Modified page list
+            public ulong CachedBytes; // 已缓存 = 所有待机列表 + 已修改页列表
         }
 
         [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
@@ -126,25 +126,16 @@ namespace PowerAudioManager
         }
         [DllImport("kernel32.dll")] static extern bool GlobalMemoryStatusEx([In, Out] MEMORYSTATUSEX mse);
 
-        // "已缓存内存" — matches Task Manager's Cached value: the sum of all
-        // standby lists (Core / Normal priority / Reserve) plus the modified page
-        // list. These are pages evicted from working sets but still in RAM, ready
-        // to be repurposed — i.e. "available-ish" cached memory. We reuse long-
-        // lived PerformanceCounter instances (creating one per read leaks a kernel
-        // perf-counter mapping; a cached one does not).
-        // PERF: constructing these 4 counters takes ~5s on .NET 8 cold start (WMI/COM
-        // init + JIT), vs negligible on .NET Framework 4. They MUST NOT be created on
-        // the UI thread — GetStatus() is called from LoadData's synchronous prologue
-        // (UpdateMemoryUI/UpdateTrayTooltip), so a lazy first-create there froze the
-        // floating window for ~5s at startup. Warm them on a background thread at
-        // startup (WarmupCounters); ReadCachedBytes returns 0 until ready rather than
-        // blocking. NextValue() itself is fast (~25ms first, ~0 after).
+        // 已缓存内存 — 匹配任务管理器的 Cached 值。复用长期 PerformanceCounter 实例
+        // （按需创建会泄漏内核性能计数器映射，缓存则不会）。
+        // 性能陷阱：.NET 8 冷启动时创建这 4 个计数器约需 5s（WMI/COM 初始化 + JIT），
+        // 严禁在 UI 线程创建。GetStatus() 在 LoadData 同步序中调用，懒加载首次创建
+        // 会冻结悬浮窗约 5s。用 WarmupCounters 在后台预热，就绪前 ReadCachedBytes 返回 0。
         static System.Diagnostics.PerformanceCounter _standbyCore, _standbyNormal, _standbyReserve, _modified;
         static volatile bool _countersReady;
         static readonly object _counterLock = new object();
 
-        // Fire-and-forget on a threadpool thread at startup so the UI thread never
-        // pays the ~5s creation cost. Safe to call multiple times.
+        // 启动时在后台线程预热，UI 线程无需承担 ~5s 创建开销。可多次调用。
         public static void WarmupCounters()
         {
             if (_countersReady) return;
@@ -159,8 +150,7 @@ namespace PowerAudioManager
                         _standbyNormal = new System.Diagnostics.PerformanceCounter("Memory", "Standby Cache Normal Priority Bytes", true);
                         _standbyReserve = new System.Diagnostics.PerformanceCounter("Memory", "Standby Cache Reserve Bytes", true);
                         _modified = new System.Diagnostics.PerformanceCounter("Memory", "Modified Page List Bytes", true);
-                        // Prime NextValue (first call has its own ~25ms init) so the first
-                        // real read on the UI thread is instant.
+                        // 预热 NextValue（首次调用约 25ms 初始化），使 UI 线程首次真实读取即时。
                         try { _standbyCore.NextValue(); _standbyNormal.NextValue(); _standbyReserve.NextValue(); _modified.NextValue(); } catch { }
                         _countersReady = true;
                     }
@@ -173,7 +163,7 @@ namespace PowerAudioManager
         {
             try
             {
-                if (!_countersReady) return 0; // still warming up on the background thread — don't block the UI
+                if (!_countersReady) return 0; // 后台预热中，不阻塞 UI
                 return (ulong)(_standbyCore.NextValue() + _standbyNormal.NextValue() + _standbyReserve.NextValue() + _modified.NextValue());
             }
             catch { return 0; }
@@ -204,14 +194,12 @@ namespace PowerAudioManager
             WorkingSet         = 1 << 0,
             SystemFileCache    = 1 << 1,
             ModifiedPageList   = 1 << 2,
-            StandbyList        = 1 << 3,  // priority
-            StandbyListNoPrio  = 1 << 4,  // low-priority pages only
-            ModifiedFileCache  = 1 << 5,  // alias of MemoryFlushModifiedList
-            RegistryCache      = 1 << 6,  // win8.1+
-            CombineMemoryLists = 1 << 7,  // win10+
-            // The two *-marked items (StandbyList full purge, ModifiedPageList flush)
-            // can cause brief system freezes, so they are off by default — matching
-            // memreduct's REDUCT_MASK_DEFAULT.
+            StandbyList        = 1 << 3,  // 含优先级
+            StandbyListNoPrio  = 1 << 4,  // 仅低优先级页
+            ModifiedFileCache  = 1 << 5,  // MemoryFlushModifiedList 别名
+            RegistryCache      = 1 << 6,  // Win8.1+
+            CombineMemoryLists = 1 << 7,  // Win10+
+            // StandbyList 全清和 ModifiedPageList 刷新可能造成短暂系统卡顿，默认关闭。
             Default = WorkingSet | SystemFileCache | StandbyListNoPrio | ModifiedFileCache | RegistryCache | CombineMemoryLists
         }
 
@@ -226,15 +214,14 @@ namespace PowerAudioManager
             EnablePrivilege("SeIncreaseQuotaPrivilege");
             EnablePrivilege("SeProfileSingleProcessPrivilege");
 
-            // 1) Empty all process working sets
+            // 1) 清空所有进程工作集
             if ((flags & CleanFlags.WorkingSet) != 0)
             {
                 int cmd = MemoryEmptyWorkingSets;
                 bool nt = NtSetSystemInformation(SystemMemoryListInformation, ref cmd, sizeof(int)) == 0;
                 if (!nt)
                 {
-                    // Non-admin fallback: walk every accessible process and EmptyWorkingSet each.
-                    // EmptyWorkingSet is a per-process API and works without admin for user-owned processes.
+                    // 非管理员回退：遍历可访问进程逐一 EmptyWorkingSet。
                     int succeeded = 0;
                     try
                     {
@@ -254,7 +241,7 @@ namespace PowerAudioManager
                 }
             }
 
-            // 2) System file cache release
+            // 2) 释放系统文件缓存
             if ((flags & CleanFlags.SystemFileCache) != 0)
             {
                 try
@@ -265,35 +252,35 @@ namespace PowerAudioManager
                 catch { }
             }
 
-            // 3) Modified page list flush (writes dirty pages back, allowing them to become available)
+            // 3) 刷新已修改页列表（回写脏页使其可回收）
             if ((flags & CleanFlags.ModifiedPageList) != 0)
             {
                 int cmd = MemoryFlushModifiedList;
                 r.ModifiedFlushed = NtSetSystemInformation(SystemMemoryListInformation, ref cmd, sizeof(int)) == 0;
             }
 
-            // 4) Standby list (priority-aware: removes ALL standby pages)
+            // 4) 待机列表（含优先级，移除全部待机页）
             if ((flags & CleanFlags.StandbyList) != 0)
             {
                 int cmd = MemoryPurgeStandbyList;
                 r.StandbyPurged = NtSetSystemInformation(SystemMemoryListInformation, ref cmd, sizeof(int)) == 0;
             }
 
-            // 4b) Standby list (without priority) - only low-priority pages
+            // 4b) 待机列表（仅低优先级页）
             if ((flags & CleanFlags.StandbyListNoPrio) != 0)
             {
                 int cmd = MemoryPurgeLowPriorityStandbyList;
                 r.StandbyPurged = NtSetSystemInformation(SystemMemoryListInformation, ref cmd, sizeof(int)) == 0 || r.StandbyPurged;
             }
 
-            // 5) Modified file cache (same NT call: FlushModifiedList)
+            // 5) 已修改文件缓存
             if ((flags & CleanFlags.ModifiedFileCache) != 0 && !r.ModifiedFlushed)
             {
                 int cmd = MemoryFlushModifiedList;
                 r.ModifiedFlushed = NtSetSystemInformation(SystemMemoryListInformation, ref cmd, sizeof(int)) == 0;
             }
 
-            // 6) Registry cache (Win8.1+) - SystemRegistryReconciliationInformation = 155
+            // 6) 注册表缓存 (Win8.1+)
             if ((flags & CleanFlags.RegistryCache) != 0 && AdminUtils.RealOsVersion() >= new Version(6, 3))
             {
                 try
@@ -304,7 +291,7 @@ namespace PowerAudioManager
                 catch { }
             }
 
-            // 7) Combine memory lists (Win10+) - SystemCombinePhysicalMemoryInformation = 130
+            // 7) 合并内存列表 (Win10+)
             if ((flags & CleanFlags.CombineMemoryLists) != 0 && AdminUtils.RealOsVersion().Major >= 10)
             {
                 try
@@ -324,7 +311,6 @@ namespace PowerAudioManager
             return r;
         }
 
-        // Read the per-area clean flags the user configured in 设置 → 内存.
         public static CleanFlags GetSavedFlags()
         {
             var f = CleanFlags.None;

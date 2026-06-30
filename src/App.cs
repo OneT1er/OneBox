@@ -19,8 +19,7 @@ namespace PowerAudioManager
         static System.Threading.Mutex _singleInstance;
         static System.Threading.EventWaitHandle _activateEvent;
 
-        // Called by AdminUtils.RestartAsAdmin() before spawning the elevated process
-        // so the new instance becomes the owner instead of bailing on the stale mutex.
+        // 由 AdminUtils.RestartAsAdmin() 在启动提权进程前调用，让新实例成为 Mutex 持有者，避免因旧 Mutex 直接退出。
         public static void ReleaseSingleInstance()
         {
             try { _singleInstance?.Dispose(); _singleInstance = null; } catch { }
@@ -30,26 +29,21 @@ namespace PowerAudioManager
         [STAThread]
         public static void Main(string[] args)
         {
-            // .NET 8 ships only ASCII/UTF-8/UTF-16 by default; code pages like 936
-            // (GBK, used for powercfg OEM output and the updater .bat) throw
-            // NotSupportedException unless the provider is registered. Do this first,
-            // before anything touches Encoding. (On .NET Framework 4 all Windows code
-            // pages were available by default — this is the migration regression that
-            // broke power-plan detection and in-app updates.)
+            // .NET 8 默认仅支持 ASCII/UTF-8/UTF-16；936 (GBK) 等代码页在
+            // 未注册提供程序时会抛 NotSupportedException。powercfg OEM 输出和
+            // 升级脚本依赖 GBK，必须在所有 Encoding 调用前注册。
+            // .NET Framework 4 默认加载所有 Windows 代码页，这是迁移回归。
             try { System.Text.Encoding.RegisterProvider(System.Text.CodePagesEncodingProvider.Instance); } catch { }
 
-            // --service flag: run as a Windows Service (session-login launcher),
-            // not as the normal GUI app. The service monitors session changes and
-            // spawns OneBox.exe (without --service) in each interactive session.
+            // --service: 以 Windows 服务模式运行，监听会话变化并在交互会话中启动 OneBox.exe（不带 --service）。
             if (args.Length > 0 && args[0] == "--service")
             {
                 try { PowerAudioManager.OneBoxService.RunService(); } catch { }
                 return;
             }
 
-            // --elevate-autostart <method>: brief elevated helper that applies an
-            // auto-start change (needs admin for schtasks / sc) then exits.  The
-            // non-admin GUI instance launches this so the UAC dialog shows OneBox.
+            // --elevate-autostart <method>: 提权辅助进程，应用开机自启设置（schtasks/sc 需管理员权限）后退出。
+            // 非管理员 GUI 实例启动它，使 UAC 对话框显示 OneBox 名称。
             if (args.Length > 1 && args[0] == "--elevate-autostart")
             {
                 if (int.TryParse(args[1], out int m) && m >= 0 && m <= 3)
@@ -62,20 +56,14 @@ namespace PowerAudioManager
                 return;
             }
 
-            // Warm up the memory PerformanceCounters on a background thread ASAP.
-            // Constructing them takes ~5s on .NET 8 cold start and GetStatus() runs on
-            // the UI thread, so starting this before the window builds keeps startup
-            // from freezing while the counters initialize in the background.
+            // 后台预热内存 PerformanceCounter：.NET 8 冷启动首次构造 ~5s，GetStatus() 在 UI 线程执行，提前启动避免界面卡顿。
             try { PowerAudioManager.MemoryCleaner.WarmupCounters(); } catch { }
 
-            // Single-instance guard: a second launch activates the existing window
-            // and exits, instead of spawning a second floating window + tray icon.
-            // Uses Mutex.TryOpenExisting (performs an open-only probe — no ownership
-            // ambiguity) followed by EventWaitHandle to wake the first instance.
+            // 单实例守护：第二个启动通过 Mutex.TryOpenExisting 检测已有实例，发信号激活窗口后退出。
+            // 使用 TryOpenExisting（仅探测，不获取所有权）+ EventWaitHandle 唤醒第一个实例。
             if (System.Threading.Mutex.TryOpenExisting("Local\\OneBox-SingleInstance", out var _existingMutex))
             {
                 _existingMutex.Dispose();
-                // Signal the existing instance to activate its window.
                 try
                 {
                     using (var ev = System.Threading.EventWaitHandle.OpenExisting("Local\\OneBox-Activate"))
@@ -84,9 +72,7 @@ namespace PowerAudioManager
                 catch { }
                 return;
             }
-            // We are the first instance — create the guard mutex and hold it forever.
             _singleInstance = new System.Threading.Mutex(true, "Local\\OneBox-SingleInstance");
-            // Create the activation event that second instances will signal.
             _activateEvent = new System.Threading.EventWaitHandle(false,
                 System.Threading.EventResetMode.AutoReset, "Local\\OneBox-Activate");
 
@@ -100,16 +86,13 @@ namespace PowerAudioManager
             };
             var app = new App();
             app.DispatcherUnhandledException += (s, ex) => { try { System.IO.File.AppendAllText(System.IO.Path.GetTempPath() + "pam_crash.log", $"{System.Environment.NewLine}{DateTime.Now} Dispatcher: {ex.Exception}"); } catch { } ex.Handled = true; };
-            // Bootstrap MaterialDesign (dark + 紫影 #8E8CD8) at application scope so
-            // every window — floating card and dialogs — shares one design language.
-            // Must run after `new App()` (Application.Current exists) and before the
-            // window is built, so the floating window resolves the styles on construct.
+            // MaterialDesign 深色 + 紫影主题 #8E8CD8，应用级作用域，所有窗口共享同一设计语言。
+            // 必须在 new App() 之后（Application.Current 存在）、窗口构建之前执行。
             try { MaterialTheme.Apply(); } catch (Exception ex) { try { System.IO.File.AppendAllText(System.IO.Path.GetTempPath() + "pam_crash.log", $"{DateTime.Now} MaterialTheme: {ex}"); } catch { } }
-            // global:: prefix bypasses Application.MainWindow property name collision
+            // global:: 前缀绕过 Application.MainWindow 属性名冲突
             var window = new global::PowerAudioManager.MainWindow();
             try { window.Show(); } catch (Exception ex) { try { System.IO.File.AppendAllText(System.IO.Path.GetTempPath() + "pam_crash.log", $"{DateTime.Now} Show: {ex}"); } catch { } throw; }
-            // Background listener: when a second instance starts, it signals
-            // _activateEvent; we bring the existing window to the foreground.
+            // 后台线程监听第二个实例的激活信号，将已有窗口带到前台。
             var wref = new System.WeakReference<Window>(window);
             new System.Threading.Thread(() =>
             {
@@ -128,7 +111,7 @@ namespace PowerAudioManager
                                         w.WindowState = System.Windows.WindowState.Normal;
                                     w.Show();
                                     w.Activate();
-                                    w.Topmost = true;   // force-to-foreground trick
+                                    w.Topmost = true;   // 强制置顶取巧
                                     w.Topmost = false;
                                 }
                             }
@@ -143,13 +126,11 @@ namespace PowerAudioManager
     }
 
     /// <summary>
-    /// Lightweight best-effort diagnostic logger. Appends one line per call to
-    /// %TEMP%\pam_debug.log so that silent catch blocks leave a trace. Never throws.
+    /// 轻量诊断日志，最佳努力，静默 catch，绝不抛异常。
     /// </summary>
     public static class AppLog
     {
-        // Log lives next to the exe so it's easy to find alongside OneBox.exe.
-        // Falls back to %TEMP% if the exe dir isn't writable.
+        // 日志位于 exe 同目录，便于查找。若 exe 目录不可写则回退到 %TEMP%。
         static readonly string _path = ResolveLogPath();
         static readonly object _lock = new object();
         static string ResolveLogPath()
@@ -179,7 +160,6 @@ namespace PowerAudioManager
         {
             Log(ex == null ? context : $"{context}: {ex.GetType().Name}: {ex.Message}");
         }
-        // Structured tag + detail, e.g. Log("Screenshot", "source=CopyFromScreen app=chrome saved=...").
         public static void Log(string context, string detail)
         {
             Log($"[{context}] {detail}");

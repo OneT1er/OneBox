@@ -16,7 +16,7 @@ namespace PowerAudioManager
 {
     public static class AdminUtils
     {
-        // Environment.OSVersion lies on Win8.1+ when the app has no manifest; use RtlGetVersion which always returns the real value.
+        // Environment.OSVersion 在 Win8.1+ 无清单应用上返回假值；RtlGetVersion 始终返回真实版本号。
         [StructLayout(LayoutKind.Sequential)]
         struct RTL_OSVERSIONINFOEX { public int dwOSVersionInfoSize; public int dwMajorVersion; public int dwMinorVersion; public int dwBuildNumber; public int dwPlatformId; [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)] public string szCSDVersion; public short wServicePackMajor; public short wServicePackMinor; public short wSuiteMask; public byte wProductType; public byte wReserved; }
         [DllImport("ntdll.dll")] static extern int RtlGetVersion(ref RTL_OSVERSIONINFOEX vi);
@@ -51,9 +51,8 @@ namespace PowerAudioManager
         {
             try
             {
-                // Release single-instance locks before launching the elevated copy.
-                // Otherwise the new instance sees the Mutex, signals us, exits — and
-                // then we shut down too, leaving zero instances running.
+                // 在启动提权副本前释放单实例锁，否则新实例检测到 Mutex 后发信号退出，
+                // 随后旧实例也关闭，导致零实例运行。
                 App.ReleaseSingleInstance();
 
                 var psi = new System.Diagnostics.ProcessStartInfo {

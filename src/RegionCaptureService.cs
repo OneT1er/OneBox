@@ -11,15 +11,11 @@ using System.Windows.Threading;
 
 namespace PowerAudioManager
 {
-    // Full-screen region selection overlay: the screens dim, the user drags a rectangle,
-    // and on mouse-up the selected screen region is captured via CopyFromScreen and
-    // returned as a PNG byte[]. The translated/overlaid image is produced server-side
-    // by Baidu, so a plain GDI capture of the region is enough (same as the existing
-    // screenshot path, just user-selected instead of the foreground window).
+    // 全屏区域选择遮罩：屏幕变暗，用户拖拽矩形框，松开鼠标时通过 CopyFromScreen 截取选定区域并返回 PNG byte[]。
+    // 百度图片翻译服务端生成覆盖译文，故普通的 GDI 区域截取即可。
     //
-    // Spans the full virtual screen (all monitors). Esc cancels. Must be called on the
-    // UI thread — it runs a nested dispatcher frame so mouse events pump while blocking
-    // the caller until selection completes. Returns null on cancel/empty.
+    // 覆盖整个虚拟屏幕（所有显示器）。Esc 取消。必须在 UI 线程调用——
+    // 内部运行嵌套 DispatcherFrame，阻塞调用者的同时保持鼠标事件响应。取消/空选区返回 null。
     internal static class RegionCaptureService
     {
         public static byte[] CaptureRegion()
@@ -27,7 +23,6 @@ namespace PowerAudioManager
             if (Application.Current == null) return null;
             byte[] result = null;
 
-            // Span the full virtual screen (DIP units). The overlay window covers everything.
             double vx = SystemParameters.VirtualScreenLeft;
             double vy = SystemParameters.VirtualScreenTop;
             double vw = SystemParameters.VirtualScreenWidth;
@@ -47,10 +42,8 @@ namespace PowerAudioManager
             };
 
             var canvas = new System.Windows.Controls.Canvas();
-            // The dim overlay is a full-size semi-transparent rectangle INSIDE the
-            // transparent window (a non-AllowsTransparency window can't actually be
-            // translucent — the 0x55 alpha would render solid black, which is what got
-            // captured by CopyFromScreen). The selection rectangle cuts a clear hole.
+            // 半透明遮罩必须放在 AllowsTransparency=true 的窗口内——
+            // 否则 0x55 alpha 会渲染为实心黑色，CopyFromScreen 会截到遮罩本身。
             var dim = new System.Windows.Shapes.Rectangle
             {
                 Fill = new SolidColorBrush(System.Windows.Media.Color.FromArgb(0x55, 0, 0, 0)),
@@ -68,13 +61,11 @@ namespace PowerAudioManager
             canvas.Children.Add(rect);
             dlg.Content = canvas;
 
-            // Nested dispatcher frame: keeps the UI responsive (mouse events) while blocking
-            // this call until the window closes.
+            // 嵌套 DispatcherFrame：阻塞调用者的同时保持 UI 响应（鼠标事件），直到窗口关闭。
             DispatcherFrame frame = null;
 
             dlg.Loaded += (s, e) =>
             {
-                // Force the window to cover the virtual screen even under per-monitor DPI.
                 dlg.Left = vx; dlg.Top = vy; dlg.Width = vw; dlg.Height = vh;
             };
 
@@ -113,10 +104,8 @@ namespace PowerAudioManager
 
                 if (wDip >= 4 && hDip >= 4)
                 {
-                    // Hide the overlay BEFORE capturing, else CopyFromScreen grabs the dim
-                    // overlay itself (the selection comes back black/dark). Opacity=0 makes
-                    // the window invisible immediately; we pump one render frame to let the
-                    // compositor actually drop it, then capture synchronously.
+                    // 先隐藏遮罩再截图，否则 CopyFromScreen 会截到遮罩本身（全黑）。
+                    // Opacity=0 立即不可见；pump 一帧让合成器真正移除后同步截取。
                     try
                     {
                         dlg.Opacity = 0;
@@ -136,7 +125,6 @@ namespace PowerAudioManager
             return result;
         }
 
-        // DIP rect on the virtual screen -> physical pixels -> CopyFromScreen -> PNG.
         static byte[] CapturePixels(double dipX, double dipY, double dipW, double dipH)
         {
             double scale = GetDpiScaleAt(dipX, dipY);
@@ -157,15 +145,11 @@ namespace PowerAudioManager
             }
         }
 
-        // DPI scale (physical px / DIP) at a DIP point. Uses the DPI of the monitor
-        // containing that point; falls back to 1.0 (correct for 100% scaling).
+        // 返回指定 DIP 坐标处的 DPI 缩放比例（物理像素/DIP）。失败回退 1.0。
         static double GetDpiScaleAt(double dipX, double dipY)
         {
             try
             {
-                // Convert DIP virtual coords to a physical point for Screen.FromPoint.
-                // SystemParameters are DIP; multiply by ~1 and let FromPoint pick the monitor,
-                // then read that monitor's DPI via the legacy GDI DC (good enough for capture).
                 var screen = System.Windows.Forms.Screen.FromPoint(new System.Drawing.Point((int)dipX, (int)dipY));
                 using (var g = Graphics.FromHwnd(IntPtr.Zero)) { return g.DpiX / 96.0; }
             }

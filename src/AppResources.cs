@@ -10,16 +10,14 @@ using System.Windows.Media.Imaging;
 
 namespace PowerAudioManager
 {
-    // Shared resource access: the app font family (user-selectable from the
-    // system's installed fonts) and bundled images. Fonts are NO LONGER packed
-    // into the exe — we use whatever the user picks (default Microsoft YaHei UI).
+    // 共享资源访问：应用字体（从系统已安装字体中选择）和内嵌图片。
+    // 字体不再打包进 exe —— 使用用户在设置中选择的字体（默认 Microsoft YaHei UI）。
     internal static class AppResources
     {
         const string DefaultFontName = "Microsoft YaHei UI";
         const string FontPrefKey = "App.FontFamily";
 
-        // WPF font family for the user-selected system font (falls back to
-        // Microsoft YaHei UI if the saved name is missing or invalid).
+        // 用户选择的系统字体对应的 WPF FontFamily（保存的名称缺失或无效时回退到 Microsoft YaHei UI）。
         static FontFamily _cachedAppFont;
         static string _cachedFontName;
 
@@ -37,8 +35,7 @@ namespace PowerAudioManager
             }
         }
 
-        // Re-read the font (called after the user changes it in settings) and
-        // returns the new family so the host can apply it to the window.
+        // 重新读取字体（用户在设置中更改后调用），返回新 FontFamily 供宿主应用到窗口。
         public static FontFamily ReloadFont()
         {
             _cachedAppFont = null;
@@ -46,8 +43,7 @@ namespace PowerAudioManager
             return AppFont;
         }
 
-        // Build a FontFamily, falling back to the default if the name doesn't
-        // resolve to an installed family.
+        // 构建 FontFamily，若名称无法解析为已安装字体族则回退到默认值。
         static FontFamily ResolveFont(string name)
         {
             try
@@ -55,7 +51,7 @@ namespace PowerAudioManager
                 if (!string.IsNullOrWhiteSpace(name))
                 {
                     var ff = new FontFamily(name);
-                    // Verify the family is actually installed.
+                    // 验证字体族是否真的已安装。
                     foreach (var f in Fonts.SystemFontFamilies)
                         if (string.Equals(f.Source, name, StringComparison.OrdinalIgnoreCase))
                             return ff;
@@ -65,25 +61,20 @@ namespace PowerAudioManager
             return new FontFamily(DefaultFontName);
         }
 
-        // Emoji / symbol font (system-provided).
         public static readonly FontFamily EmojiFont =
             new FontFamily("Segoe UI Symbol, Segoe UI Emoji");
 
-        // WinForms (tray menu) counterpart of AppFont: a System.Drawing.Font
-        // built from the same family name so the right-click menu matches.
+        // WinForms 托盘菜单对应的 AppFont：用同一字体名称构建 System.Drawing.Font，保持右键菜单风格一致。
         static System.Drawing.Font _trayFont;
         static string _trayFontName;
         public static System.Drawing.Font TrayFont()
         {
             var name = AppPrefs.GetString(FontPrefKey, DefaultFontName);
             if (_trayFont != null && _trayFontName == name) return _trayFont;
-            // Dispose the previous font when the family changes.
             if (_trayFont != null) { try { _trayFont.Dispose(); } catch { } _trayFont = null; }
             try
             {
-                // Verify the family is installed before handing it to WinForms;
-                // an unknown name silently falls back to a default there too,
-                // but we keep the behaviour explicit.
+                // 传给 WinForms 前验证字体族是否已安装；未知名称在 WinForms 中也会静默回退，但这里显式处理更安全。
                 bool installed = false;
                 using (var col = new System.Drawing.Text.InstalledFontCollection())
                     foreach (var f in col.Families)
@@ -96,11 +87,8 @@ namespace PowerAudioManager
             return _trayFont;
         }
 
-        // ---- Image resources ---------------------------------------------------
-
-        // Load a bundled image (png/ico) by file name: prefer the embedded manifest
-        // resource (so no external file is needed), fall back to a file next to the
-        // exe. Returns a frozen BitmapSource, or null if unavailable.
+        // 按文件名加载内嵌图片（png/ico）：优先使用嵌入式清单资源（无需外部文件），
+        // 回退到 exe 旁的外部文件。返回已冻结的 BitmapSource，不可用时返回 null。
         public static BitmapImage LoadAppImage(string fileName)
         {
             try
@@ -120,7 +108,6 @@ namespace PowerAudioManager
                         return bmp;
                     }
                 }
-                // Fallback: external file next to the exe.
                 var dir = Path.GetDirectoryName(Environment.ProcessPath);
                 var path = Path.Combine(dir, fileName);
                 if (File.Exists(path))
@@ -138,22 +125,19 @@ namespace PowerAudioManager
             return null;
         }
 
-        // ---- Dialog button styling (shared) ------------------------------------
-        // Stamps MaterialDesign's flat button style onto a dialog button. The
-        // standalone windows (设置/翻译/剪贴板历史/快捷键) read as one design
-        // language with the floating window.
+        // ---- 对话框按钮样式（共享）------------------------------------
+        // 将 MaterialDesign 扁平按钮样式应用到对话框按钮。
+        // 独立窗口（设置/翻译/剪贴板历史/快捷键）与悬浮窗保持统一设计语言。
         //
-        // primary = true  → 紫影 fill + white text (call-to-action, e.g. 确定/翻译)
-        // primary = false → transparent flat button, dim text
+        // primary = true  → 紫影填充 + 白色文字（主操作，如确定/翻译）
+        // primary = false → 透明扁平按钮，暗色文字
         static readonly Color DDim = Color.FromRgb(190, 188, 220);
         static readonly Color DAccent = Color.FromRgb(142, 140, 216);
 
         public static void StyleDialogButton(Button btn, bool primary)
         {
-            // MaterialDesign flat button: transparent fill + hover ripple, no
-            // elevation shadow (keeps the dialog's flat card look). The primary
-            // call-to-action gets a 紫影 fill so it stands out; secondary buttons
-            // stay transparent and rely on the ripple for affordance.
+            // MaterialDesign 扁平按钮：透明填充 + 悬浮波纹，无投影阴影（保持对话框扁平卡片风格）。
+            // 主操作按钮用紫影填充以突出显示；次要按钮保持透明，依赖波纹提供可交互暗示。
             var style = Application.Current.TryFindResource("MaterialDesignFlatButton") as Style;
             if (style != null) btn.Style = style;
             if (primary)
@@ -168,10 +152,9 @@ namespace PowerAudioManager
             }
         }
 
-        // ---- Dark TabControl styling (shared) ----------------------------------
-        // Now a no-op: MaterialDesign's implicit TabControl/TabItem styles (from the
-        // global MaterialDesign3 defaults) already render the dark 紫影 tab chrome.
-        // Kept as a stub so existing call sites compile unchanged during the migration.
+        // ---- 深色 TabControl 样式（共享）----------------------------------
+        // 现在是空操作：MaterialDesign 的隐式 TabControl/TabItem 样式（来自全局 MaterialDesign3 默认值）
+        // 已自动渲染深色紫影标签外观。保留为空方法以便迁移期间现有调用点编译通过。
         public static void StyleDarkTabControl(TabControl tc)
         {
             tc.Background = Brushes.Transparent;
@@ -179,9 +162,8 @@ namespace PowerAudioManager
             tc.Padding = new Thickness(0);
         }
 
-        // Now a no-op: MaterialDesign's implicit ComboBox style (from the global
-        // MaterialDesign3 defaults) renders the dark 紫影 combo + dropdown already.
-        // Kept as a stub so existing call sites compile unchanged during the migration.
+        // 现在是空操作：MaterialDesign 的隐式 ComboBox 样式（来自全局 MaterialDesign3 默认值）
+        // 已自动渲染深色紫影下拉框。保留为空方法以便迁移期间现有调用点编译通过。
         public static void StyleDarkComboBox(ComboBox cb)
         {
         }

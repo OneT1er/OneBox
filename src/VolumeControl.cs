@@ -52,8 +52,8 @@ namespace PowerAudioManager
             if (_cachedEp != null) return _cachedEp;
             try
             {
-                // Reuse the single MMDeviceEnumerator2 ComImport class declared in AudioDevices.cs
-                // to avoid CLR's "duplicate CLSID -> different managed types" confusion.
+                // 复用 AudioDevices.cs 中声明的 MMDeviceEnumerator2 ComImport 类，
+                // 避免 CLR 因重复 CLSID 引发"重复 CLSID → 不同托管类型"的混淆。
                 var e = (AudioDevices.IMMDeviceEnumerator2)new AudioDevices.MMDeviceEnumerator2();
                 IntPtr pDev;
                 if (e.GetDefaultAudioEndpoint(0, 0, out pDev) != 0 || pDev == IntPtr.Zero)

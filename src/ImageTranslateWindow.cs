@@ -8,9 +8,8 @@ using System.Windows.Media.Imaging;
 
 namespace PowerAudioManager
 {
-    // Result window for image translation: shows the paste=1 overlaid image (source text
-    // erased, translation overlaid) with Copy-translation / Select-copy buttons. The image
-    // is shown in a scrollable, zoomable area so large captures stay readable.
+    // 图片翻译结果窗口：展示 paste=1 整图贴合图，提供复制译文/选择复制按钮。
+    // 图片在可滚动可缩放区域中显示。
     internal static class ImageTranslateWindow
     {
         public static void Show(Window owner, byte[] pasteImagePng, string dst, string error)
@@ -35,7 +34,6 @@ namespace PowerAudioManager
                 return;
             }
 
-            // Image in a scroll viewer.
             var scroller = new ScrollViewer
             {
                 VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
@@ -64,7 +62,6 @@ namespace PowerAudioManager
             Grid.SetRow(scroller, 0);
             body.Children.Add(scroller);
 
-            // Button bar.
             var bar = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(8) };
             var copyBtn = new Button { Content = "复制译文", Height = 28, FontSize = 12, Margin = new Thickness(0, 0, 8, 0), Padding = new Thickness(12, 0, 12, 0) };
             AppResources.StyleDialogButton(copyBtn, true);
@@ -76,7 +73,7 @@ namespace PowerAudioManager
             Grid.SetRow(bar, 1);
             body.Children.Add(bar);
 
-            // Size the window to the image, capped to the work area.
+            // 按图片尺寸计算窗口大小，不超过工作区。
             double w = 600, h = 460;
             if (pasteImagePng != null)
             {
@@ -109,8 +106,7 @@ namespace PowerAudioManager
             };
             selectBtn.Click += (s, e) =>
             {
-                // "选择复制": open a small text box with the translation so the user can
-                // select/copy a portion.
+                // 弹出一个文本框以便用户选择复制部分译文。
                 if (string.IsNullOrEmpty(dst)) return;
                 var tb = new TextBox
                 {
@@ -132,7 +128,7 @@ namespace PowerAudioManager
             };
             closeBtn.Click += (s, e) => dlg.Close();
 
-            // Mouse-wheel zoom on the image.
+            // Ctrl+滚轮缩放图片。
             if (img != null)
             {
                 scroller.PreviewMouseWheel += (sender, e) =>

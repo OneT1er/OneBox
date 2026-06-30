@@ -5,29 +5,16 @@ using MaterialDesignThemes.Wpf;
 
 namespace PowerAudioManager
 {
-    // Global MaterialDesignInXAML bootstrap. Called once from App.Main before the
-    // window is built: merges the MaterialDesign defaults (implicit control styles
-    // + theme dictionaries) into Application.Current.Resources and stamps a dark,
-    // 紫影-branded theme. After this every window — the floating card and every
-    // dialog — resolves MaterialDesign brushes/styles from the application scope.
-    //
-    // Why global now: the earlier pilot kept the theme per-window to shield the
-    // floating window. The user opted to refactor the floating window too, so a
-    // single application-scope theme gives one consistent design language across
-    // the whole app with the least code. PaletteHelper.SetTheme writes the theme
-    // (the expanded MaterialDesign.Brush.* colour resources) to
-    // Application.Current.Resources, which is exactly the scope MaterialDesign's
-    // implicit styles resolve against.
+    // MaterialDesignInXAML 全局主题引导。在 App.Main 中调用一次，合并 MaterialDesign 默认样式 +
+    // 主题字典到 Application.Current.Resources，注入紫影深色主题。此后所有窗口和对话框从应用范围解析
+    // MaterialDesign 画笔/样式。PaletteHelper.SetTheme 将展开后的颜色资源写入 Application.Current.Resources。
     internal static class MaterialTheme
     {
-        // Brand palette — identical to the old hand-rolled AppResources colours so
-        // the app reads as the same 紫影 design language, just with MaterialDesign's
-        // control chrome, elevation and motion layered on.
-        static readonly Color Primary = Color.FromRgb(142, 140, 216);   // #8E8CD8 紫影
-        static readonly Color Secondary = Color.FromRgb(126, 122, 210); // #7E7AD2
+        // 品牌调色板，与旧版 AppResources 颜色一致，保持紫影设计语言。
+        static readonly Color Primary = Color.FromRgb(142, 140, 216);
+        static readonly Color Secondary = Color.FromRgb(126, 122, 210);
 
-        // Idempotent guard: Apply runs once per process. Guarded because App.Main
-        // is the only caller, but a second call would double-merge dictionaries.
+        // 幂等守卫：每个进程只运行一次 Apply，防止重复合并字典。
         static bool _applied;
 
         public static void Apply()
@@ -36,13 +23,9 @@ namespace PowerAudioManager
             _applied = true;
             try
             {
-                // Merge the full MaterialDesign3 defaults (implicit control styles +
-                // the theme dictionaries that back the MaterialDesign.* style keys)
-                // into the application resources. PaletteHelper.SetTheme only writes
-                // the colour brushes; the control templates/styles live here.
-                // 5.x ships MaterialDesign3.Defaults.xaml (the older
-                // MaterialDesignTheme.Defaults.xaml was removed — that URI throws
-                // IOException at runtime, which is why this must be MD3).
+                // 合并 MaterialDesign3 默认样式（隐式控件样式 + 主题字典）。PaletteHelper.SetTheme
+                // 只写颜色画笔，控件模板/样式在此。5.x 使用 MaterialDesign3.Defaults.xaml（旧的
+                // MaterialDesignTheme.Defaults.xaml 已移除，该 URI 运行时会抛 IOException）。
                 Application.Current.Resources.MergedDictionaries.Add(
                     new ResourceDictionary { Source = new Uri("pack://application:,,,/MaterialDesignThemes.Wpf;component/Themes/MaterialDesign3.Defaults.xaml") });
 
@@ -50,16 +33,13 @@ namespace PowerAudioManager
                 var theme = Theme.Create(BaseTheme.Dark, Primary, Secondary);
                 helper.SetTheme(theme);
 
-                // MaterialDesign defaults to Roboto. Override the global font key
-                // (MaterialDesignFont) with the user-selected app font so Chinese
-                // text keeps its chosen family. Theme has no font API in 5.x; the
-                // font is a plain application-scope resource the styles bind to.
+                // MaterialDesign 默认字体 Roboto，5.x 主题无字体 API。用应用字体覆盖全局
+                // MaterialDesignFont 资源键，保证中文文本使用用户选择的字体。
                 try { Application.Current.Resources["MaterialDesignFont"] = AppResources.AppFont; } catch { }
             }
             catch (Exception ex)
             {
-                // Theming failure must never stop startup — the app still runs with
-                // default WPF chrome if MaterialDesign couldn't initialise.
+                // 主题初始化失败不阻止启动，应用以默认 WPF 样式继续运行。
                 AppLog.Log("MaterialTheme.Apply", ex);
             }
         }

@@ -32,7 +32,7 @@ namespace PowerAudioManager
         private StackPanel _powerSection;
         private StackPanel _audioSection;
         private bool _isExpanded = true;
-        private bool _collapsedManually; // true when collapsed via the button, not auto
+        private bool _collapsedManually; // 通过按钮收起时为 true（非自动收起）
         internal bool _topmost = false;
         internal Button _pinBtn;
         internal bool _lockPosition;
@@ -47,23 +47,19 @@ namespace PowerAudioManager
         private Border _titleBarBorder;
         private Border _mainBorder;
 
-        // Shared palette — internal so the extracted helper classes (LauncherBar,
-        // TrayController, etc.) can reuse the exact same colours.
-        // Organised as Material-style elevation tiers: the deeper the tier, the
-        // lighter the surface, so layered cards read as stacked depth.
+        // 共享调色板，内部可见供 LauncherBar / TrayController 等复用。
+        // 按 Material 层级排列：越底层表面越浅，叠层卡片有视觉深度。
         internal static readonly Color AccentColor = Color.FromRgb(142, 140, 216);   // 紫影 #8E8CD8
-        internal static readonly Color AccentHover = Color.FromRgb(126, 122, 210);   // 强调色悬停(略深)
-        internal static readonly Color BgColor = Color.FromRgb(28, 26, 40);          // 深底，与紫影协调
-        internal static readonly Color CardColor = Color.FromRgb(42, 39, 60);        // 卡片 (elevation 1)
-        internal static readonly Color HoverColor = Color.FromRgb(58, 54, 84);       // 悬停 (elevation 2)
+        internal static readonly Color AccentHover = Color.FromRgb(126, 122, 210);   // 强调色悬停
+        internal static readonly Color BgColor = Color.FromRgb(28, 26, 40);          // 深底
+        internal static readonly Color CardColor = Color.FromRgb(42, 39, 60);        // 卡片
+        internal static readonly Color HoverColor = Color.FromRgb(58, 54, 84);       // 悬停
         internal static readonly Color TextPrimary = Colors.White;
         internal static readonly Color TextSecondary = Color.FromRgb(190, 188, 220); // 次要文字
-        internal static readonly Color ActiveBg = Color.FromRgb(110, 105, 200);      // 激活态（紫影偏深）
+        internal static readonly Color ActiveBg = Color.FromRgb(110, 105, 200);      // 激活态
         internal static readonly Color BorderColor = Color.FromRgb(80, 75, 120);     // 边框
-        // Material-style tonal surfaces for the filled/outline button variants.
-        internal static readonly Color AccentRipple = Color.FromRgb(80, 76, 150);    // 强调按钮按下/悬停叠色
+        internal static readonly Color AccentRipple = Color.FromRgb(80, 76, 150);    // 强调按钮叠色
 
-        // Fonts and bundled images live in AppResources now.
         static System.Windows.Media.FontFamily AppFont { get { return AppResources.AppFont; } }
         static System.Windows.Media.FontFamily EmojiFont { get { return AppResources.EmojiFont; } }
         static System.Windows.Media.Imaging.BitmapImage LoadAppImage(string fileName) { return AppResources.LoadAppImage(fileName); }
@@ -87,11 +83,9 @@ namespace PowerAudioManager
             double sl, st;
             if (AppPrefs.GetDouble("Left", out sl) && AppPrefs.GetDouble("Top", out st))
             {
-                // If the saved position lands outside the current work area (e.g. user dragged
-                // the window on a 4K monitor and is now booting on 1080p), snap back to the
-                // bottom-right corner of the new work area so the window is actually visible.
-                double estW = Width;       // SizeToContent.Height -> Width is fixed at 280
-                double estH = 200;         // upper bound estimate before layout runs
+                // 保存的位置在屏幕外（如 4K 拖到后换 1080p 启动）时，回到右下角确保可见。
+                double estW = Width;
+                double estH = 200;
                 bool offscreen =
                     sl + estW <= screen.Left + 8 || sl >= screen.Right - 8 ||
                     st + 36   <= screen.Top  + 8 || st >= screen.Bottom - 8;
@@ -112,15 +106,12 @@ namespace PowerAudioManager
             else { Left = screen.Right - Width - 20; Top = screen.Bottom - 200 - 20; }
             BuildUI();
             MouseWheel += (s, e) => { VolumeControl.SetVolume(VolumeControl.GetVolume() + (e.Delta > 0 ? 0.02f : -0.02f)); UpdateVolumeUI(); };
-            // NOTE: LoadData() is deferred to OnLoaded (async, background) so the window
-            // appears instantly — GetStatus() lazily creates PerformanceCounter instances
-            // (~300ms) which would otherwise block the constructor.
+            // LoadData() 推迟到 OnLoaded 异步执行，避免 GetStatus() 首次创建 PerformanceCounter（~300ms）阻塞构造函数。
             AppLog.Log("Startup", "ctor done " + sw.ElapsedMilliseconds + "ms");
             _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(30) };
             _refreshTimer.Tick += (s, e) => { LoadData(); if (_tray != null) _tray.UpdateIcon(); try { _scaling.ApplyScaling(); _scaling.Reposition(); } catch { } };
             _refreshTimer.Start();
-            // Quick poll (2s) for resolution/DPI changes: SystemEvents.DisplaySettingsChanged
-            // is unreliable across DPI switches, so we watch the live screen width directly.
+            // 2s 轮询分辨率/DPI 变化。SystemEvents.DisplaySettingsChanged 在 DPI 切换时不可靠，直接监视屏幕宽度。
             _screenPoll = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
             _screenPoll.Tick += (s, e) => { try { if (_scaling != null) _scaling.ApplyScaling(); } catch { } };
             _screenPoll.Start();
@@ -129,9 +120,7 @@ namespace PowerAudioManager
             LocationChanged += (s, e) => { if (IsLoaded) SavePosition(); };
         }
 
-        // Persist the window's absolute position. Fixed position is unconditional —
-        // the window stays at these coordinates across resolution changes; it is
-        // only rescued (not repositioned) if it ends up fully off-screen.
+        // 保存窗口绝对位置。固定位置无条件：切换分辨率不移动窗口，仅完全离开屏幕时拉回。
         void SavePosition()
         {
             try
@@ -142,11 +131,7 @@ namespace PowerAudioManager
             catch { }
         }
 
-        // Start-up nudge: clamp any edge that pokes outside the work area so the
-        // whole window is visible on first show (e.g. when the saved position was
-        // estimated against a different size). Runs once after the first layout.
-        // Later resolution changes deliberately do NOT call this — they honour
-        // 固定位置 and leave the window where the user put it.
+        // 启动时微调：首次显示时把超出工作区的部分夹回屏幕内。后续分辨率变化不再调用——遵守固定位置。
         void EnsureFullyVisible()
         {
             try
@@ -168,8 +153,7 @@ namespace PowerAudioManager
                 if (double.IsNaN(w) || w <= 0) w = 280;
                 if (double.IsNaN(h) || h <= 0) h = 200;
                 double left = Left, top = Top;
-                // Fully off-screen (e.g. its monitor was unplugged): re-seat at the
-                // bottom-right so the window is reachable.
+                // 完全离开屏幕（如外接显示器被拔掉），重置到右下角确保可操作。
                 if (left + w <= waL + 8 || left >= waR - 8 || top + h <= waT + 8 || top >= waB - 8)
                 {
                     Left = waR - w - 20;
@@ -203,15 +187,13 @@ namespace PowerAudioManager
                     0, 0, 0, 0,
                     Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE);
                 try { _tray = new TrayController(this, ExitApp); _tray.Init(); } catch { }
-                // UpdateIcon calls MemoryCleaner.GetStatus() which lazily builds
-                // PerformanceCounters (~400ms first call) — defer so OnLoaded stays fast.
+                // UpdateIcon 调用 MemoryCleaner.GetStatus() 首次创建 PerformanceCounter ~400ms，推迟到 Idle 执行避免阻塞 OnLoaded。
                 Dispatcher.BeginInvoke(new Action(() => { try { if (_tray != null) _tray.UpdateIcon(); } catch { } }),
                     System.Windows.Threading.DispatcherPriority.ApplicationIdle);
                 try { ClipboardHistory.Start(); } catch { }
                 try { UpdateChecker.CheckAsync(this, false); } catch { }
                 try { RestartAutoCleanTimer(); } catch { }
                 try { StartAutoCollapse(); } catch { }
-                // Register hotkey window hook
                 _hotkeyHwnd = hwnd;
                 System.Windows.Interop.HwndSource.FromHwnd(hwnd).AddHook(WndProc);
                 RefreshHotkeys();
@@ -219,29 +201,16 @@ namespace PowerAudioManager
                 _deviceWatcher.OnChange = () => Dispatcher.BeginInvoke(new Action(() => { VolumeControl.Invalidate(); LoadData(); ScheduleVolumeRefresh(); }));
                 Dispatcher.BeginInvoke(new Action(() => { try { TrimWorkingSet(); } catch { } }),
                     System.Windows.Threading.DispatcherPriority.ApplicationIdle);
-                // Scaling / work-area clamping live in WindowScaling now.
                 _scaling = new WindowScaling(this, () => _mainBorder);
-                // Re-clamp window into the work area when display config changes (e.g. 4K -> 1080p,
-                // monitor unplugged, DPI / scaling change). SystemEvents callbacks fire on a
-                // worker thread, so always hop back to the UI dispatcher.
+                // 显示配置变化时重新夹回工作区。SystemEvents 回调在工作线程触发，必须跳回 UI 派发器。
                 Microsoft.Win32.SystemEvents.DisplaySettingsChanged += _scaling.OnDisplaySettingsChanged;
                 Microsoft.Win32.SystemEvents.UserPreferenceChanged += _scaling.OnUserPreferenceChanged;
-                // Scale to the screen resolution first, then re-clamp after the first
-                // layout pass so ActualWidth/ActualHeight are real.
                 _scaling.ApplyScaling();
-                // After the first layout pass ActualWidth/ActualHeight are real, so we
-                // can nudge the window fully on-screen. This is start-up only — it does
-                // NOT run on later resolution changes (those honour 固定位置 and leave
-                // the window where the user put it).
+                // 首次布局后夹回屏幕内（仅启动时，后续分辨率变化遵守固定位置）。
                 Dispatcher.BeginInvoke(new Action(EnsureFullyVisible), DispatcherPriority.Loaded);
-                // Load plans/devices/memory shortly after the window is up so first paint
-                // isn't blocked by PerformanceCounter init (~300ms) or powercfg. LoadData's
-                // heavy work runs on a threadpool thread, so a 50ms delay is well past
-                // first paint without blocking it. NOTE: was DispatcherPriority.ApplicationIdle,
-                // but on .NET 8 cold start the dispatcher doesn't reach idle for several
-                // seconds (JIT / other queued work), so the initial load was delayed ~6s and
-                // the floating window sat empty — "加载好一会". A threading timer fires
-                // deterministically and marshals back to the UI thread via BeginInvoke.
+                // 窗口显示后延迟加载电源计划/设备/内存，避免 PerformanceCounter 初始化（~300ms）阻塞首帧。
+                // 原先用 ApplicationIdle，但 .NET 8 冷启动时派发器数秒不进入 Idle，导致 ~6s 延迟。
+                // 改用 threading timer 确定性地 50ms 后触发，通过 BeginInvoke 回到 UI 线程。
                 _initLoadTimer = new System.Threading.Timer(_ =>
                 {
                     Dispatcher.BeginInvoke(new Action(() => { try { LoadData(); } catch (Exception ex) { AppLog.Log("Startup LoadData", ex); } }));
@@ -259,9 +228,7 @@ namespace PowerAudioManager
                 CornerRadius = new CornerRadius(10),
                 Background = new SolidColorBrush(BgColor),
                 BorderBrush = new SolidColorBrush(BorderColor),                BorderThickness = new Thickness(1),
-                // Material elevation (dp2-ish): a wide, soft, low-opacity shadow lifts
-                // the floating card off the desktop without a hard edge. Larger blur +
-                // smaller depth + lower opacity reads as ambient occlusion, not a drop.
+                // Material 层级阴影 (dp2)：宽柔低透明度投影，悬浮卡片无硬边。
                 Effect = new System.Windows.Media.Effects.DropShadowEffect
                 {
                     BlurRadius = 36,
@@ -273,7 +240,7 @@ namespace PowerAudioManager
             _root = new StackPanel();
             var titleBar = new DockPanel
             {
-                Background = Brushes.Transparent, // bg lives on the rounded wrapper below
+                Background = Brushes.Transparent, // 背景在下方圆角 Border 上
                 Height = 36,
                 LastChildFill = true
             };
@@ -292,7 +259,7 @@ namespace PowerAudioManager
             };
             try
             {
-                // Prefer embedded resource, fall back to external app.ico.
+                // 优先使用嵌入资源，回退到外部 app.ico。
                 var icoBmp = LoadAppImage("app.ico");
                 if (icoBmp != null) titleIcon.Source = icoBmp;
             }
@@ -373,16 +340,10 @@ namespace PowerAudioManager
                 string mem = ""; try { var ms = MemoryCleaner.GetStatus(); if (ms != null) mem = string.Format(System.Environment.NewLine + "内存: {0:0.0}/{1:0.0} GB ({2}%) · 已缓存 {3:0.0}GB", (ms.TotalBytes - ms.AvailableBytes) / 1073741824.0, ms.TotalBytes / 1073741824.0, ms.MemoryLoadPercent, ms.CachedBytes / 1073741824.0); } catch { }
                 tipBlock.Text = "电源计划: " + plan + System.Environment.NewLine + "音频设备: " + dev + mem;
             };
-            // Drag the window only when position is unlocked. When locked, the
-            // position is fixed and survives resolution changes (ClampToWorkArea
-            // only nudges it back if it ends up fully off-screen).
+            // 仅位置解锁时可拖动。锁定时位置固定，切换分辨率不移动窗口。
             titleBar.MouseLeftButtonDown += (s, e) => { if (!_lockPosition) try { DragMove(); } catch { } };
-            // Wrap the title bar in a Border whose top corners round to match the
-            // outer card (CornerRadius 10). Previously the title bar's own opaque
-            // #222132 background had square top corners that poked past the card's
-            // r=10 arc and showed as "尖尖" spikes. Rounding the wrapper means the
-            // title bar fill follows the arc; bottom corners stay square where it
-            // meets the content. This replaces the old _root.Clip workaround.
+            // 用圆角 Border 包裹标题栏，使上方圆角匹配外层卡片的 CornerRadius 10。
+            // 之前标题栏的纯色背景方角超出卡片 r=10 弧边形成"尖尖"突出，现已修复。
             var titleBarBorder = new Border
             {
                 CornerRadius = new CornerRadius(10, 10, 0, 0),
@@ -395,9 +356,7 @@ namespace PowerAudioManager
             var contentPanel = new StackPanel { Margin = new Thickness(14, 10, 14, 14) };
             _contentPanel = contentPanel;
 
-            // Module visibility (用户可在设置里隐藏不需要的板块). Each section adds
-            // its own leading divider (except the first) so hiding one leaves no
-            // orphan divider.
+            // 板块可见性（用户可在设置中隐藏）。每个板块自带头部分割线（第一个除外），隐藏不会遗留孤立分割线。
             bool showPower = ModuleVisible("Power");
             bool showAudio = ModuleVisible("Audio");
             bool showMem   = ModuleVisible("Mem");
@@ -420,7 +379,6 @@ namespace PowerAudioManager
             _audioSection = new StackPanel();
             contentPanel.Children.Add(_audioSection);
 
-            // Volume row
             var volRow = new DockPanel { Margin = new Thickness(0, 10, 0, 0), LastChildFill = true };
             _muteBtn = new Button {
                 Content = MuteIcon(false),
@@ -452,8 +410,7 @@ namespace PowerAudioManager
                 VerticalAlignment = VerticalAlignment.Center,
                 Margin = new Thickness(4, 0, 4, 0)
             };
-            // MaterialDesign slider:紫影 thumb + filled track come from the theme
-            // primary colour automatically. Key is the MD3 variant.
+            // MaterialDesign slider: 紫影滑块与轨道自动来自主题主色。
             var sliderStyle = Application.Current.TryFindResource("MaterialDesign3.MaterialDesignSlider") as Style;
             if (sliderStyle != null) _volSlider.Style = sliderStyle;
             _volSlider.ValueChanged += (s, e) => {
@@ -467,7 +424,6 @@ namespace PowerAudioManager
             if (showMem)
             {
             if (contentPanel.Children.Count > 0) contentPanel.Children.Add(MakeDivider());
-            // Memory section
             var memHeader = new TextBlock {
                 Foreground = new SolidColorBrush(AccentColor),
                 FontSize = 12,
@@ -493,7 +449,6 @@ namespace PowerAudioManager
             memBtn.Click += (s, e) => CleanMemory();
             contentPanel.Children.Add(memBtn);
 
-            // Show "以管理员重启" hint button only for non-admin runs
             if (!AdminUtils.IsAdmin())
             {
                 var elevateBtn = new Button {
@@ -513,7 +468,6 @@ namespace PowerAudioManager
             if (showTr)
             {
             if (contentPanel.Children.Count > 0) contentPanel.Children.Add(MakeDivider());
-            // Translate section
             var trContent = new TextBlock {
                 FontSize = 12,
                 Foreground = new SolidColorBrush(TextSecondary)
@@ -531,13 +485,10 @@ namespace PowerAudioManager
             contentPanel.Children.Add(trBtn);
             }
 
-            // ---- Launcher bar (4 quick-launch slots) ------------------------------
             if (ModuleVisible("Launcher")) LauncherBar.Build(contentPanel, RebuildUI);
 
-            // ---- Clipboard-history button -----------------------------------------
             if (ModuleVisible("Clipboard")) BuildClipboardButton(contentPanel);
 
-            // ---- Gallery button ---------------------------------------------------
             if (ModuleVisible("Gallery")) BuildGalleryButton(contentPanel);
 
             _root.Children.Add(contentPanel);
@@ -546,9 +497,7 @@ namespace PowerAudioManager
             Content = _mainBorder;
         }
 
-        // Module visibility defaults: all on. Keys: UI.ShowPower / UI.ShowAudio /
-        // UI.ShowMem / UI.ShowTranslate. Reads the registry directly (returns true
-        // when the key is absent) so the first run shows everything.
+        // 板块可见性默认全开。键值缺失返回 true，首次运行显示全部板块。
         public static bool ModuleVisible(string module)
         {
             try
@@ -567,8 +516,7 @@ namespace PowerAudioManager
             return true;
         }
 
-        // Rebuild the whole floating window after module-visibility changes.
-        // Preserves position; SizeToContent recomputes height after BuildUI.
+        // 板块可见性变更后重建整个悬浮窗，保持位置不变。
         public void RebuildUI()
         {
             double left = Left, top = Top;
@@ -584,15 +532,13 @@ namespace PowerAudioManager
             Left = left; Top = top;
         }
 
-        // Re-read the user-selected font and apply it to the window, then rebuild
-        // so child elements pick it up. Called after the font is changed in settings.
+        // 重新加载用户选择的字体并重建 UI，设置中换字体后调用。
         internal void ApplyFont()
         {
             FontFamily = AppResources.ReloadFont();
             RebuildUI();
         }
 
-        // ---- Clipboard history button ------------------------------------------
         void BuildClipboardButton(StackPanel contentPanel)
         {
             var cbContent = new TextBlock { FontSize = 12, Foreground = new SolidColorBrush(TextSecondary) };
@@ -645,7 +591,6 @@ namespace PowerAudioManager
             };
             DockPanel.SetDock(arrow, Dock.Left);
             dock.Children.Add(arrow);
-            // Icon
             var iconImg = LoadAppImage(iconFile);
             if (iconImg != null)
             {
@@ -668,7 +613,7 @@ namespace PowerAudioManager
             };
             dock.Children.Add(label);
 
-            // Apply the saved collapsed state asynchronously, after the section element exists
+            // 异步应用折叠状态，等区块元素创建后再设置可见性。
             Dispatcher.BeginInvoke(new Action(() => {
                 var sec = sectionGetter() as FrameworkElement;
                 if (sec == null) return;
@@ -686,9 +631,7 @@ namespace PowerAudioManager
             };
             return dock;
         }
-        // True while a background data load is pending. Prevents overlapping powercfg
-        // invocations when several callers (device watcher, refresh timer, clicks) fire
-        // LoadData in quick succession.
+        // 后台数据加载进行中标记。防止多个调用方（设备监视器、刷新定时器、点击）短时间内重复触发 powercfg。
         bool _loading;
         DateTime _loadStartTime;
 
@@ -697,15 +640,11 @@ namespace PowerAudioManager
             try { UpdateVolumeUI(); } catch { }
             try { UpdateMemoryUI(); } catch { }
             try { UpdateTrayTooltip(); } catch { }
-            // Guard against a stuck background refresh (e.g. powercfg hanging during a
-            // policy refresh): if a previous load has been "in flight" for over 10s,
-            // assume it died and allow a new one.
+            // 防止卡死的后台刷新（如 powercfg 在策略刷新时挂起）：超过 10s 认为已死，允许新的一次。
             if (_loading && (DateTime.Now - _loadStartTime).TotalSeconds < 10) return;
             _loading = true;
             _loadStartTime = DateTime.Now;
-            // Fetch plans and devices on a threadpool thread, render on the UI thread.
-            // These are gathered together but each is independently try/caught so a
-            // powercfg hiccup never blanks the audio list (devices come from the registry).
+            // 在线程池获取电源计划/设备，独立 try/catch 保证 powercfg 异常不会清空音频列表（设备来自注册表）。
             System.Threading.ThreadPool.QueueUserWorkItem(_ =>
             {
                 List<PowerPlanInfo> plans = null;
@@ -725,9 +664,7 @@ namespace PowerAudioManager
         {
             try
             {
-                // If the fetch failed (plans == null), keep the last good list rather than
-                // blanking the section — a transient powercfg failure during plan add/remove
-                // shouldn't wipe the UI.
+                // 获取失败时保留上次列表，避免短暂 powercfg 失败清空 UI。
                 if (plans == null) plans = _powerPlans;
                 _powerPlans = plans ?? new List<PowerPlanInfo>();
                 var active = _powerPlans.Find(p => p.IsActive);
@@ -756,8 +693,7 @@ namespace PowerAudioManager
         {
             try
             {
-                // Keep the last good list if the fetch failed, so a transient error doesn't
-                // blank the audio device names.
+                // 获取失败保留上次列表，避免短暂错误清空音频设备名称。
                 if (devices == null) devices = _audioDevices;
                 _audioDevices = devices ?? new List<AudioDeviceInfo>();
                 var defaultDev = _audioDevices.Find(d => d.IsDefault);
@@ -799,9 +735,7 @@ namespace PowerAudioManager
             btn.MouseDoubleClick += (s, e) => { try { System.Diagnostics.Process.Start("control.exe", "powercfg.cpl"); } catch { } e.Handled = true; };
             btn.Click += (s, e) =>
             {
-                // Optimistically mark the chosen plan active so the UI reflects the tap
-                // instantly, then switch on a background thread (avoids a 1-3s UI freeze
-                // during the system policy refresh) and refresh once it's done.
+                // 乐观标记选中计划为活动态让 UI 即时响应，再后台切换避免系统策略刷新导致 1-3s UI 冻结。
                 _currentPlanId = plan.Guid;
                 foreach (var p in _powerPlans) p.IsActive = p.Guid == plan.Guid;
                 if (_powerSection == null) return;
@@ -833,7 +767,7 @@ namespace PowerAudioManager
                 Text = string.IsNullOrEmpty(dev.Name) ? "(未命名设备)" : dev.Name,
                 TextTrimming = TextTrimming.CharacterEllipsis,
                 VerticalAlignment = VerticalAlignment.Center,
-                Foreground = Brushes.White // explicit so it never inherits a hidden colour
+                Foreground = Brushes.White // 显式设白色避免继承隐藏色
             };
             content.Children.Add(nameBlock);
             var btn = new Button {
@@ -857,14 +791,13 @@ namespace PowerAudioManager
                     ScheduleVolumeRefresh();
                 }
             };
-            // Right-click menu: hide / set hotkey
             var devCtx = new ContextMenu();
             var hideItem = new MenuItem { Header = "隐藏此设备" };
             hideItem.Click += (s, e) => { DevicePrefs.SetHidden(dev.Name, true); LoadData(); RefreshHotkeys(); };
             devCtx.Items.Add(hideItem);
             var hkItem = new MenuItem { Header = "设置快捷键..." };
             hkItem.Click += (s, e) => {
-                // Temporarily release all global hotkeys so the dialog can capture conflicting combos
+                // 暂时释放全部全局快捷键，让对话框能捕获冲突组合键。
                 UnregisterAllHotkeys();
                 int? captured = null;
                 try { captured = HotkeyCaptureDialog.Show(this, dev.HotkeyIndex); }
@@ -884,8 +817,7 @@ namespace PowerAudioManager
         }
 
 
-        // A soft Fluent separator: the existing BorderColor, but inset from the edges so it
-        // reads as a divider between sections rather than a full-bleed line. No new colour.
+        // 柔和的 Fluent 风格分割线：使用边框色但留左右边距，作为区块间分隔。
         internal static Border MakeDivider()
         {
             return new Border
@@ -906,9 +838,7 @@ namespace PowerAudioManager
             _muteBtn.Content = MuteIcon(VolumeControl.GetMute());
         }
 
-        // Schedule a few delayed re-reads of the default endpoint volume after a device switch.
-        // The kernel needs a beat to (re)bind audio policy, so the first read often returns the
-        // *previous* device's value. Polling 3 times in 750 ms catches the new value reliably.
+        // 设备切换后内核需要时间重新绑定音频策略，首次读取常返回旧设备的值。750ms 内轮询 3 次捕获新值。
         void ScheduleVolumeRefresh()
         {
             var t = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
@@ -924,7 +854,6 @@ namespace PowerAudioManager
 
         void DoTranslate(string text)
         {
-            // Compatibility wrapper: open the dedicated window with this initial text
             OpenTranslateWindow(text);
         }
 
@@ -957,9 +886,7 @@ namespace PowerAudioManager
             catch { }
         }
 
-        // Image translate: region-capture overlay -> Baidu image API -> result window.
-        // Region capture runs on the UI thread (needs a window + dispatcher frame); the
-        // API call runs on a threadpool thread; the result window shows on the UI thread.
+        // 图片翻译流程：框选截图（UI 线程）→ 百度图片 API（线程池）→ 结果窗口（UI 线程）。
         void HandleImageTranslateHotkey()
         {
             byte[] png = null;
@@ -981,8 +908,6 @@ namespace PowerAudioManager
             });
         }
 
-        // Image translate from the current clipboard image (entry point for a UI button /
-        // clipboard-image-translate action, if wired up later).
         public void TranslateClipboardImage()
         {
             try
@@ -1034,10 +959,8 @@ namespace PowerAudioManager
             CleanMemory(MemoryCleaner.GetSavedFlags());
         }
 
-        // Clean with explicit flags. Auto-clean passes a mask with the freeze-prone
-        // items (full StandbyList purge, ModifiedPageList flush) stripped unless the
-        // user opted in via 设置→内存 的"允许自动清理危险项" — silently purging the
-        // standby list in the background can stall the whole system.
+        // 带显式标志清理。自动清理会移除可能导致卡顿的项（StandbyList 全量清除、ModifiedPageList 刷盘），
+        // 除非用户在设置中勾选"允许自动清理危险项"——后台静默清除 standby 列表可能让系统卡死。
         internal void CleanMemory(MemoryCleaner.CleanFlags flags)
         {
             if (_memStatusLabel != null) _memStatusLabel.Text = "正在清理...";
@@ -1074,7 +997,7 @@ namespace PowerAudioManager
         {
             if (_autoCleanTimer != null) _autoCleanTimer.Stop();
             if (!AppPrefs.GetBool("AutoCleanEnabled", false)) return;
-            // Tick every minute; decide each tick whether to clean
+            // 每分钟滴答一次，每次判断是否需要清理。
             _autoCleanTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(60) };
             _autoCleanTimer.Tick += (s, e) => AutoCleanCheck();
             _autoCleanTimer.Start();
@@ -1104,9 +1027,7 @@ namespace PowerAudioManager
                 {
                     _lastCleanTime = DateTime.Now;
                     var flags = MemoryCleaner.GetSavedFlags();
-                    // Auto-clean skips the freeze-prone items (full standby purge,
-                    // modified page list flush) unless the user explicitly allows
-                    // them — a background standby purge can stall the system.
+                    // 自动清理跳过可能导致卡顿的项，除非用户明确允许——后台 standby 清除可能让系统停滞。
                     if (!AppPrefs.GetBool("AutoCleanAllowFreezes", false))
                         flags &= ~(MemoryCleaner.CleanFlags.StandbyList | MemoryCleaner.CleanFlags.ModifiedPageList);
                     AppLog.Log("AutoClean", "triggered, flags=" + flags);
@@ -1116,9 +1037,7 @@ namespace PowerAudioManager
             catch { }
         }
 
-        // Builds the multi-line status text shown in the tray tooltip (plan /
-        // device / memory). The tray controller writes it to the NotifyIcon,
-        // bypassing the 63-char public limit via reflection.
+        // 托盘提示多行状态文本（计划/设备/内存），通过反射绕过 WinForms 63 字符限制写入 NotifyIcon。
         internal string TrayStatusText
         {
             get
@@ -1137,22 +1056,12 @@ namespace PowerAudioManager
             if (_tray != null) _tray.UpdateTooltip();
         }
 
-        // Material-style button styling. Three variants share one rounded template:
-        //  - primary:  accent fill + white text, hover darkens to AccentHover
-        //  - outline:  transparent fill + border, hover fills with a tonal accent tint
-        //  - default:  card fill + secondary text, hover lifts to HoverColor (elevation)
-        // active overrides the fill to the pressed/accent state (used for the selected
-        // power plan / audio device button).
+        // Material 风格按钮：三种变体共用一个圆角模板。
+        // primary=强调填充、default=卡片填充、isActive=激活态填充（选中电源计划/音频设备）。
         void StyleButton(Button btn, bool isActive) { StyleButton(btn, isActive, false); }
 
-        // Apply MaterialDesign's flat button style (transparent fill, hover ripple,
-        // no elevation shadow — important inside the floating window's transparent
-        // AllowsTransparency card, where raised-button shadows render wrong). The
-        // three visual states are expressed purely via Background, which the flat
-        // template paints as a filled pill:
-        //   isActive → accent fill (selected plan/device)
-        //   primary  → 紫影 fill (call-to-action: 清理/翻译)
-        //   default  → card-tier fill
+        // 应用 MaterialDesign 扁平按钮样式（透明底 + 悬停涟漪 + 无阴影）。
+        // 重要：悬浮窗 AllowsTransparency 下凸起按钮阴影渲染异常，必须用扁平样式。
         void StyleButton(Button btn, bool isActive, bool primary)
         {
             ApplyFlatStyle(btn);
@@ -1177,22 +1086,15 @@ namespace PowerAudioManager
             }
         }
 
-        // Stamp the MaterialDesign flat-button style onto a button. Looked up by
-        // resource key (defined by the merged MaterialDesign3 defaults). Falls back
-        // to no style if the key is absent so a theming hiccup never blanks a button.
-        // Use this for text buttons (清理/翻译/电源项) where MD's default padding reads fine.
+        // 给按钮打上 MaterialDesign 扁平样式。通过资源键查找，缺失则回退无样式，避免主题异常时按钮变空。
         internal static void ApplyFlatStyle(Button btn)
         {
             var style = Application.Current.TryFindResource("MaterialDesignFlatButton") as Style;
             if (style != null) btn.Style = style;
         }
 
-        // Variant for compact icon buttons (title-bar 🔒/▲/✕, mute, launcher slots):
-        // MaterialDesign's Button style sets MinWidth=88 / MinHeight=36 / generous
-        // Padding, which overrides a small button's Width/Height and pushes its
-        // content out of view (the icon "disappears"). Local values beat style
-        // setters, so we force MinWidth/MinHeight=0 and Padding=0 to keep the
-        // button at its intended compact size with the icon centred.
+        // 紧凑图标按钮（标题栏、静音、启动栏）。MaterialDesign 默认 MinWidth=88/MinHeight=36/大 Padding
+        // 会撑大按钮导致图标"消失"。本地值覆盖样式设置项，强制 MinWidth/MinHeight=0, Padding=0。
         internal static void ApplyIconButtonStyle(Button btn)
         {
             ApplyFlatStyle(btn);
@@ -1203,16 +1105,12 @@ namespace PowerAudioManager
             btn.VerticalContentAlignment = VerticalAlignment.Center;
         }
 
-        // PackIcon content for the title-bar lock button. Vector icons (not emoji)
-        // so they render regardless of the MaterialDesign flat-button style overriding
-        // FontFamily — emoji glyphs disappeared once the style swapped the font away
-        // from the Segoe UI Symbol fallback. Lock = position locked, LockOpen = free.
+        // 标题栏锁定按钮图标。矢量图标不受 MaterialDesign 样式覆盖 FontFamily 影响，emoji 字体会被替换导致消失。
         internal static PackIcon PinIcon(bool locked)
         {
             return new PackIcon { Kind = locked ? PackIconKind.Lock : PackIconKind.LockOpen, Width = 16, Height = 16 };
         }
 
-        // PackIcon content for the mute button: VolumeHigh when audible, VolumeMute when muted.
         internal static PackIcon MuteIcon(bool muted)
         {
             return new PackIcon { Kind = muted ? PackIconKind.VolumeMute : PackIconKind.VolumeHigh, Width = 16, Height = 16 };
@@ -1224,12 +1122,10 @@ namespace PowerAudioManager
             if (!IsVisible) Show();
             if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
             Activate();
-            // Honor the user's topmost preference – do NOT force-pin every time we show.
+            // 仅在用户设置了置顶时刷新 Topmost，不强制置顶。
             if (_topmost) { Topmost = false; Topmost = true; }
         }
 
-        // Application shutdown: stop the device watcher, detach SystemEvents
-        // hooks, dispose the tray, then exit. Invoked from the tray "退出" item.
         internal void ExitApp()
         {
             if (_deviceWatcher != null) _deviceWatcher.Stop();
@@ -1255,8 +1151,7 @@ namespace PowerAudioManager
                 if (id == Native.HOTKEY_ID_SCREENSHOT)
                 {
                     AppLog.Log("Hotkey", "screenshot triggered");
-                    // Capture on a threadpool thread so the hotkey loop is never
-                    // blocked; the toast marshals back to the UI thread itself.
+                    // 线程池执行截图避免阻塞热键循环，Toast 内部会回到 UI 线程。
                     System.Threading.ThreadPool.QueueUserWorkItem(_ => ScreenshotService.CaptureForeground());
                     handled = true;
                     return IntPtr.Zero;
@@ -1317,11 +1212,7 @@ namespace PowerAudioManager
             Native.UnregisterHotKey(_hotkeyHwnd, Native.HOTKEY_ID_IMAGE_TRANSLATE);
         }
 
-        // Test whether a hotkey combo (encoded: hi16 mods, lo16 VK) can be
-        // registered (i.e. not already taken by another app). Registers on a
-        // scratch id, unregisters immediately, returns true if it succeeded.
-        // Used by the settings dialogs so the user gets immediate feedback when
-        // a combo is occupied instead of silently failing to fire later.
+        // 测试快捷键组合能否注册。用临时 ID 注册再立即注销，供设置对话框即时反馈某个组合是否被占用。
         internal bool TestHotkey(int encoded)
         {
             if (_hotkeyHwnd == IntPtr.Zero) return true;
@@ -1333,7 +1224,7 @@ namespace PowerAudioManager
             if ((mods & 2) != 0) winMods |= Native.MOD_CONTROL;
             if ((mods & 4) != 0) winMods |= Native.MOD_SHIFT;
             if ((mods & 8) != 0) winMods |= Native.MOD_WIN;
-            int testId = 0xBE00; // scratch id, never used by real hotkeys
+            int testId = 0xBE00; // 临时测试 ID，实际热键不会用
             Native.UnregisterHotKey(_hotkeyHwnd, testId);
             bool ok = Native.RegisterHotKey(_hotkeyHwnd, testId, winMods, vk);
             Native.UnregisterHotKey(_hotkeyHwnd, testId);
@@ -1343,14 +1234,12 @@ namespace PowerAudioManager
         internal void RefreshHotkeys()
         {
             if (_hotkeyHwnd == IntPtr.Zero) return;
-            // Unregister all known IDs
             foreach (var id in _hotkeyMap.Keys) Native.UnregisterHotKey(_hotkeyHwnd, id);
             _hotkeyMap.Clear();
-            // Translate hotkey: Ctrl+Shift+T (VK_T = 0x54)
+            // 翻译快捷键：固定 Ctrl+Shift+T
             Native.UnregisterHotKey(_hotkeyHwnd, Native.HOTKEY_ID_TRANSLATE);
             Native.RegisterHotKey(_hotkeyHwnd, Native.HOTKEY_ID_TRANSLATE, Native.MOD_CONTROL | Native.MOD_SHIFT, 0x54);
-            // Screenshot hotkey: user-bound (stored as Screenshot.Hotkey, same
-            // encoding as device hotkeys: hi16 = mods, lo16 = VK). No default.
+            // 截图快捷键：用户自定义（Screenshot.Hotkey，编码同设备热键：hi16=修饰键, lo16=VK）
             Native.UnregisterHotKey(_hotkeyHwnd, Native.HOTKEY_ID_SCREENSHOT);
             int shotEncoded = AppPrefs.GetInt("Screenshot.Hotkey", 0);
             if (shotEncoded != 0)
@@ -1364,7 +1253,7 @@ namespace PowerAudioManager
                 if ((smods & 8) != 0) swinMods |= Native.MOD_WIN;
                 Native.RegisterHotKey(_hotkeyHwnd, Native.HOTKEY_ID_SCREENSHOT, swinMods, svk);
             }
-            // Clipboard-history hotkey: user-bound (Clipboard.Hotkey). No default.
+            // 剪贴板历史快捷键：用户自定义（Clipboard.Hotkey）
             Native.UnregisterHotKey(_hotkeyHwnd, Native.HOTKEY_ID_CLIPBOARD);
             int clipEncoded = AppPrefs.GetInt("Clipboard.Hotkey", 0);
             if (clipEncoded != 0)
@@ -1378,7 +1267,7 @@ namespace PowerAudioManager
                 if ((cmods & 8) != 0) cwinMods |= Native.MOD_WIN;
                 Native.RegisterHotKey(_hotkeyHwnd, Native.HOTKEY_ID_CLIPBOARD, cwinMods, cvk);
             }
-            // Image-translate (region capture) hotkey: user-bound (Screenshot.ImageTranslateHotkey). No default.
+            // 图片翻译快捷键：用户自定义（Screenshot.ImageTranslateHotkey）
             Native.UnregisterHotKey(_hotkeyHwnd, Native.HOTKEY_ID_IMAGE_TRANSLATE);
             int itEnc = AppPrefs.GetInt("Screenshot.ImageTranslateHotkey", 0);
             if (itEnc != 0)
@@ -1415,36 +1304,32 @@ namespace PowerAudioManager
             SetExpanded(!_isExpanded, true);
         }
 
-        // Core expand/collapse, reused by the manual button and auto-collapse.
-        // manual=true means the user toggled it (by button); the auto-collapse
-        // timer passes false. A manually-collapsed window stays collapsed on hover
-        // unless the user opted into "AutoExpandAfterManual".
+        // 展开/折叠核心逻辑。manual=true 表示用户点击按钮触发，auto 计时器传 false。
+        // 手动折叠后悬停不展开，除非开启"AutoExpandAfterManual"。
         void SetExpanded(bool expanded) { SetExpanded(expanded, false); }
         void SetExpanded(bool expanded, bool manual)
         {
             _isExpanded = expanded;
             if (manual && !expanded) _collapsedManually = true;
             if (expanded) _collapsedManually = false;
-            // Pin bottom edge so the window collapses upward
+            // 固定底边使窗口向上折叠
             double bottom = Top + ActualHeight;
             if (_isExpanded)
             {
                 if (_contentPanel != null) _contentPanel.Visibility = Visibility.Visible;
-                // Title bar's bottom corners stay square where it meets the content.
+                // 展开时标题栏下角保持直角与内容区衔接。
                 if (_titleBarBorder != null) _titleBarBorder.CornerRadius = new CornerRadius(10, 10, 0, 0);
                 SizeToContent = SizeToContent.Height;
             }
             else
             {
                 if (_contentPanel != null) _contentPanel.Visibility = Visibility.Collapsed;
-                // Collapsed: only the title bar is visible, so round its bottom
-                // corners too — otherwise the square bottom pokes past the outer
-                // card's rounded corners and looks like flat bottom corners.
+                // 折叠时仅标题栏可见，下角也圆角匹配外层卡片，避免方角超出圆角弧边。
                 if (_titleBarBorder != null) _titleBarBorder.CornerRadius = new CornerRadius(10);
-                SizeToContent = SizeToContent.Height; // let WPF compute exact title-bar height
+                SizeToContent = SizeToContent.Height;
                 MinHeight = 36;
             }
-            // Re-anchor: keep bottom edge fixed. Wait for the next LayoutUpdated when ActualHeight is correct.
+            // 重锚定：保持底边固定，等 LayoutUpdated 后 ActualHeight 正确再调整。
             EventHandler reanchor = null;
             reanchor = (xs, xe) =>
             {
@@ -1456,13 +1341,11 @@ namespace PowerAudioManager
                 Top = newTop;
             };
             LayoutUpdated += reanchor;
-            // Cancel any pending auto-collapse when the user manually expands.
+            // 手动展开时取消待执行的自动折叠。
             if (expanded && _autoCollapseTimer != null) _autoCollapseTimer.Stop();
         }
 
-        // ---- Auto-collapse -----------------------------------------------------
-        // When enabled, the window collapses after the mouse leaves for a configurable
-        // delay, and expands again on hover. The manual collapse button stays in sync.
+        // 自动折叠：鼠标离开延迟后折叠，悬停展开。手动折叠按钮保持同步。
         DispatcherTimer _autoCollapseTimer;
 
         void StartAutoCollapse()
@@ -1475,16 +1358,14 @@ namespace PowerAudioManager
                 if (_autoCollapseTimer != null) _autoCollapseTimer.Stop();
                 if (!_isExpanded)
                 {
-                    // A manually-collapsed window stays collapsed on hover unless the
-                    // user opted into auto-expanding after a manual collapse.
+                    // 手动折叠后悬停不展开，除非开启"手动折叠后也自动展开"。
                     if (_collapsedManually && !AppPrefs.GetBool("AutoExpandAfterManual", false)) return;
                     SetExpanded(true);
                 }
             };
             MouseLeave += (s, e) =>
             {
-                // Don't auto-collapse a manually-collapsed window (it's already collapsed
-                // and the user wants it to stay that way until they expand it).
+                // 手动折叠的窗口不再自动折叠（已折叠且用户希望保持折叠）。
                 if (_collapsedManually) return;
                 if (_autoCollapseTimer != null && AppPrefs.GetBool("AutoCollapse", true))
                 {
@@ -1494,7 +1375,7 @@ namespace PowerAudioManager
             };
         }
 
-        // Re-read auto-collapse settings (called after the user changes them).
+        // 重读自动折叠设置（用户修改设置后调用）。
         internal void RefreshAutoCollapse()
         {
             if (_autoCollapseTimer != null) _autoCollapseTimer.Stop();

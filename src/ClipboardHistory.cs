@@ -12,18 +12,11 @@ using System.Windows.Threading;
 
 namespace PowerAudioManager
 {
-    // Clipboard history: records the most recent text AND image copies (max 20),
-    // persists them to disk so they survive restarts, and shows them in a popup.
-    // Images are stored as DPAPI-encrypted PNG bytes under
-    // %LocalAppData%\OneBox\clip_images\ (.bin for new captures; legacy .png
-    // plaintext files are still readable). clipboard.txt is stored as a single
-    // DPAPI blob (CurrentUser scope). Capture is poll-based (cheap and robust
-    // across processes).
+    // 剪贴板历史：记录最近文本和图片复制（最多 20 条），持久化到磁盘以在重启后保留，弹窗展示。
+    // 图片以 DPAPI 加密的 PNG 字节存储在 %LocalAppData%\OneBox\clip_images\（新截取用 .bin，旧版明文 .png 仍可读）。
+    // clipboard.txt 整体存储为单个 DPAPI blob（CurrentUser 范围）。捕获采用轮询（轻量、跨进程可靠）。
     //
-    // Privacy note: DPAPI CurrentUser scope only prevents OTHER Windows user
-    // accounts (and casual file snooping) from reading the history. It does NOT
-    // defend against malware running under the same user — that is an accepted
-    // trade-off for a clipboard manager.
+    // 隐私说明：DPAPI CurrentUser 范围仅阻止其他 Windows 用户账户读取历史。无法防御同一用户下运行的恶意软件——这是剪贴板管理器可接受的取舍。
     public static class ClipboardHistory
     {
         const int MaxItems = 20;
@@ -37,9 +30,7 @@ namespace PowerAudioManager
         static DispatcherTimer _poll;
         static string _lastHash = "";
 
-        // Fixed app-specific entropy for DPAPI. Using a constant is fine: the
-        // goal is to bind the blob to OneBox so a different app can't trivially
-        // Unprotect it with the same scope, not to keep the entropy secret.
+        // DPAPI 固定应用专属熵。使用常量即可：目的是将 blob 绑定到 OneBox，防止其他应用在同一作用域下轻易解密，而非保密熵值本身。
         static readonly byte[] _dpapiEntropy = Encoding.UTF8.GetBytes("OneBox.Clipboard.v1");
 
         public class ClipItem
@@ -62,10 +53,7 @@ namespace PowerAudioManager
             try
             {
                 if (!File.Exists(_storePath)) return;
-                // The file is a DPAPI blob. Try to unprotect; if that fails the
-                // file is a legacy plaintext copy from an older OneBox, so read
-                // it as UTF-8 text directly (it will be re-saved encrypted on
-                // the next change).
+                // 文件为 DPAPI blob。尝试解密；失败则为旧版明文，直接按 UTF-8 读取（下次变更时会重新加密保存）。
                 string content;
                 var raw = File.ReadAllBytes(_storePath);
                 try { content = Encoding.UTF8.GetString(ProtectedData.Unprotect(raw, _dpapiEntropy, DataProtectionScope.CurrentUser)); }
@@ -100,9 +88,7 @@ namespace PowerAudioManager
                     if (it.IsImage) sb.AppendLine("IMG:" + Escape(it.ImagePath ?? ""));
                     else sb.AppendLine(Escape(it.Text ?? ""));
                 }
-                // Encrypt the whole history blob with DPAPI (CurrentUser) so the
-                // text — which may include pasted passwords / codes — is not
-                // sitting on disk in plaintext.
+                // 用 DPAPI（CurrentUser）加密整个历史 blob，避免文本（可能含密码/验证码）明文落盘。
                 var plain = Encoding.UTF8.GetBytes(sb.ToString());
                 var blob = ProtectedData.Protect(plain, _dpapiEntropy, DataProtectionScope.CurrentUser);
                 File.WriteAllBytes(_storePath, blob);
@@ -110,7 +96,7 @@ namespace PowerAudioManager
             catch { }
         }
 
-        // Newline-safe line storage: escape \n and \r so each item is one line.
+        // 换行安全存储：转义 \n 和 \r，使每条记录占一行。
         static string Escape(string s) { return s.Replace("\\", "\\\\").Replace("\n", "\\n").Replace("\r", "\\r"); }
         static string Unescape(string s) { return s.Replace("\\r", "\r").Replace("\\n", "\n").Replace("\\\\", "\\"); }
 
@@ -118,15 +104,12 @@ namespace PowerAudioManager
         {
             try
             {
-                // Prefer image when present (a screenshot copy sets both image and sometimes
-                // a text fallback); record the image.
+                // 优先记录图片（截图复制会同时设置图片和文本回退）。
                 if (Clipboard.ContainsImage())
                 {
                     var bmp = Clipboard.GetImage();
                     if (bmp == null) return;
-                    // De-dupe by the PNG-encoded content hash, not just dimensions:
-                    // two different screenshots of the same size would otherwise be
-                    // treated as duplicates under the old PixelWidth x PixelHeight key.
+                    // 按 PNG 内容哈希去重，而非仅比较尺寸（否则同尺寸不同截图会被视为重复）。
                     byte[] png = EncodeToPng(bmp);
                     if (png == null) return;
                     string hash = "IMG:" + Sha256Hex(png);
@@ -155,7 +138,7 @@ namespace PowerAudioManager
                 _lastHash = hash2;
                 lock (_lock)
                 {
-                    // De-dupe: remove existing identical text item, then insert at front.
+                    // 去重：移除已有相同文本项，然后插入到最前。
                     for (int i = 0; i < _items.Count; i++)
                         if (!_items[i].IsImage && _items[i].Text == text) { _items.RemoveAt(i); break; }
                     _items.Insert(0, new ClipItem { IsImage = false, Text = text });
@@ -171,7 +154,6 @@ namespace PowerAudioManager
             catch { }
         }
 
-        // Encode a BitmapSource to PNG bytes (in memory).
         static byte[] EncodeToPng(BitmapSource src)
         {
             try
@@ -187,7 +169,6 @@ namespace PowerAudioManager
             catch { return null; }
         }
 
-        // SHA256 of the given bytes as a lowercase hex string (stable de-dupe key).
         static string Sha256Hex(byte[] data)
         {
             using (var sha = SHA256.Create())
@@ -199,9 +180,7 @@ namespace PowerAudioManager
             }
         }
 
-        // Write the PNG bytes to disk, DPAPI-encrypted (CurrentUser). New files
-        // use the .bin extension so they aren't mistaken for plain PNGs. Returns
-        // the path or null on failure.
+        // DPAPI 加密写入 PNG 字节到磁盘。新文件用 .bin 扩展名，避免被误认为明文 PNG。
         static string SaveImage(byte[] pngBytes)
         {
             try
@@ -215,9 +194,7 @@ namespace PowerAudioManager
             catch { return null; }
         }
 
-        // Read an image file and return its PNG bytes, transparently
-        // decrypting DPAPI-encrypted .bin files and falling back to raw PNG
-        // bytes for legacy plaintext .png captures.
+        // 透明解密 DPAPI 加密的 .bin 文件，旧版明文 .png 直接读取。
         internal static byte[] LoadImageBytes(string path)
         {
             try
@@ -234,9 +211,7 @@ namespace PowerAudioManager
             lock (_lock) { return new List<ClipItem>(_items); }
         }
 
-        // Remove a single history entry by its index in GetItems() (0 = newest).
-        // Deletes the on-disk image for image items. Used by the right-click
-        // "delete this entry" action in the clipboard panel.
+        // 按索引删除单条历史（0=最新）。图片项同时删除磁盘文件。
         public static void RemoveAt(int index)
         {
             lock (_lock)
@@ -260,14 +235,13 @@ namespace PowerAudioManager
         }
     }
 
-    // Popup panel that lists clipboard history; click an item to copy it back.
+    // 剪贴板历史弹窗面板，点击条目复制回剪贴板。
     public static class ClipboardHistoryPanel
     {
         public static void Show(Window owner) { ShowAt(owner, 0, 0); }
 
-        // Show the panel. If x/y are provided (screen device pixels, e.g. from
-        // GetCursorPos), position the window near the cursor instead of centred
-        // on the owner — so the clipboard hotkey pops the list where the mouse is.
+        // 显示面板。若提供 x/y（屏幕设备像素，如 GetCursorPos），将窗口定位到鼠标附近
+        // 而非居中于 owner——使剪贴板热键在鼠标位置弹出列表。
         public static void ShowAt(Window owner, int cursorX, int cursorY)
         {
             bool atCursor = cursorX != 0 || cursorY != 0;
@@ -291,9 +265,7 @@ namespace PowerAudioManager
             scroller.Content = list;
 
             var dlg = OneBoxWindow.Create(owner, "剪贴板历史", 360, 420, outer, true);
-            // When invoked from the clipboard hotkey, place the window at the
-            // cursor (just below-right of it), clamped to the work area. Override
-            // the owner-centred startup location OneBoxWindow set.
+            // 剪贴板热键触发时将窗口定位到鼠标右下，限制在工作区内，覆盖 OneBoxWindow 的居中定位。
             if (atCursor)
             {
                 dlg.WindowStartupLocation = WindowStartupLocation.Manual;
@@ -341,7 +313,6 @@ namespace PowerAudioManager
                     Button btn;
                     if (captured.IsImage)
                     {
-                        // Image item: thumbnail + "[图片]" label.
                         var row = new StackPanel { Orientation = Orientation.Horizontal };
                         try
                         {
@@ -399,7 +370,7 @@ namespace PowerAudioManager
                         catch { }
                         dlg.Close();
                     };
-                    // Right-click: delete this single entry (no close).
+                    // 右键：删除此条（不关闭窗口）
                     btn.MouseRightButtonUp += (s, e) => {
                         ClipboardHistory.RemoveAt(capturedIndex);
                         render();
@@ -414,13 +385,10 @@ namespace PowerAudioManager
 
             outer.Children.Add(scroller);
 
-            // Refresh once when shown so freshly-copied items appear.
             dlg.Loaded += (s, e) => render();
             dlg.ShowDialog();
         }
 
-        // Decode (and decrypt if needed) an image file into a frozen thumbnail
-        // BitmapSource. Returns null if the file can't be read/decoded.
         static BitmapSource LoadThumbnail(string path)
         {
             try

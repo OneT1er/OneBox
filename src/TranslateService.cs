@@ -11,9 +11,8 @@ namespace PowerAudioManager
         const string EndpointAi = "https://fanyi-api.baidu.com/ait/api/aiTextTranslate";
         const string KeyPath = @"Software\PowerAudioManager\App";
 
-        // DPAPI entropy binds the encrypted blob to this app. Values are stored as
-        // "DP1:" + Base64(ProtectedData(...)) so encrypted and legacy-plaintext values are
-        // unambiguous; GetKey transparently reads either.
+        // DPAPI 熵绑定加密数据到本应用。存储格式 "DP1:" + Base64(ProtectedData(...))，
+        // 加密值与遗留明文可明确区分，GetKey 透明读取。
         static readonly byte[] KeyEntropy = System.Text.Encoding.UTF8.GetBytes("OneBox.Translate.Key.v1");
 
         public static string GetAppId()
@@ -58,7 +57,7 @@ namespace PowerAudioManager
                     System.Security.Cryptography.DataProtectionScope.CurrentUser);
                 return "DP1:" + Convert.ToBase64String(enc);
             }
-            catch { return plain; } // DPAPI unavailable — store plaintext rather than losing the key
+            catch { return plain; } // DPAPI 不可用 — 存储明文以免丢失密钥
         }
 
         static string UnprotectKey(string stored)
@@ -73,9 +72,9 @@ namespace PowerAudioManager
                         System.Security.Cryptography.ProtectedData.Unprotect(enc, KeyEntropy,
                             System.Security.Cryptography.DataProtectionScope.CurrentUser));
                 }
-                catch { return ""; } // corrupt encrypted blob — don't fall back to garbage
+                catch { return ""; } // 加密数据损坏 — 不退回乱码
             }
-            return stored; // legacy plaintext value saved before DPAPI encryption
+            return stored; // DPAPI 加密前的遗留明文
         }
 
         public class Result
@@ -85,10 +84,8 @@ namespace PowerAudioManager
             public string DetectedFrom;
         }
 
-        // Baidu AI text translate (aiTextTranslate) enforces a limit on the size of q
-        // counted in UTF-8 BYTES (not characters). Exceeding it returns 59003 请求文本太长.
-        // CJK chars are 3 bytes each in UTF-8, so a char-based cap is unsafe — we budget
-        // by bytes. 4000 bytes/chunk stays well under the limit across endpoints.
+        // 百度 AI 文本翻译对 q 有 UTF-8 字节数限制（非字符数），超限返回 59003。
+        // CJK 字符在 UTF-8 中每字 3 字节，按字符数截断不可靠 — 按字节预算。4000 字节/段在各端点都在安全范围内。
         const int MaxChunkBytes = 4000;
         static readonly System.Text.Encoding Utf8 = System.Text.Encoding.UTF8;
 
@@ -111,10 +108,8 @@ namespace PowerAudioManager
             }
             if (string.IsNullOrEmpty(text)) { r.Translation = ""; return r; }
 
-            // Normalize line endings to '\n' so Windows \r\n carriage returns never reach
-            // the API (and don't come back as '\r' in the JSON, which the hand-rolled
-            // decoder would otherwise render as a literal 'r' — the source of stray
-            // "r" / "-r" fragments on blank lines and lone "-" lines).
+            // 统一换行为 '\n'，避免 Windows \r\n 传到 API 后返回 JSON 中的 '\r' 被渲染为字面 'r'
+            // — 这是空行和单独 "-" 行出现残余 "r" / "-r" 片段的根源。
             text = text.Replace("\r\n", "\n").Replace("\r", "\n");
 
             var chunks = SplitIntoChunks(text, MaxChunkBytes);
@@ -123,10 +118,8 @@ namespace PowerAudioManager
                 return TranslateOnce(chunks[0], from, to, appId, key, instruction);
             }
 
-            // Translate each chunk and concatenate. Stop on first hard error.
-            // Chunks already carry their trailing separator (space/newline/punctuation),
-            // so the translated parts are concatenated directly — never forcing a newline
-            // where the original had a space (which produced stray fragments like "r -r r").
+            // 逐段翻译并拼接。首错即停。分段已保留尾部分隔符（空格/换行/标点），
+            // 直接拼接即可，不会在原文空格处强行插入换行（避免产生 "r -r r" 等残余片段）。
             var parts = new List<string>();
             string detected = null;
             for (int i = 0; i < chunks.Count; i++)
@@ -145,13 +138,9 @@ namespace PowerAudioManager
             return r;
         }
 
-        // Split text into chunks whose UTF-8 byte length is <= maxBytes. Each emitted chunk
-        // keeps the separator that followed it in the source (space, newline, punctuation),
-        // so translated chunks can be concatenated with "" and the original spacing survives.
-        // Breaks are chosen so a chunk NEVER ends in the middle of a word/identifier — it
-        // cuts at a whitespace or word-boundary, hard-wrapping only on CJK runs (where every
-        // character is a standalone unit) or an unsplittable single token. Never splits a
-        // UTF-16 surrogate pair.
+        // 将文本按 UTF-8 字节数分段（≤ maxBytes）。每段保留其后的分隔符，使译文可直接用 "" 拼接。
+        // 切分规则：绝不在单词/标识符中间截断，优先切在空白或单词边界。仅纯 CJK 或单个超长 token
+        // 才强制截断。不分割 UTF-16 代理对。
         static List<string> SplitIntoChunks(string text, int maxBytes)
         {
             var chunks = new List<string>();
@@ -161,10 +150,8 @@ namespace PowerAudioManager
                 return chunks;
             }
 
-            // Walk the whole text accumulating into `cur`; when adding the next token would
-            // exceed the byte budget, flush `cur` and start fresh. Tokens here are runs of
-            // non-newline characters; newlines are kept as their own tokens so paragraph
-            // structure is preserved across chunk boundaries.
+            // 遍历文本累积到 cur；若加入下一个 token 会超字节预算则刷出 cur。
+            // token 为非换行字符序列，换行符单独保留以维持段落结构。
             var cur = new System.Text.StringBuilder();
             foreach (var tok in TokenizeKeepNewlines(text))
             {
@@ -180,9 +167,8 @@ namespace PowerAudioManager
                     continue;
                 }
 
-                // A single token (e.g. one very long line) exceeds the budget on its own —
-                // break it into safe pieces. Emit complete pieces directly; keep the
-                // trailing remainder in `cur` so the next token can join it if it fits.
+                // 单个 token 超长 — 拆分为安全片段。完整片段直接输出，
+                // 尾部余量留在 cur 中以便与下一个 token 合并。
                 var pieces = SplitLongString(tok, maxBytes);
                 for (int i = 0; i < pieces.Count - 1; i++) chunks.Add(pieces[i]);
                 cur.Append(pieces[pieces.Count - 1]);
@@ -191,8 +177,6 @@ namespace PowerAudioManager
             return chunks;
         }
 
-        // Yield tokens that are either a single newline (kept verbatim) or a run of
-        // non-newline characters up to the next newline.
         static IEnumerable<string> TokenizeKeepNewlines(string text)
         {
             int start = 0;
@@ -208,17 +192,13 @@ namespace PowerAudioManager
             if (start < text.Length) yield return text.Substring(start);
         }
 
-        // A character that is part of an ascii word/identifier (letters, digits, hyphen,
-        // underscore, apostrophe). Used to avoid splitting a word/identifier in two.
         static bool IsWordChar(char ch)
         {
             return char.IsLetterOrDigit(ch) || ch == '-' || ch == '_' || ch == '\'';
         }
 
-        // Break a single long token (no newlines) into pieces each <= maxBytes UTF-8.
-        // Prefers cutting after whitespace, then after a word boundary, hard-wrapping only
-        // when the run is unsplittable (pure CJK or a single over-long token). Never cuts
-        // inside a UTF-16 surrogate pair.
+        // 拆分超长 token（无换行）为 ≤ maxBytes 的片段。优先切在空白后，其次单词边界。
+        // 仅在纯 CJK 或单个不可拆分 token 时强制截断。不分割 UTF-16 代理对。
         static List<string> SplitLongString(string s, int maxBytes)
         {
             var result = new List<string>();
@@ -227,8 +207,6 @@ namespace PowerAudioManager
             {
                 if (ByteLen(s.Substring(start)) <= maxBytes) { result.Add(s.Substring(start)); break; }
 
-                // Walk forward accumulating bytes until we hit the budget, never splitting a
-                // surrogate pair.
                 int i = start;
                 int bytes = 0;
                 while (i < s.Length)
@@ -239,8 +217,6 @@ namespace PowerAudioManager
                     bytes += add;
                     i += c;
                 }
-                // `i` is the first index that would overflow the budget. Choose a safe cut
-                // point `cut` in (start, i] so that we don't end mid-word.
                 int cut = ChooseSafeCut(s, start, i);
                 result.Add(s.Substring(start, cut - start));
                 start = cut;
@@ -248,27 +224,23 @@ namespace PowerAudioManager
             return result;
         }
 
-        // Pick the largest cut <= maxIdx that doesn't leave a word/identifier split in two.
-        // Preference: cut right after a whitespace char; otherwise cut at a word-boundary
-        // (where not both neighbours are word chars); otherwise hard-wrap at maxIdx (only
-        // happens for pure CJK runs or a single unsplittable token).
+        // 选择 ≤ maxIdx 的最大安全切点：优先切在空白之后，其次单词边界，
+        // 最后才在 maxIdx 强制截断（纯 CJK 或不可拆分 token）。
         static int ChooseSafeCut(string s, int start, int maxIdx)
         {
-            // 1) Last whitespace at or before maxIdx — cut just after it (keep the space).
+            // 1) 找 maxIdx 或之前最后一个空白，切在它之后（保留该空白）。
             for (int j = maxIdx; j > start; j--)
             {
                 if (char.IsWhiteSpace(s[j - 1])) return j;
             }
-            // 2) Last word-boundary at or before maxIdx: a position j where it is NOT the
-            //    case that both s[j-1] and s[j] are word chars (i.e. we're not slicing
-            //    through "over-r" -> "over" / "-r").
+            // 2) 找 maxIdx 或之前最后一个单词边界：j 处不能同时是单词字符（避免把 "over-r" 切成 "over" / "-r"）。
             for (int j = maxIdx; j > start; j--)
             {
                 bool left = j - 1 >= 0 && IsWordChar(s[j - 1]);
                 bool right = j < s.Length && IsWordChar(s[j]);
                 if (!(left && right)) return j;
             }
-            // 3) No safe boundary (single unsplittable token / pure CJK) — hard wrap.
+            // 3) 无安全边界（单个不可拆分 token / 纯 CJK）— 强制截断。
             return maxIdx;
         }
 
@@ -360,8 +332,6 @@ namespace PowerAudioManager
             return r;
         }
 
-        // Real JSON parsing via System.Text.Json — decodes all standard escapes,
-        // nested objects and arrays correctly.
         static JsonDocument ParseJson(string json)
         {
             if (string.IsNullOrEmpty(json)) return null;
@@ -383,8 +353,7 @@ namespace PowerAudioManager
             return null;
         }
 
-        // `result` is a single translated string in the AI translate response, but accept an
-        // array of strings (one per input line) and join them on newlines as a safety net.
+        // result 为 AI 翻译响应中的译文，兼容字符串和数组（按行拼接）。
         static string ExtractResult(JsonDocument d)
         {
             if (d == null) return null;
@@ -412,7 +381,7 @@ namespace PowerAudioManager
             return v.ToString();
         }
 
-        // Classic trans_result fallback: [{"src":"...","dst":"..."}, ...]
+        // 经典 trans_result 回退格式: [{"src":"...","dst":"..."}, ...]
         static List<string> ExtractDstList(JsonDocument d)
         {
             var list = new List<string>();

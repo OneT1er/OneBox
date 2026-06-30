@@ -18,8 +18,7 @@ namespace PowerAudioManager
 {
     public static class HotkeyCaptureDialog
     {
-        // Returns: high 16 bits = modifiers (bit0 Alt, bit1 Ctrl, bit2 Shift, bit3 Win),
-        //          low 16 bits = VK code. 0 = none.
+        // 返回值编码：高 16 位 = 修饰键（bit0=Alt, bit1=Ctrl, bit2=Shift, bit3=Win），低 16 位 = VK 码；0=无
         public static int? Show(Window owner, int currentEncoded)
         {
             int captured = currentEncoded;
@@ -59,7 +58,7 @@ namespace PowerAudioManager
                 if ((Keyboard.Modifiers & ModifierKeys.Control) != 0) mods |= 2;
                 if ((Keyboard.Modifiers & ModifierKeys.Shift) != 0) mods |= 4;
                 if ((Keyboard.Modifiers & ModifierKeys.Windows) != 0) mods |= 8;
-                if (mods == 0) return; // require at least one modifier
+                if (mods == 0) return; // 至少需要一个修饰键
                 int vk = KeyInterop.VirtualKeyFromKey(e.Key == Key.System ? e.SystemKey : e.Key);
                 if (vk == 0) return;
                 captured = (mods << 16) | (vk & 0xFFFF);
@@ -107,14 +106,14 @@ namespace PowerAudioManager
             AllowsTransparency = true;
             Background = new SolidColorBrush(Color.FromRgb(28, 26, 40));
             BuildUI();
-            // Restore last position
+            // 恢复上次窗口位置
             double sl, st, sw, sh;
             if (AppPrefs.GetDouble("Translate.Left", out sl) && AppPrefs.GetDouble("Translate.Top", out st)) { Left = sl; Top = st; }
             if (AppPrefs.GetDouble("Translate.Width", out sw) && sw > 300) Width = sw;
             if (AppPrefs.GetDouble("Translate.Height", out sh) && sh > 200) Height = sh;
             LocationChanged += (s, e) => { if (IsLoaded) { AppPrefs.SetDouble("Translate.Left", Left); AppPrefs.SetDouble("Translate.Top", Top); } };
             SizeChanged += (s, e) => { if (IsLoaded) { AppPrefs.SetDouble("Translate.Width", Width); AppPrefs.SetDouble("Translate.Height", Height); } };
-            // Recover from display config changes (4K -> 1080p, monitor unplug, DPI scale change).
+            // 从显示配置变更中恢复（4K→1080p、拔显示器、DPI 缩放变更）
             EventHandler displayHandler = (ss, ee) =>
             {
                 try { Dispatcher.BeginInvoke(new Action(ClampToWorkArea)); } catch { }
@@ -147,7 +146,7 @@ namespace PowerAudioManager
                     Top  = wa.Top  + Math.Max(0, (wa.Height - h) / 2);
                     return;
                 }
-                // Shrink the window if the new work area is smaller than its restored size.
+                // 新工作区比恢复尺寸更小时压缩窗口
                 if (w > wa.Width)  { Width  = wa.Width;  w = wa.Width; }
                 if (h > wa.Height) { Height = wa.Height; h = wa.Height; }
                 if (left + w > wa.Right)  left = wa.Right - w;
@@ -166,7 +165,6 @@ namespace PowerAudioManager
             rootGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             rootGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
 
-            // Custom title bar (OneBox style)
             var titleBar = new DockPanel {
                 Background = new SolidColorBrush(Color.FromRgb(34, 32, 50)),
                 Height = 36,
@@ -204,7 +202,6 @@ namespace PowerAudioManager
             grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             Grid.SetRow(grid, 1); rootGrid.Children.Add(grid);
 
-            // Top toolbar
             var bar = new DockPanel { Margin = new Thickness(0, 0, 0, 8), LastChildFill = false };
             _fromBox = MakeLangBox(true);
             _toBox = MakeLangBox(false);
@@ -226,7 +223,7 @@ namespace PowerAudioManager
             MainWindow.ApplyIconButtonStyle(_btnSettings);
             _btnSettings.Click += (s, e) =>
             {
-                SettingsDialog.Show(this, 3); // 翻译 tab
+                SettingsDialog.Show(this, 3);
                 if (_statusBlock != null) _statusBlock.Text = "已保存设置";
             };
             DockPanel.SetDock(_btnSettings, Dock.Right);
@@ -240,7 +237,6 @@ namespace PowerAudioManager
             };
             Grid.SetRow(_input, 1); grid.Children.Add(_input);
 
-            // Status / actions row
             var midBar = new DockPanel { Margin = new Thickness(0, 8, 0, 8), LastChildFill = true };
             _statusBlock = new TextBlock { Foreground = new SolidColorBrush(Color.FromRgb(190, 188, 220)), FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
             _btnCopy = new Button { Content = "复制译文", Width = 80, Height = 28, FontSize = 12 };
@@ -257,7 +253,6 @@ namespace PowerAudioManager
             var foot = new TextBlock { Text = "由百度翻译提供 · Ctrl+Enter 触发翻译 · Ctrl+Shift+T 全局翻译剪贴板", Foreground = new SolidColorBrush(Color.FromRgb(140, 138, 180)), FontSize = 10, Margin = new Thickness(0, 8, 0, 0), HorizontalAlignment = HorizontalAlignment.Center };
             Grid.SetRow(foot, 4); grid.Children.Add(foot);
 
-            // Outer border for visual finish
             var border = new Border {
                 BorderBrush = new SolidColorBrush(Color.FromRgb(80, 75, 120)),
                 BorderThickness = new Thickness(1),
@@ -310,7 +305,7 @@ namespace PowerAudioManager
                 saved = k == null ? null : (k.GetValue(isFrom ? "Translate.From" : "Translate.To") as string);
             int idx = 0;
             for (int i = 0; i < codes.Length; i++) if (codes[i][0] == saved) { idx = i; break; }
-            if (saved == null) idx = isFrom ? 0 : 0; // auto / zh
+            if (saved == null) idx = isFrom ? 0 : 0;
             cb.SelectedIndex = idx;
             cb.SelectionChanged += (s, e) => {
                 var item = cb.SelectedItem as ComboBoxItem;
@@ -329,8 +324,7 @@ namespace PowerAudioManager
             var tItem = _toBox.SelectedItem as ComboBoxItem;
             if (fItem == null || tItem == null) return;
             string fTag = fItem.Tag.ToString();
-            if (fTag == "auto") return; // cannot put auto on the right side
-            // Find matching items
+            if (fTag == "auto") return; // "自动检测"不能放在目标语言侧
             foreach (ComboBoxItem ci in _fromBox.Items) if ((ci.Tag as string) == tItem.Tag.ToString()) { _fromBox.SelectedItem = ci; break; }
             foreach (ComboBoxItem ci in _toBox.Items) if ((ci.Tag as string) == fTag) { _toBox.SelectedItem = ci; break; }
             if (!string.IsNullOrEmpty(_output.Text))
@@ -370,9 +364,8 @@ namespace PowerAudioManager
         }
     }
 
-    // Shared OneBox-style window shell: borderless, rounded, dark, with a custom
-    // title bar (drag handle + ✕ close) matching the floating window. Callers pass
-    // their content + a title; they get back a ready-to-ShowDialog() Window.
+    // 通用 OneBox 风格窗口外壳：无边框、圆角、深色背景、自定义标题栏（拖拽手柄 + 关闭按钮）。
+    // 调用方传入内容和标题，返回可直接 ShowDialog() 的 Window。
     static class OneBoxWindow
     {
         public static Window Create(Window owner, string title, double width, double height, UIElement body, bool resizable)
@@ -394,7 +387,7 @@ namespace PowerAudioManager
             rootGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             rootGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
 
-            // Rounded title bar matching the floating card (top corners r=10).
+            // 圆角标题栏，上圆角 r=10，匹配悬浮卡片
             var titleBarBorder = new Border {
                 CornerRadius = new CornerRadius(10, 10, 0, 0),
                 Background = new SolidColorBrush(Color.FromRgb(34, 32, 50)),
@@ -413,8 +406,7 @@ namespace PowerAudioManager
                 Foreground = fg, Background = Brushes.Transparent,
                 BorderBrush = Brushes.Transparent, Cursor = Cursors.Hand, ToolTip = "关闭"
             };
-            // MD's Button style (MinWidth=88/MinHeight=36 + padding) would clip the
-            // icon in this 36x36 slot; ApplyIconButtonStyle neutralises those.
+            // MD 按钮样式的 MinWidth/MinHeight 会裁剪此 36x36 槽位中的图标；ApplyIconButtonStyle 禁用这些限制
             MainWindow.ApplyIconButtonStyle(closeBtn);
             closeBtn.Click += (s, e) => dlg.Close();
             DockPanel.SetDock(closeBtn, Dock.Right);
@@ -426,7 +418,7 @@ namespace PowerAudioManager
 
             Grid.SetRow(body, 1); rootGrid.Children.Add(body);
 
-            // Outer rounded border + dark fill; bottom corners round to match.
+            // 外边框圆角 + 深色填充，底部圆角也匹配
             var border = new Border {
                 CornerRadius = new CornerRadius(10),
                 BorderBrush = new SolidColorBrush(Color.FromRgb(80, 75, 120)),

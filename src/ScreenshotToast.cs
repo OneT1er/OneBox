@@ -10,10 +10,8 @@ using System.Windows.Threading;
 
 namespace PowerAudioManager
 {
-    // Steam-style bottom-right screenshot notification: a borderless rounded
-    // dark card showing the app name + thumbnail + saved path + an "open folder"
-    // button. Auto-fades after ~3.5s; click to dismiss. Uses WS_EX_NOACTIVATE so
-    // it never steals focus from the just-screenshot game/app.
+    // Steam 风格右下角截图通知：无边框圆角深色卡片，显示应用名+缩略图+路径+"打开文件夹"按钮。
+    // 约 3.5s 后自动淡出，点击可关闭。使用 WS_EX_NOACTIVATE 不抢焦点。
     internal static class ScreenshotToast
     {
         static Window _current;
@@ -30,7 +28,6 @@ namespace PowerAudioManager
 
         static void ShowInternal(string appName, string path, string source, string error)
         {
-            // Only one toast at a time.
             if (_current != null) { try { _current.Close(); } catch { } _current = null; }
 
             var dlg = new Window
@@ -47,7 +44,6 @@ namespace PowerAudioManager
                 ShowActivated = false
             };
 
-            // Card
             var card = new Border
             {
                 CornerRadius = new CornerRadius(10),
@@ -62,7 +58,6 @@ namespace PowerAudioManager
 
             var stack = new StackPanel();
 
-            // Title row
             string srcTag = string.IsNullOrEmpty(source) ? "" : " · " + source;
             var title = new TextBlock
             {
@@ -86,9 +81,6 @@ namespace PowerAudioManager
             }
             else
             {
-                // Thumbnail + path row
-                // Centered thumbnail (no path text — the open-folder button is
-                // enough; the full path is in OneBox.log if ever needed).
                 BitmapSource thumb = ScreenshotService.LoadThumbnail(path, 160, 160);
                 if (thumb != null)
                 {
@@ -103,7 +95,6 @@ namespace PowerAudioManager
                     stack.Children.Add(img);
                 }
 
-                // Open-folder button (centered)
                 var openBtn = new Button
                 {
                     Content = "打开文件夹",
@@ -124,13 +115,12 @@ namespace PowerAudioManager
             card.Child = stack;
             dlg.Content = card;
 
-            // Position at bottom-right of the primary screen work area.
             dlg.Loaded += (s, e) =>
             {
                 var wa = SystemParameters.WorkArea;
                 dlg.Left = wa.Right - dlg.ActualWidth - 16;
                 dlg.Top = wa.Bottom - dlg.ActualHeight - 12;
-                // WS_EX_NOACTIVATE so the toast doesn't steal focus.
+                // WS_EX_NOACTIVATE 防止 toast 抢焦点。
                 try
                 {
                     var hwnd = new System.Windows.Interop.WindowInteropHelper(dlg).Handle;
@@ -139,7 +129,7 @@ namespace PowerAudioManager
                 }
                 catch { }
 
-                // Fade in then schedule fade-out.
+                // 淡入 → 定时淡出。
                 dlg.Opacity = 0;
                 var fadeIn = new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(180));
                 dlg.BeginAnimation(UIElement.OpacityProperty, fadeIn);
