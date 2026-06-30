@@ -89,7 +89,8 @@ namespace PowerAudioManager
         public static string Enable(AutoStartMethod method)
         {
             // Always clean up the other methods first so only one is active.
-            DisableAll();
+            string cleanErr = DisableAll();
+            if (cleanErr != null) return cleanErr;
 
             string err;
             switch (method)
@@ -107,8 +108,7 @@ namespace PowerAudioManager
 
         public static string Disable()
         {
-            try { DisableAll(); return null; }
-            catch (Exception ex) { return ex.Message; }
+            return DisableAll();
         }
 
         // ----- Registry ---------------------------------------------------
@@ -167,20 +167,29 @@ namespace PowerAudioManager
             catch (Exception ex) { return $"计划任务创建失败: {ex.Message}"; }
         }
 
-        static void DisableTask()
+        static string DisableTask()
         {
             try
             {
+                if (!IsTaskInstalled()) return null;
                 var psi = new ProcessStartInfo
                 {
                     FileName = "schtasks.exe",
                     Arguments = $"/delete /tn \"{TaskName}\" /f",
-                    UseShellExecute = false,
+                    UseShellExecute = true,
+                    Verb = "runas", // task was created with /rl highest → needs admin to delete
                     CreateNoWindow = true
                 };
-                using (var p = Process.Start(psi)) { p?.WaitForExit(5000); }
+                using (var p = Process.Start(psi))
+                {
+                    p?.WaitForExit(10000);
+                    if (p?.ExitCode != 0) return $"计划任务删除失败 (exit={p?.ExitCode})";
+                }
+                return null;
             }
-            catch { }
+            catch (System.ComponentModel.Win32Exception ex) when (ex.NativeErrorCode == 1223)
+            { return "已取消 UAC（删除计划任务需要管理员授权）"; }
+            catch (Exception ex) { return $"计划任务删除失败: {ex.Message}"; }
         }
 
         // ----- Service ----------------------------------------------------
@@ -240,11 +249,12 @@ namespace PowerAudioManager
             catch (Exception ex) { return $"服务安装失败: {ex.Message}"; }
         }
 
-        static void DisableService()
+        static string DisableService()
         {
             try
             {
-                // Stop and delete the service.
+                if (!IsServiceInstalled()) return null;
+                // Stop first, then delete.
                 using (var sc = new ServiceController(ServiceName))
                 {
                     try { if (sc.Status == ServiceControllerStatus.Running) { sc.Stop(); sc.WaitForStatus(ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(10)); } }
@@ -262,18 +272,29 @@ namespace PowerAudioManager
                     Verb = "runas",
                     CreateNoWindow = true
                 };
-                using (var p = Process.Start(psi)) { p?.WaitForExit(5000); }
+                using (var p = Process.Start(psi))
+                {
+                    p?.WaitForExit(10000);
+                    if (p?.ExitCode != 0) return $"服务删除失败 (exit={p?.ExitCode})";
+                }
+                return null;
             }
-            catch { }
+            catch (System.ComponentModel.Win32Exception ex) when (ex.NativeErrorCode == 1223)
+            { return "已取消 UAC（删除服务需要管理员授权）"; }
+            catch (Exception ex) { return $"服务删除失败: {ex.Message}"; }
         }
 
         // ----- Helpers ----------------------------------------------------
 
-        static void DisableAll()
+        /// <summary>Remove all auto-start methods. Returns the first error, or null.</summary>
+        static string DisableAll()
         {
-            DisableRegistry();
-            DisableTask();
-            DisableService();
+            string err = DisableService();
+            if (err != null) return err;
+            err = DisableTask();
+            if (err != null) return err;
+            DisableRegistry(); // never fails (no UAC needed)
+            return null;
         }
     }
 }
