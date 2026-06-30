@@ -1,4 +1,5 @@
 using System;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.ServiceProcess;
@@ -85,9 +86,50 @@ namespace PowerAudioManager
 
         // ----- Enable / Disable -------------------------------------------
 
+        /// <summary>Called by the elevated --elevate-autostart helper process.
+        /// Applies the change with full admin rights and returns.</summary>
+        public static string ApplyAutoStart(AutoStartMethod method)
+        {
+            return Enable(method); // runs as admin, so UAC-heavy ops will succeed
+        }
+
+        // Launch a brief elevated OneBox.exe process to apply an auto-start
+        // change that needs admin (schtasks /rl highest, sc create/delete).
+        // The UAC dialog shows "OneBox" since we launch ourselves with runas.
+        static string LaunchElevatedHelper(int methodInt)
+        {
+            try
+            {
+                var psi = new ProcessStartInfo
+                {
+                    FileName = Environment.ProcessPath,
+                    Arguments = $"--elevate-autostart {methodInt}",
+                    Verb = "runas",
+                    UseShellExecute = true
+                };
+                Process.Start(psi);
+                return null; // the elevated process will handle it
+            }
+            catch (Win32Exception ex) when (ex.NativeErrorCode == 1223)
+            { return "已取消 UAC 授权"; }
+            catch (Exception ex) { return $"提权失败: {ex.Message}"; }
+        }
+
         /// <summary>Enable one method. Returns null on success, error string on failure.</summary>
         public static string Enable(AutoStartMethod method)
         {
+            // If the operation (enable + cleanup) needs admin and we don't have it,
+            // launch a brief elevated OneBox.exe helper.  UAC shows "OneBox".
+            if (!AdminUtils.IsAdmin())
+            {
+                bool needElevate = method == AutoStartMethod.ScheduledTask
+                                || method == AutoStartMethod.Service
+                                || IsTaskInstalled()
+                                || IsServiceInstalled();
+                if (needElevate)
+                    return LaunchElevatedHelper((int)method);
+            }
+
             // Always clean up the other methods first so only one is active.
             string cleanErr = DisableAll();
             if (cleanErr != null) return cleanErr;
@@ -144,14 +186,16 @@ namespace PowerAudioManager
 
         static string EnableTask()
         {
+            if (!AdminUtils.IsAdmin())
+                return LaunchElevatedHelper((int)AutoStartMethod.ScheduledTask);
+
             try
             {
                 var psi = new ProcessStartInfo
                 {
                     FileName = "schtasks.exe",
                     Arguments = $"/create /tn \"{TaskName}\" /tr \"\\\"{ExePath}\\\"\" /sc onlogon /rl highest /f",
-                    UseShellExecute = true, // needs admin for /rl highest → triggers UAC once
-                    Verb = "runas",
+                    UseShellExecute = false,
                     CreateNoWindow = true
                 };
                 using (var p = Process.Start(psi))
@@ -162,8 +206,6 @@ namespace PowerAudioManager
                 AppLog.Log("AutoStart", "task enabled");
                 return null;
             }
-            catch (System.ComponentModel.Win32Exception ex) when (ex.NativeErrorCode == 1223)
-            { return "已取消 UAC（计划任务需要一次管理员授权）"; }
             catch (Exception ex) { return $"计划任务创建失败: {ex.Message}"; }
         }
 
@@ -176,8 +218,7 @@ namespace PowerAudioManager
                 {
                     FileName = "schtasks.exe",
                     Arguments = $"/delete /tn \"{TaskName}\" /f",
-                    UseShellExecute = true,
-                    Verb = "runas", // task was created with /rl highest → needs admin to delete
+                    UseShellExecute = false,
                     CreateNoWindow = true
                 };
                 using (var p = Process.Start(psi))
@@ -187,8 +228,6 @@ namespace PowerAudioManager
                 }
                 return null;
             }
-            catch (System.ComponentModel.Win32Exception ex) when (ex.NativeErrorCode == 1223)
-            { return "已取消 UAC（删除计划任务需要管理员授权）"; }
             catch (Exception ex) { return $"计划任务删除失败: {ex.Message}"; }
         }
 
@@ -198,6 +237,9 @@ namespace PowerAudioManager
 
         static string EnableService()
         {
+            if (!AdminUtils.IsAdmin())
+                return LaunchElevatedHelper((int)AutoStartMethod.Service);
+
             try
             {
                 // 1) Create the service
@@ -205,8 +247,7 @@ namespace PowerAudioManager
                 {
                     FileName = "sc.exe",
                     Arguments = $"create \"{ServiceName}\" binPath= \"\\\"{ExePath}\\\" --service\" start= auto",
-                    UseShellExecute = true,
-                    Verb = "runas",
+                    UseShellExecute = false,
                     CreateNoWindow = true
                 };
                 using (var p = Process.Start(create))
@@ -215,7 +256,7 @@ namespace PowerAudioManager
                     if (p?.ExitCode != 0)
                     {
                         AppLog.Log("AutoStart", $"sc create exit={p?.ExitCode}");
-                        return $"服务创建失败 (exit={p?.ExitCode})。可能需要管理员权限。";
+                        return $"服务创建失败 (exit={p?.ExitCode})。";
                     }
                 }
                 // 2) Set description
@@ -254,7 +295,6 @@ namespace PowerAudioManager
             try
             {
                 if (!IsServiceInstalled()) return null;
-                // Stop first, then delete.
                 using (var sc = new ServiceController(ServiceName))
                 {
                     try { if (sc.Status == ServiceControllerStatus.Running) { sc.Stop(); sc.WaitForStatus(ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(10)); } }
@@ -268,8 +308,7 @@ namespace PowerAudioManager
                 {
                     FileName = "sc.exe",
                     Arguments = $"delete \"{ServiceName}\"",
-                    UseShellExecute = true,
-                    Verb = "runas",
+                    UseShellExecute = false,
                     CreateNoWindow = true
                 };
                 using (var p = Process.Start(psi))
@@ -279,8 +318,6 @@ namespace PowerAudioManager
                 }
                 return null;
             }
-            catch (System.ComponentModel.Win32Exception ex) when (ex.NativeErrorCode == 1223)
-            { return "已取消 UAC（删除服务需要管理员授权）"; }
             catch (Exception ex) { return $"服务删除失败: {ex.Message}"; }
         }
 

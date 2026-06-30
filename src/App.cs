@@ -47,6 +47,21 @@ namespace PowerAudioManager
                 return;
             }
 
+            // --elevate-autostart <method>: brief elevated helper that applies an
+            // auto-start change (needs admin for schtasks / sc) then exits.  The
+            // non-admin GUI instance launches this so the UAC dialog shows OneBox.
+            if (args.Length > 1 && args[0] == "--elevate-autostart")
+            {
+                if (int.TryParse(args[1], out int m) && m >= 0 && m <= 3)
+                {
+                    var method = (PowerAudioManager.AutoStartMethod)m;
+                    string err = PowerAudioManager.AutoStartService.ApplyAutoStart(method);
+                    if (err != null)
+                        System.Windows.MessageBox.Show(err, "OneBox 开机自启", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Warning);
+                }
+                return;
+            }
+
             // Warm up the memory PerformanceCounters on a background thread ASAP.
             // Constructing them takes ~5s on .NET 8 cold start and GetStatus() runs on
             // the UI thread, so starting this before the window builds keeps startup
