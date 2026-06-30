@@ -51,6 +51,11 @@ namespace PowerAudioManager
         {
             try
             {
+                // Release single-instance locks before launching the elevated copy.
+                // Otherwise the new instance sees the Mutex, signals us, exits — and
+                // then we shut down too, leaving zero instances running.
+                App.ReleaseSingleInstance();
+
                 var psi = new System.Diagnostics.ProcessStartInfo {
                     FileName = Environment.ProcessPath,
                     Verb = "runas",

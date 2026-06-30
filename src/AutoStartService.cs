@@ -69,7 +69,17 @@ namespace PowerAudioManager
 
         static bool IsServiceInstalled()
         {
-            try { using (var sc = new ServiceController(ServiceName)) { return sc != null; } }
+            try
+            {
+                using (var sc = new ServiceController(ServiceName))
+                {
+                    // The constructor does NOT throw for non-existent services.
+                    // Touching any property (e.g. Status) forces a handle open and
+                    // throws InvalidOperationException if the service is absent.
+                    var _ = sc.Status;
+                    return true;
+                }
+            }
             catch { return false; }
         }
 

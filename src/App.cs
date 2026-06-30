@@ -19,6 +19,14 @@ namespace PowerAudioManager
         static System.Threading.Mutex _singleInstance;
         static System.Threading.EventWaitHandle _activateEvent;
 
+        // Called by AdminUtils.RestartAsAdmin() before spawning the elevated process
+        // so the new instance becomes the owner instead of bailing on the stale mutex.
+        public static void ReleaseSingleInstance()
+        {
+            try { _singleInstance?.Dispose(); _singleInstance = null; } catch { }
+            try { _activateEvent?.Dispose(); _activateEvent = null; } catch { }
+        }
+
         [STAThread]
         public static void Main(string[] args)
         {
