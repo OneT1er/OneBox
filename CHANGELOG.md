@@ -1,10 +1,18 @@
 # 更新日志
 
+## v1.4.2 Hotfix (2026-06-30)
+
+### 修复
+- **开机自启检测**：`ServiceController` 构造函数对不存在的服务不抛异常，改为读 `Status` 属性验证
+- **提权重启**：`RestartAsAdmin` 启动新实例前释放单实例 Mutex/EventWaitHandle
+- **自启切换**：`DisableAll` 返回错误不再静默；清理失败时拒绝启用新方式，下拉框回滚
+- **UAC 品牌**：需要管理员权限时启动 `OneBox.exe --elevate-autostart` 提权 helper，UAC 对话框显示 OneBox 而非系统程序名
+
 ## v1.4.1 (2026-06-30)
 
 ### 修复
 - **开机自启检测**：`ServiceController` 构造函数对不存在的服务不抛异常，改为读 `Status` 属性验证
-- **提权重启**：`RestartAsAdmin` 启动新实例前释放单实例 Mutex/EventWaitHandle，避免新旧实例互相冲突双双退出
+- **提权重启**：`RestartAsAdmin` 启动新实例前释放单实例 Mutex/EventWaitHandle
 
 ## v1.4.0 (2026-06-30)
 
