@@ -20,7 +20,8 @@ namespace PowerAudioManager
         [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
         [DllImport("kernel32.dll")] static extern uint WaitForSingleObject(IntPtr hHandle, uint dwMilliseconds);
         [DllImport("kernel32.dll")] static extern bool GetExitCodeProcess(IntPtr hProcess, out uint lpExitCode);
-        [DllImport("advapi32.dll", SetLastError = true)] static extern bool CreateProcessAsUser(IntPtr hToken, string lpApplicationName, string lpCommandLine, IntPtr lpProcessAttributes, IntPtr lpThreadAttributes, bool bInheritHandles, uint dwCreationFlags, IntPtr lpEnvironment, string lpCurrentDirectory, ref STARTUPINFO lpStartupInfo, out PROCESS_INFORMATION lpProcessInformation);
+        [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+        static extern bool CreateProcessAsUser(IntPtr hToken, string lpApplicationName, string lpCommandLine, IntPtr lpProcessAttributes, IntPtr lpThreadAttributes, bool bInheritHandles, uint dwCreationFlags, IntPtr lpEnvironment, string lpCurrentDirectory, ref STARTUPINFO lpStartupInfo, out PROCESS_INFORMATION lpProcessInformation);
         [DllImport("userenv.dll", SetLastError = true)] static extern bool CreateEnvironmentBlock(out IntPtr lpEnvironment, IntPtr hToken, bool bInherit);
         [DllImport("userenv.dll", SetLastError = true)] static extern bool DestroyEnvironmentBlock(IntPtr lpEnvironment);
         [DllImport("advapi32.dll", SetLastError = true)] static extern bool DuplicateTokenEx(IntPtr hExistingToken, uint dwDesiredAccess, IntPtr lpTokenAttributes, int ImpersonationLevel, int TokenType, out IntPtr phNewToken);
@@ -124,8 +125,11 @@ namespace PowerAudioManager
 
                 var exe = Environment.ProcessPath;
                 var exeDir = System.IO.Path.GetDirectoryName(exe);
-                AppLog.Log("Service", $"launching OneBox exe={exe}");
-                if (!CreateProcessAsUser(token, exe, null,
+                // --service-launched 告诉 GUI 它由服务启动，应在 Main() 中自动提权。
+                // lpApplicationName=null + 完整命令行（含 exe 路径 + 参数）更稳健。
+                string cmdLine = $"\"{exe}\" --service-launched";
+                AppLog.Log("Service", $"launching: {cmdLine}");
+                if (!CreateProcessAsUser(token, null, cmdLine,
                     IntPtr.Zero, IntPtr.Zero, false,
                     CREATE_UNICODE_ENVIRONMENT, env, exeDir, ref si, out var pi))
                 {
