@@ -189,7 +189,17 @@ namespace PowerAudioManager
                         // 恢复到实际当前状态
                         autoStartCb.SelectedIndex = (int)AutoStartService.GetCurrent();
                     }
-                    else if (mw != null && mw._tray != null) mw._tray.UpdateAutoStart();
+                    else if (mw != null && mw._tray != null)
+                    {
+                        mw._tray.UpdateAutoStart();
+                        // 服务/计划任务方式需要管理员权限;若非管理员则立即提权重启
+                        if ((newMethod == AutoStartMethod.Service || newMethod == AutoStartMethod.ScheduledTask)
+                            && !AdminUtils.IsAdmin())
+                        {
+                            AdminUtils.RestartAsAdmin();
+                            return;
+                        }
+                    }
                 }
                 if (mw != null)
                 {

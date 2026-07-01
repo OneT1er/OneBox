@@ -60,11 +60,18 @@ namespace PowerAudioManager
                         // 开启自启：使用上次选用的方式（默认注册表）
                         var last = AppPrefs.GetInt("AutoStart.LastMethod", 1);
                         if (last < 1 || last > 3) last = 1;
-                        string err = AutoStartService.Enable((AutoStartMethod)last);
+                        var method = (AutoStartMethod)last;
+                        string err = AutoStartService.Enable(method);
                         if (err != null)
                         {
                             System.Windows.MessageBox.Show(err, "开机自启", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Warning);
                             autoItem.Checked = false;
+                        }
+                        // 服务/计划任务需要管理员权限;若未提权则立即重启为管理员
+                        else if ((method == AutoStartMethod.Service || method == AutoStartMethod.ScheduledTask)
+                            && !AdminUtils.IsAdmin())
+                        {
+                            AdminUtils.RestartAsAdmin();
                         }
                     }
                     else
