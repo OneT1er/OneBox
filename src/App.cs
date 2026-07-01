@@ -45,29 +45,6 @@ namespace PowerAudioManager
                 return;
             }
 
-            // --service-launched: 由 OneBoxSvc 在用户登录时启动。
-            // 服务以 SYSTEM 运行但 CreateProcessAsUser 用用户 token，GUI 是普通权限。
-            // 若当前非管理员则提权重启（UAC 弹窗一次），确保服务方式启动即获管理员权限。
-            if (args.Length > 0 && args[0] == "--service-launched")
-            {
-                AppLog.Log("Main", "service-launched, admin=" + AdminUtils.IsAdmin());
-                if (!AdminUtils.IsAdmin())
-                {
-                    try
-                    {
-                        ReleaseSingleInstance();
-                        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
-                        {
-                            FileName = Environment.ProcessPath,
-                            Verb = "runas",
-                            UseShellExecute = true
-                        });
-                    }
-                    catch { }
-                    return;
-                }
-            }
-
             // --elevate-autostart <method>: 提权辅助进程，应用开机自启设置（schtasks/sc 需管理员权限）后退出。
             // 非管理员 GUI 实例启动它，使 UAC 对话框显示 OneBox 名称。
             if (args.Length > 1 && args[0] == "--elevate-autostart")

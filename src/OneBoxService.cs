@@ -25,11 +25,13 @@ namespace PowerAudioManager
         [DllImport("userenv.dll", SetLastError = true)] static extern bool CreateEnvironmentBlock(out IntPtr lpEnvironment, IntPtr hToken, bool bInherit);
         [DllImport("userenv.dll", SetLastError = true)] static extern bool DestroyEnvironmentBlock(IntPtr lpEnvironment);
         [DllImport("advapi32.dll", SetLastError = true)] static extern bool DuplicateTokenEx(IntPtr hExistingToken, uint dwDesiredAccess, IntPtr lpTokenAttributes, int ImpersonationLevel, int TokenType, out IntPtr phNewToken);
+        [DllImport("advapi32.dll", SetLastError = true)] static extern bool GetTokenInformation(IntPtr TokenHandle, int TokenInformationClass, IntPtr TokenInformation, int TokenInformationLength, out int ReturnLength);
 
         const uint MAXIMUM_ALLOWED = 0x02000000;
         const uint CREATE_UNICODE_ENVIRONMENT = 0x00000400;
         const int SecurityImpersonation = 2;
         const int TokenPrimary = 1;
+        const int TokenLinkedToken = 19;  // 用户的 UAC 提权令牌（管理员才有）
         const int WTS_CONNECTSTATE_ACTIVE = 0;
         const int WTS_CONNECTSTATE_CONNECTED = 1;
 
@@ -93,16 +95,50 @@ namespace PowerAudioManager
                 { AppLog.Log("Service", "WTSQueryUserToken failed"); return; }
                 try
                 {
-                    // 复制为主 token：WTSQueryUserToken 返回的 token 可能受限，
-                    // DuplicateTokenEx 确保有完整权限用于 CreateProcessAsUser。
-                    if (!DuplicateTokenEx(userToken, MAXIMUM_ALLOWED, IntPtr.Zero,
-                        SecurityImpersonation, TokenPrimary, out var dupToken) || dupToken == IntPtr.Zero)
-                    { AppLog.Log("Service", "DuplicateTokenEx failed"); return; }
-                    try
+                    // 获取用户的 UAC 提权令牌（TokenLinkedToken）。
+                    // 管理员用户有过滤令牌（普通权限）和链接令牌（完整管理员）。
+                    // SYSTEM 服务可直接使用链接令牌启动进程，无需 UAC 弹窗。
+                    IntPtr adminToken = IntPtr.Zero;
+                    int infoLen = 0;
+                    GetTokenInformation(userToken, TokenLinkedToken, IntPtr.Zero, 0, out infoLen);
+                    if (infoLen > 0)
                     {
-                        LaunchWithToken(dupToken);
+                        IntPtr buf = Marshal.AllocHGlobal(infoLen);
+                        try
+                        {
+                            if (GetTokenInformation(userToken, TokenLinkedToken, buf, infoLen, out _))
+                            {
+                                adminToken = Marshal.ReadIntPtr(buf);
+                                // 复制为主令牌供 CreateProcessAsUser 使用
+                                if (!DuplicateTokenEx(adminToken, MAXIMUM_ALLOWED, IntPtr.Zero,
+                                    SecurityImpersonation, TokenPrimary, out var dup))
+                                { AppLog.Log("Service", "DuplicateTokenEx(admin) failed"); }
+                                else
+                                {
+                                    CloseHandle(adminToken);
+                                    adminToken = dup;
+                                }
+                            }
+                        }
+                        finally { Marshal.FreeHGlobal(buf); }
                     }
-                    finally { CloseHandle(dupToken); }
+
+                    if (adminToken != IntPtr.Zero)
+                    {
+                        AppLog.Log("Service", "using elevated admin token (no UAC)");
+                        try { LaunchWithToken(adminToken); }
+                        finally { CloseHandle(adminToken); }
+                    }
+                    else
+                    {
+                        // 回退：用户不是管理员，用普通 token
+                        AppLog.Log("Service", "no admin token, using user token");
+                        if (!DuplicateTokenEx(userToken, MAXIMUM_ALLOWED, IntPtr.Zero,
+                            SecurityImpersonation, TokenPrimary, out var dupToken) || dupToken == IntPtr.Zero)
+                        { AppLog.Log("Service", "DuplicateTokenEx failed"); return; }
+                        try { LaunchWithToken(dupToken); }
+                        finally { CloseHandle(dupToken); }
+                    }
                 }
                 finally { CloseHandle(userToken); }
             }
@@ -125,11 +161,8 @@ namespace PowerAudioManager
 
                 var exe = Environment.ProcessPath;
                 var exeDir = System.IO.Path.GetDirectoryName(exe);
-                // --service-launched 告诉 GUI 它由服务启动，应在 Main() 中自动提权。
-                // lpApplicationName=null + 完整命令行（含 exe 路径 + 参数）更稳健。
-                string cmdLine = $"\"{exe}\" --service-launched";
-                AppLog.Log("Service", $"launching: {cmdLine}");
-                if (!CreateProcessAsUser(token, null, cmdLine,
+                AppLog.Log("Service", $"launching: {exe}");
+                if (!CreateProcessAsUser(token, null, $"\"{exe}\"",
                     IntPtr.Zero, IntPtr.Zero, false,
                     CREATE_UNICODE_ENVIRONMENT, env, exeDir, ref si, out var pi))
                 {
