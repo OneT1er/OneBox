@@ -1,5 +1,19 @@
 # 更新日志
 
+## v1.4.3 (2026-07-01)
+
+### 修复
+- **开机自启服务零 UAC 提权**：服务通过 `TokenLinkedToken` 获取用户的管理员令牌，`CreateProcessAsUser` 直接以管理员权限启动 GUI，无需 UAC 弹窗
+- **服务主动扫描会话**：`OnStart` 中枚举已登录会话并启动 GUI，解决服务重启后不触发 `OnSessionChange` 的问题
+- **修复 `lpDesktop` 导致 0xC0000142**：移除 `STARTUPINFO.lpDesktop = "winsta0\default"`，该设置导致所有通过服务启动的进程因 `STATUS_DLL_INIT_FAILED` 崩溃
+- **退出码诊断**：`LaunchWithToken` 等待 8 秒检测进程退出码，便于定位启动失败原因
+- **`EnableService` 错误传播**：`sc.Start()` 失败时返回错误而非假成功
+- **托盘禁用失败回滚**：`Disable()` 失败时弹框报错并回滚勾选状态
+- **Main 早期日志**：进程启动第一行即记录，用于诊断开机自启中 GUI 静默消失
+
+### 变更
+- 选服务/计划任务自启后若当前非管理员则立即提权重启
+
 ## v1.4.2 Hotfix (2026-06-30)
 
 ### 修复

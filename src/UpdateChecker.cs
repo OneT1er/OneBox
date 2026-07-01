@@ -29,7 +29,7 @@ namespace PowerAudioManager
         public const string Owner = "OneT1er";
         public const string Repo = "OneBox";
         // 发版时升级此值，需与 GitHub release tag 一致。
-        public static readonly Version CurrentVersion = new Version(1, 4, 2);
+        public static readonly Version CurrentVersion = new Version(1, 4, 3);
 
         const string ApiUrl = $"https://api.github.com/repos/{Owner}/{Repo}/releases/latest";
         const string ReleasesPage = $"https://github.com/{Owner}/{Repo}/releases/latest";
