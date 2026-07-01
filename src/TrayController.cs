@@ -69,7 +69,12 @@ namespace PowerAudioManager
                     }
                     else
                     {
-                        AutoStartService.Disable();
+                        string err = AutoStartService.Disable();
+                        if (err != null)
+                        {
+                            System.Windows.MessageBox.Show(err, "开机自启", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Warning);
+                            autoItem.Checked = true; // 回滚勾选：禁用失败，自启实际仍在生效
+                        }
                     }
                 };
                 _menu.Items.Add(autoItem);

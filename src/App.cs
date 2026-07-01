@@ -29,6 +29,9 @@ namespace PowerAudioManager
         [STAThread]
         public static void Main(string[] args)
         {
+            // 尽早记录进程启动（含参数），用于诊断开机自启中 GUI 静默消失等早期故障。
+            AppLog.Log("Main", args.Length > 0 ? $"start args=[{string.Join(", ", args)}]" : "start (no args)");
+
             // .NET 8 默认仅支持 ASCII/UTF-8/UTF-16；936 (GBK) 等代码页在
             // 未注册提供程序时会抛 NotSupportedException。powercfg OEM 输出和
             // 升级脚本依赖 GBK，必须在所有 Encoding 调用前注册。
@@ -64,6 +67,7 @@ namespace PowerAudioManager
             if (System.Threading.Mutex.TryOpenExisting("Local\\OneBox-SingleInstance", out var _existingMutex))
             {
                 _existingMutex.Dispose();
+                AppLog.Log("Main", "existing instance found, sending activate signal");
                 try
                 {
                     using (var ev = System.Threading.EventWaitHandle.OpenExisting("Local\\OneBox-Activate"))

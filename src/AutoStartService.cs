@@ -266,7 +266,11 @@ namespace PowerAudioManager
                         sc.WaitForStatus(ServiceControllerStatus.Running, TimeSpan.FromSeconds(10));
                     }
                 }
-                catch (Exception ex) { AppLog.Log("AutoStart", $"svc start: {ex.Message}"); }
+                catch (Exception ex)
+                {
+                    AppLog.Log("AutoStart", $"svc start: {ex.Message}");
+                    return $"服务启动失败: {ex.Message}";
+                }
                 AppLog.Log("AutoStart", "service enabled");
                 return null;
             }
