@@ -1086,10 +1086,7 @@ namespace PowerAudioManager
         void StartTempMonitor()
         {
             if (!ModuleVisible("Temp")) return;
-            var hw = HardwareMonitorService.Instance;
-            hw.CpuSensorName = AppPrefs.GetString("Temp.CpuSensor", "");
-            hw.GpuSensorName = AppPrefs.GetString("Temp.GpuSensor", "");
-            hw.Start();
+            HardwareMonitorService.Instance.Start();
             StartTempTimer();
         }
 
@@ -1110,10 +1107,7 @@ namespace PowerAudioManager
         {
             try { _tempTimer?.Dispose(); } catch { }
             if (!ModuleVisible("Temp")) return;
-            var hw = HardwareMonitorService.Instance;
-            hw.CpuSensorName = AppPrefs.GetString("Temp.CpuSensor", "");
-            hw.GpuSensorName = AppPrefs.GetString("Temp.GpuSensor", "");
-            hw.Start();
+            HardwareMonitorService.Instance.Start();
             StartTempTimer();
         }
 

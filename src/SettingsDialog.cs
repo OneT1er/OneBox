@@ -4,6 +4,7 @@ using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using LibreHardwareMonitor.Hardware;
 
 namespace PowerAudioManager
 {
@@ -806,36 +807,31 @@ namespace PowerAudioManager
             var stack = new StackPanel { Margin = new Thickness(20) };
             var hw = HardwareMonitorService.Instance;
 
-            stack.Children.Add(new TextBlock { Text = "性能监控", Foreground = Brushes.White, FontWeight = FontWeights.SemiBold, FontSize = 13, Margin = new Thickness(0, 0, 0, 12) });
+            stack.Children.Add(new TextBlock { Text = "性能监控", Foreground = Brushes.White, FontWeight = FontWeights.SemiBold, FontSize = 13, Margin = new Thickness(0, 0, 0, 10) });
 
-            // ---- 显示指标 ----
-            stack.Children.Add(new TextBlock { Text = "悬浮窗显示的指标", Foreground = Brushes.White, FontSize = 12, Margin = new Thickness(0, 0, 0, 6) });
+            // ---- 当前指标列表 ----
+            var metricList = new StackPanel(); // 动态填充
+            RefreshMetricList(metricList, hw, fg);
 
-            var cbCpuTemp  = MakeMetricCb("🌡 CPU 温度",       "Monitor.ShowCpuTemp", true);
-            var cbGpuTemp  = MakeMetricCb("🎮 GPU 温度",       "Monitor.ShowGpuTemp", true);
-            var cbGpuHS    = MakeMetricCb("🔥 GPU Hot Spot",    "Monitor.ShowGpuHotSpot", false);
-            var cbGpuMem   = MakeMetricCb("💾 GPU 显存温度",    "Monitor.ShowGpuMemory", false);
-            var cbCpuFan   = MakeMetricCb("🌀 CPU 风扇",        "Monitor.ShowCpuFan", false);
-            var cbGpuFan   = MakeMetricCb("🌪 GPU 风扇",        "Monitor.ShowGpuFan", false);
-            stack.Children.Add(cbCpuTemp);
-            stack.Children.Add(cbGpuTemp);
-            stack.Children.Add(cbGpuHS);
-            stack.Children.Add(cbGpuMem);
-            stack.Children.Add(cbCpuFan);
-            stack.Children.Add(cbGpuFan);
-            stack.Children.Add(new TextBlock { Text = $"可用传感器: CPU {hw.AvailableCpuSensors.Count} / GPU {hw.AvailableGpuSensors.Count} / 风扇 {hw.AvailableFanSensors.Count}", Foreground = fg, FontSize = 10, Margin = new Thickness(0, 4, 0, 16) });
+            stack.Children.Add(new TextBlock { Text = "已添加的指标：", Foreground = fg, FontSize = 11, Margin = new Thickness(0, 0, 0, 4) });
+            stack.Children.Add(metricList);
 
-            // ---- 传感器来源 ----
-            stack.Children.Add(new TextBlock { Text = "CPU 温度传感器", Foreground = Brushes.White, FontSize = 12, Margin = new Thickness(0, 0, 0, 4) });
-            var cpuCombo = MakeSensorCombo(hw.AvailableCpuSensors, AppPrefs.GetString("Temp.CpuSensor", ""));
-            stack.Children.Add(cpuCombo);
+            // ---- 添加指标 ----
+            var addPanel = new StackPanel { Margin = new Thickness(0, 8, 0, 0) };
+            var addBtn = new Button { Content = "+ 添加指标", Height = 28, FontSize = 12, HorizontalAlignment = HorizontalAlignment.Left, Padding = new Thickness(10, 0, 10, 0) };
+            AppResources.StyleDialogButton(addBtn, false);
+            addBtn.Click += (s, e) =>
+            {
+                addPanel.Children.Clear();
+                addPanel.Children.Add(BuildAddForm(metricList, addPanel, hw, fg));
+            };
+            stack.Children.Add(addBtn);
+            stack.Children.Add(addPanel);
 
-            stack.Children.Add(new TextBlock { Text = "GPU 温度传感器", Foreground = Brushes.White, FontSize = 12, Margin = new Thickness(0, 8, 0, 4) });
-            var gpuCombo = MakeSensorCombo(hw.AvailableGpuSensors, AppPrefs.GetString("Temp.GpuSensor", ""));
-            stack.Children.Add(gpuCombo);
+            stack.Children.Add(new TextBlock { Text = $"已发现 {hw.AllTempSensors.Count} 个温度传感器 · {hw.AllFanSensors.Count} 个风扇传感器", Foreground = fg, FontSize = 10, Margin = new Thickness(0, 10, 0, 12) });
 
             // ---- 更新 + 阈值 ----
-            stack.Children.Add(new TextBlock { Text = "更新间隔", Foreground = Brushes.White, FontSize = 12, Margin = new Thickness(0, 12, 0, 4) });
+            stack.Children.Add(new TextBlock { Text = "更新间隔", Foreground = Brushes.White, FontSize = 12, Margin = new Thickness(0, 0, 0, 4) });
             var intervalRow = new DockPanel { Margin = new Thickness(0, 0, 0, 10) };
             var intervalBox = new TextBox { Width = 60, MinHeight = 24, Text = AppPrefs.GetInt("Temp.IntervalMs", 1000).ToString(), Background = new SolidColorBrush(Color.FromRgb(42, 39, 60)), Foreground = Brushes.White, BorderBrush = new SolidColorBrush(Color.FromRgb(80, 75, 120)), VerticalContentAlignment = VerticalAlignment.Center };
             intervalRow.Children.Add(intervalBox);
@@ -845,35 +841,18 @@ namespace PowerAudioManager
             var warnRow = new DockPanel { Margin = new Thickness(0, 0, 0, 4) };
             var warnBox = new TextBox { Width = 60, MinHeight = 24, Text = AppPrefs.GetInt("Temp.WarnC", 80).ToString(), Background = new SolidColorBrush(Color.FromRgb(42, 39, 60)), Foreground = Brushes.White, BorderBrush = new SolidColorBrush(Color.FromRgb(80, 75, 120)), VerticalContentAlignment = VerticalAlignment.Center };
             warnRow.Children.Add(warnBox);
-            warnRow.Children.Add(new TextBlock { Text = " °C 橙色警告", Foreground = fg, FontSize = 12, VerticalAlignment = VerticalAlignment.Center });
+            warnRow.Children.Add(new TextBlock { Text = " °C 橙色", Foreground = fg, FontSize = 12, VerticalAlignment = VerticalAlignment.Center });
             stack.Children.Add(warnRow);
 
             var critRow = new DockPanel { Margin = new Thickness(0, 0, 0, 16) };
             var critBox = new TextBox { Width = 60, MinHeight = 24, Text = AppPrefs.GetInt("Temp.CriticalC", 95).ToString(), Background = new SolidColorBrush(Color.FromRgb(42, 39, 60)), Foreground = Brushes.White, BorderBrush = new SolidColorBrush(Color.FromRgb(80, 75, 120)), VerticalContentAlignment = VerticalAlignment.Center };
             critRow.Children.Add(critBox);
-            critRow.Children.Add(new TextBlock { Text = " °C 红色警告", Foreground = fg, FontSize = 12, VerticalAlignment = VerticalAlignment.Center });
+            critRow.Children.Add(new TextBlock { Text = " °C 红色", Foreground = fg, FontSize = 12, VerticalAlignment = VerticalAlignment.Center });
             stack.Children.Add(critRow);
 
             var btns = MakeButtons();
             ((Button)btns.Children[0]).Click += (s, e) =>
             {
-                // 指标开关
-                AppPrefs.SetBool("Monitor.ShowCpuTemp",  cbCpuTemp.IsChecked == true);
-                AppPrefs.SetBool("Monitor.ShowGpuTemp",  cbGpuTemp.IsChecked == true);
-                AppPrefs.SetBool("Monitor.ShowGpuHotSpot", cbGpuHS.IsChecked == true);
-                AppPrefs.SetBool("Monitor.ShowGpuMemory",  cbGpuMem.IsChecked == true);
-                AppPrefs.SetBool("Monitor.ShowCpuFan",   cbCpuFan.IsChecked == true);
-                AppPrefs.SetBool("Monitor.ShowGpuFan",   cbGpuFan.IsChecked == true);
-                // 传感器选择
-                string cpuSel = (cpuCombo.SelectedItem as ComboBoxItem)?.Tag as string ?? "Auto";
-                string gpuSel = (gpuCombo.SelectedItem as ComboBoxItem)?.Tag as string ?? "Auto";
-                if (cpuSel == "Auto") cpuSel = "";
-                if (gpuSel == "Auto") gpuSel = "";
-                AppPrefs.SetString("Temp.CpuSensor", cpuSel);
-                AppPrefs.SetString("Temp.GpuSensor", gpuSel);
-                hw.CpuSensorName = cpuSel;
-                hw.GpuSensorName = gpuSel;
-                // 间隔 & 阈值
                 int iv; if (int.TryParse(intervalBox.Text, out iv) && iv >= 500 && iv <= 60000) AppPrefs.SetInt("Temp.IntervalMs", iv);
                 int w; if (int.TryParse(warnBox.Text, out w) && w > 0) AppPrefs.SetInt("Temp.WarnC", w);
                 int c; if (int.TryParse(critBox.Text, out c) && c > 0) AppPrefs.SetInt("Temp.CriticalC", c);
@@ -886,51 +865,108 @@ namespace PowerAudioManager
             return Scroll(stack);
         }
 
-        static CheckBox MakeMetricCb(string label, string key, bool defVal)
+        static void RefreshMetricList(StackPanel list, HardwareMonitorService hw, SolidColorBrush fg)
         {
-            return new CheckBox
+            list.Children.Clear();
+            foreach (var key in hw.EnabledMetrics)
             {
-                Content = label, Foreground = Brushes.White, FontSize = 12,
-                Margin = new Thickness(0, 3, 0, 0),
-                IsChecked = AppPrefs.GetBool(key, defVal)
-            };
+                var cfg = HardwareMonitorService.DecodeConfig(key);
+                if (cfg == null) continue;
+                var row = new DockPanel { Margin = new Thickness(0, 1, 0, 1), LastChildFill = true };
+                string icon = HardwareMonitorService.AutoIcon(cfg);
+                string label = cfg.SensorType == SensorType.Fan ? "风扇" : "温度";
+                row.Children.Add(new TextBlock { Text = $"{icon}  {label}  —  {cfg.HardwareName}  »  {cfg.SensorName}", Foreground = fg, FontSize = 11, VerticalAlignment = VerticalAlignment.Center });
+
+                var delBtn = new Button { Content = "✕", Width = 22, Height = 22, Background = Brushes.Transparent, BorderBrush = Brushes.Transparent, Foreground = fg, FontSize = 11, Cursor = System.Windows.Input.Cursors.Hand, Padding = new Thickness(0) };
+                MainWindow.ApplyFlatStyle(delBtn);
+                delBtn.MinWidth = 0; delBtn.MinHeight = 0;
+                string capturedKey = key;
+                var capturedList = list;
+                delBtn.Click += (s2, e2) =>
+                {
+                    var updated = new List<string>(hw.EnabledMetrics);
+                    updated.Remove(capturedKey);
+                    hw.SaveEnabledMetrics(updated);
+                    RefreshMetricList(capturedList, hw, fg);
+                };
+                DockPanel.SetDock(delBtn, Dock.Right);
+                row.Children.Add(delBtn);
+
+                list.Children.Add(row);
+            }
+            if (hw.EnabledMetrics.Count == 0)
+                list.Children.Add(new TextBlock { Text = "(无指标)", Foreground = fg, FontSize = 11, FontStyle = FontStyles.Italic });
         }
 
-        static ComboBox MakeSensorCombo(List<SensorInfo> sensors, string savedName)
+        static UIElement BuildAddForm(StackPanel metricList, StackPanel addPanel, HardwareMonitorService hw, SolidColorBrush fg)
         {
-            var combo = new ComboBox
+            var form = new StackPanel { Margin = new Thickness(0, 4, 0, 0) };
+
+            // 类型选择
+            form.Children.Add(new TextBlock { Text = "类型", Foreground = fg, FontSize = 11, Margin = new Thickness(0, 0, 0, 2) });
+            var typeCombo = new ComboBox { Height = 26, FontSize = 11, Background = new SolidColorBrush(Color.FromRgb(42, 39, 60)), Foreground = new SolidColorBrush(Color.FromRgb(220, 218, 245)), BorderBrush = new SolidColorBrush(Color.FromRgb(80, 75, 120)) };
+            AppResources.StyleDarkComboBox(typeCombo);
+            typeCombo.Items.Add(new ComboBoxItem { Content = "温度", Tag = "Temp" });
+            typeCombo.Items.Add(new ComboBoxItem { Content = "风扇转速", Tag = "Fan" });
+            typeCombo.SelectedIndex = 0;
+            form.Children.Add(typeCombo);
+
+            // 传感器选择
+            form.Children.Add(new TextBlock { Text = "传感器", Foreground = fg, FontSize = 11, Margin = new Thickness(0, 6, 0, 2) });
+            var sensorCombo = new ComboBox { Height = 26, FontSize = 11, Background = new SolidColorBrush(Color.FromRgb(42, 39, 60)), Foreground = new SolidColorBrush(Color.FromRgb(220, 218, 245)), BorderBrush = new SolidColorBrush(Color.FromRgb(80, 75, 120)) };
+            AppResources.StyleDarkComboBox(sensorCombo);
+            form.Children.Add(sensorCombo);
+
+            void PopulateSensors()
             {
-                Height = 28, FontSize = 12,
-                Background = new SolidColorBrush(Color.FromRgb(42, 39, 60)),
-                Foreground = new SolidColorBrush(Color.FromRgb(220, 218, 245)),
-                BorderBrush = new SolidColorBrush(Color.FromRgb(80, 75, 120)),
-                VerticalContentAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(0, 0, 0, 4)
+                sensorCombo.Items.Clear();
+                bool isFan = ((typeCombo.SelectedItem as ComboBoxItem)?.Tag as string) == "Fan";
+                var pool = isFan ? hw.AllFanSensors : hw.AllTempSensors;
+                if (pool.Count == 0)
+                {
+                    sensorCombo.Items.Add(new ComboBoxItem { Content = "(无可用传感器)", Tag = null });
+                }
+                else
+                {
+                    foreach (var s in pool)
+                    {
+                        string icon = HardwareMonitorService.AutoIcon(s);
+                        sensorCombo.Items.Add(new ComboBoxItem { Content = $"{icon} {s}", Tag = HardwareMonitorService.EncodeConfig(s) });
+                    }
+                }
+                sensorCombo.SelectedIndex = pool.Count > 0 ? 0 : -1;
+            }
+            PopulateSensors();
+            typeCombo.SelectionChanged += (_, _) => PopulateSensors();
+
+            // 按钮行
+            var btnRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 8, 0, 0) };
+            var confirmBtn = new Button { Content = "确认添加", Height = 26, FontSize = 11, Padding = new Thickness(10, 0, 10, 0) };
+            AppResources.StyleDialogButton(confirmBtn, true);
+            var cancelBtn = new Button { Content = "取消", Height = 26, FontSize = 11, Padding = new Thickness(10, 0, 10, 0), Margin = new Thickness(8, 0, 0, 0) };
+            AppResources.StyleDialogButton(cancelBtn, false);
+            btnRow.Children.Add(confirmBtn);
+            btnRow.Children.Add(cancelBtn);
+            form.Children.Add(btnRow);
+
+            confirmBtn.Click += (_, _) =>
+            {
+                var key = (sensorCombo.SelectedItem as ComboBoxItem)?.Tag as string;
+                if (!string.IsNullOrEmpty(key))
+                {
+                    var updated = new List<string>(hw.EnabledMetrics);
+                    if (!updated.Contains(key))
+                    {
+                        updated.Add(key);
+                        hw.SaveEnabledMetrics(updated);
+                    }
+                }
+                RefreshMetricList(metricList, hw, fg);
+                addPanel.Children.Clear();
             };
-            AppResources.StyleDarkComboBox(combo);
+            cancelBtn.Click += (_, _) => addPanel.Children.Clear();
 
-            var autoItem = new ComboBoxItem { Content = "自动", Tag = "Auto" };
-            combo.Items.Add(autoItem);
-
-            int selIdx = 0;
-            int idx = 1;
-            foreach (var s in sensors)
-            {
-                var item = new ComboBoxItem { Content = s.ToString(), Tag = s.SensorName };
-                combo.Items.Add(item);
-                if (!string.IsNullOrEmpty(savedName) && s.SensorName == savedName)
-                    selIdx = idx;
-                idx++;
-            }
-
-            if (sensors.Count == 0)
-            {
-                var emptyItem = new ComboBoxItem { Content = "(扫描中…)", Tag = "" };
-                combo.Items.Add(emptyItem);
-            }
-
-            combo.SelectedIndex = selIdx;
-            return combo;
+            return form;
         }
 
         static StackPanel MakeButtons()

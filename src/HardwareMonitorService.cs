@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text;
 using LibreHardwareMonitor.Hardware;
 
 namespace PowerAudioManager
@@ -16,11 +17,14 @@ namespace PowerAudioManager
 
     public class MetricValue
     {
-        public string Label;     // "CPU", "GPU", "Hot Spot", etc.
-        public string Icon;      // "🌡", "🎮", "🔥", etc.
+        public string Label;     // "CPU", "GPU", etc.
+        public string Icon;      // "🌡", "🎮", etc.
         public float? Value;
-        public string Unit;      // "°C", "RPM", "%"
+        public string Unit;      // "°C", "RPM"
         public bool IsTemp => Unit == "°C";
+
+        // 从配置反序列化
+        public string ConfigKey; // "Temp|AMD Ryzen 7 9800X3D|Core (Tctl/Tdie)"
     }
 
     public class HardwareMonitorService : IDisposable
@@ -32,16 +36,14 @@ namespace PowerAudioManager
         private readonly object _lock = new object();
 
         public bool IsAvailable { get; private set; }
-        public List<SensorInfo> AvailableCpuSensors { get; } = new();
-        public List<SensorInfo> AvailableGpuSensors { get; } = new();
-        public List<SensorInfo> AvailableFanSensors { get; } = new();
+        public List<SensorInfo> AllTempSensors { get; } = new();
+        public List<SensorInfo> AllFanSensors { get; } = new();
 
-        // ---- 用户可选指标（注册表持久化）----
-        // 每个指标对应一个 sensor 类别，可独立开关
-        public List<MetricValue> ActiveMetrics { get; } = new();  // 轮询后填充，UI 直接用
+        // 用户配置的指标（注册表持久化）
+        public List<string> EnabledMetrics { get; private set; } = new();
 
-        public string CpuSensorName { get; set; } = "";
-        public string GpuSensorName { get; set; } = "";
+        // 轮询后产生的值
+        public List<MetricValue> ActiveMetrics { get; } = new();
 
         private HardwareMonitorService() { }
 
@@ -58,13 +60,10 @@ namespace PowerAudioManager
                     _computer.Open();
                     _computer.Accept(new UpdateVisitor());
                     DiscoverSensors();
+                    LoadEnabledMetrics();
                     _hwReady = true;
                     IsAvailable = true;
-                    AppLog.Log("Temp", string.Format(
-                        "ready: hw={0} cpu={1} gpu={2} fan={3} admin={4}",
-                        _computer.Hardware.Count,
-                        AvailableCpuSensors.Count, AvailableGpuSensors.Count, AvailableFanSensors.Count,
-                        AdminUtils.IsAdmin()));
+                    AppLog.Log("Temp", $"ready: temp={AllTempSensors.Count} fan={AllFanSensors.Count} enabled={EnabledMetrics.Count} admin={AdminUtils.IsAdmin()}");
                 }
                 catch (Exception ex) { AppLog.Log("Temp", "init fail: " + ex.Message); _hwReady = false; }
             });
@@ -72,28 +71,69 @@ namespace PowerAudioManager
 
         void DiscoverSensors()
         {
-            AvailableCpuSensors.Clear(); AvailableGpuSensors.Clear(); AvailableFanSensors.Clear();
+            AllTempSensors.Clear(); AllFanSensors.Clear();
 
             void Scan(IHardware hw)
             {
                 foreach (var s in hw.Sensors)
                 {
                     var info = new SensorInfo { HardwareName = hw.Name, SensorName = s.Name, HwType = hw.HardwareType, SensorType = s.SensorType };
-
                     if (s.SensorType == SensorType.Temperature)
                     {
-                        if (hw.HardwareType == HardwareType.Cpu || hw.HardwareType == HardwareType.Motherboard)
-                        { AvailableCpuSensors.Add(info); AppLog.Log("Temp", $"  [CPU] {info}"); }
-                        else if (hw.HardwareType == HardwareType.GpuNvidia || hw.HardwareType == HardwareType.GpuAmd || hw.HardwareType == HardwareType.GpuIntel)
-                        { AvailableGpuSensors.Add(info); AppLog.Log("Temp", $"  [GPU] {info}"); }
+                        AllTempSensors.Add(info);
+                        AppLog.Log("Temp", $"  [T] {info}");
                     }
                     if (s.SensorType == SensorType.Fan || s.SensorType == SensorType.Control)
-                    { AvailableFanSensors.Add(info); AppLog.Log("Temp", $"  [FAN] {info}"); }
+                    {
+                        AllFanSensors.Add(info);
+                        AppLog.Log("Temp", $"  [F] {info}");
+                    }
                 }
                 foreach (var sub in hw.SubHardware) Scan(sub);
             }
             if (_computer != null) foreach (var hw in _computer.Hardware) Scan(hw);
         }
+
+        void LoadEnabledMetrics()
+        {
+            var raw = AppPrefs.GetString("Monitor.Metrics", "");
+            if (string.IsNullOrWhiteSpace(raw))
+            {
+                // 首次运行：自动添加 CPU + GPU 温度
+                var cpuSensor = AllTempSensors.FirstOrDefault(s => s.HwType == HardwareType.Cpu);
+                var gpuSensor = AllTempSensors.FirstOrDefault(s =>
+                    s.HwType == HardwareType.GpuNvidia || s.HwType == HardwareType.GpuAmd || s.HwType == HardwareType.GpuIntel);
+                var list = new List<string>();
+                if (cpuSensor != null)
+                    list.Add(EncodeConfig(cpuSensor));
+                if (gpuSensor != null)
+                    list.Add(EncodeConfig(gpuSensor));
+                raw = string.Join(";", list);
+                if (list.Count > 0) AppPrefs.SetString("Monitor.Metrics", raw);
+            }
+            EnabledMetrics = raw.Split(';', StringSplitOptions.RemoveEmptyEntries).Select(s => s.Trim()).Where(s => s.Length > 0).ToList();
+        }
+
+        public static string EncodeConfig(SensorInfo s)
+        {
+            string type = (s.SensorType == SensorType.Temperature) ? "Temp" : "Fan";
+            return $"{type}|{s.HardwareName}|{s.SensorName}";
+        }
+
+        public static SensorInfo DecodeConfig(string key)
+        {
+            var parts = key.Split('|');
+            if (parts.Length < 3) return null;
+            return new SensorInfo { SensorType = parts[0] == "Fan" ? SensorType.Fan : SensorType.Temperature, HardwareName = parts[1], SensorName = parts[2] };
+        }
+
+        public void SaveEnabledMetrics(List<string> list)
+        {
+            EnabledMetrics = list;
+            AppPrefs.SetString("Monitor.Metrics", string.Join(";", list));
+        }
+
+        // ---- 轮询 ----
 
         public void Update()
         {
@@ -101,118 +141,86 @@ namespace PowerAudioManager
             try
             {
                 _computer.Accept(new UpdateVisitor());
-                var list = new List<MetricValue>();
+                var values = new List<MetricValue>();
 
-                // --- CPU 温度 ---
-                if (AppPrefs.GetBool("Monitor.ShowCpuTemp", true))
+                foreach (var key in EnabledMetrics)
                 {
-                    var v = ReadCpuTemp();
-                    if (v.HasValue) list.Add(new MetricValue { Label = "CPU", Icon = "\U0001F321", Value = v, Unit = "°C" });
+                    var cfg = DecodeConfig(key);
+                    if (cfg == null) continue;
+                    var sensor = FindSensor(cfg);
+                    if (sensor == null) continue;
+
+                    float? val = ReadSensorValue(sensor);
+                    if (val.HasValue)
+                    {
+                        string icon = AutoIcon(cfg);
+                        string label = cfg.SensorName.Length > 10 ? cfg.SensorName.Substring(0, 10) : cfg.SensorName;
+                        values.Add(new MetricValue
+                        {
+                            Label = label, Icon = icon, Value = val,
+                            Unit = cfg.SensorType == SensorType.Fan ? "RPM" : "°C",
+                            ConfigKey = key
+                        });
+                    }
                 }
 
-                // --- GPU 温度 ---
-                if (AppPrefs.GetBool("Monitor.ShowGpuTemp", true))
-                    foreach (var g in ReadGpuTemps())
-                        list.Add(g);
-
-                // --- 风扇 ---
-                if (AppPrefs.GetBool("Monitor.ShowCpuFan", false))
-                {
-                    var v = ReadFan("Cpu");
-                    if (v.HasValue) list.Add(new MetricValue { Label = "CPU Fan", Icon = "\U0001F300", Value = v, Unit = "RPM" });
-                }
-                if (AppPrefs.GetBool("Monitor.ShowGpuFan", false))
-                {
-                    var v = ReadFan("Gpu");
-                    if (v.HasValue) list.Add(new MetricValue { Label = "GPU Fan", Icon = "\U0001F32A", Value = v, Unit = "RPM" });
-                }
-
-                lock (_lock) { ActiveMetrics.Clear(); ActiveMetrics.AddRange(list); }
+                lock (_lock) { ActiveMetrics.Clear(); ActiveMetrics.AddRange(values); }
             }
             catch { }
         }
 
-        float? ReadCpuTemp()
+        SensorInfo FindSensor(SensorInfo cfg)
         {
-            SensorInfo target = null;
-            if (!string.IsNullOrEmpty(CpuSensorName)) target = AvailableCpuSensors.FirstOrDefault(s => s.SensorName == CpuSensorName);
-
-            float? val = null;
-            void Scan(IHardware hw)
-            {
-                if (hw.HardwareType != HardwareType.Cpu && hw.HardwareType != HardwareType.Motherboard) return;
-                foreach (var s in hw.Sensors)
-                {
-                    if (s.SensorType != SensorType.Temperature) continue;
-                    if (!Valid(s.Value)) continue;
-                    if (target != null && s.Name == target.SensorName) { val = s.Value; return; }
-                    if (target != null) continue;
-                    if (val == null) val = s.Value;
-                    if (s.Name.Contains("Package") || s.Name.Contains("Tctl") || s.Name.Contains("Tdie") || s.Name.Contains("Die") || s.Name.Contains("Core Max")) { val = s.Value; return; }
-                }
-            }
-            if (_computer != null) foreach (var hw in _computer.Hardware) { Scan(hw); foreach (var sub in hw.SubHardware) try { Scan(sub); } catch { } }
-            return val;
+            var pool = cfg.SensorType == SensorType.Fan ? AllFanSensors : AllTempSensors;
+            return pool.FirstOrDefault(s => s.HardwareName == cfg.HardwareName && s.SensorName == cfg.SensorName);
         }
 
-        List<MetricValue> ReadGpuTemps()
+        float? ReadSensorValue(SensorInfo cfg)
         {
-            var list = new List<MetricValue>();
-            SensorInfo target = null;
-            if (!string.IsNullOrEmpty(GpuSensorName)) target = AvailableGpuSensors.FirstOrDefault(s => s.SensorName == GpuSensorName);
-
+            if (_computer == null) return null;
             foreach (var hw in _computer.Hardware)
             {
-                if (hw.HardwareType != HardwareType.GpuNvidia && hw.HardwareType != HardwareType.GpuAmd && hw.HardwareType != HardwareType.GpuIntel) continue;
+                if (hw.Name != cfg.HardwareName) continue;
                 foreach (var s in hw.Sensors)
                 {
-                    if (s.SensorType != SensorType.Temperature || !Valid(s.Value)) continue;
-
-                    // 主 GPU 温度
-                    if ((target == null && (s.Name.Contains("Core") && !s.Name.Contains("Hot") && !s.Name.Contains("Memory") && !s.Name.Contains("Junction"))) ||
-                        (target != null && s.Name == target.SensorName))
+                    if (s.Name == cfg.SensorName && s.SensorType == cfg.SensorType)
                     {
-                        if (!list.Any(m => m.Label == "GPU"))
-                            list.Add(new MetricValue { Label = "GPU", Icon = "\U0001F3AE", Value = s.Value, Unit = "°C" });
+                        float v = s.Value ?? float.NaN;
+                        if (float.IsNaN(v)) return null;
+                        if (cfg.SensorType == SensorType.Temperature && (v <= 0 || v > 150)) return null;
+                        if (cfg.SensorType == SensorType.Fan && v < 0) return null;
+                        return v;
                     }
-                    // Hot Spot
-                    if (AppPrefs.GetBool("Monitor.ShowGpuHotSpot", false) && s.Name.Contains("Hot Spot"))
-                        list.Add(new MetricValue { Label = "Hot Spot", Icon = "\U0001F525", Value = s.Value, Unit = "°C" });
-                    // Memory Junction
-                    if (AppPrefs.GetBool("Monitor.ShowGpuMemory", false) && (s.Name.Contains("Memory") || s.Name.Contains("Junction")))
-                        list.Add(new MetricValue { Label = "Mem", Icon = "\U0001F4BE", Value = s.Value, Unit = "°C" });
-                }
-            }
-            return list;
-        }
-
-        float? ReadFan(string hwPrefix)
-        {
-            foreach (var s in AvailableFanSensors)
-            {
-                if (!s.HardwareName.ToLower().Contains(hwPrefix.ToLower())) continue;
-                if (s.SensorType != SensorType.Fan && s.SensorType != SensorType.Control) continue;
-                // 在 _computer 中查找对应 sensor 读值
-                if (_computer == null) continue;
-                foreach (var hw in _computer.Hardware)
-                {
-                    if (hw.Name != s.HardwareName) continue;
-                    foreach (var ss in hw.Sensors)
-                        if (ss.SensorType == SensorType.Fan && ss.Name == s.SensorName && ValidFan(ss.Value))
-                            return ss.Value;
                 }
             }
             return null;
         }
 
-        static bool Valid(float? v) => v.HasValue && v.Value > 0 && v.Value < 150;
-        static bool ValidFan(float? v) => v.HasValue && v.Value >= 0 && v.Value < 10000;
+        public static string AutoIcon(SensorInfo cfg)
+        {
+            bool isCpu = cfg.HardwareName.ToLower().Contains("cpu") || cfg.HardwareName.ToLower().Contains("ryzen") || cfg.HardwareName.ToLower().Contains("intel");
+            bool isGpu = cfg.HardwareName.ToLower().Contains("nvidia") || cfg.HardwareName.ToLower().Contains("amd radeon") || cfg.HardwareName.ToLower().Contains("geforce") || cfg.HardwareName.ToLower().Contains("rtx");
+            string name = cfg.SensorName.ToLower();
+
+            if (cfg.SensorType == SensorType.Temperature)
+            {
+                if (name.Contains("hot spot")) return "\U0001F525";
+                if (name.Contains("memory") || name.Contains("junction")) return "\U0001F4BE";
+                if (isCpu) return "\U0001F321";
+                if (isGpu) return "\U0001F3AE";
+                return "\U0001F321";
+            }
+            // Fan
+            if (isCpu) return "\U0001F300";
+            if (isGpu) return "\U0001F32A";
+            return "\U0001F300";
+        }
 
         public void Stop()
         {
             try { _computer?.Close(); } catch { }
             _computer = null; _started = false; _hwReady = false; IsAvailable = false;
-            AvailableCpuSensors.Clear(); AvailableGpuSensors.Clear(); AvailableFanSensors.Clear();
+            AllTempSensors.Clear(); AllFanSensors.Clear();
             ActiveMetrics.Clear();
         }
 
