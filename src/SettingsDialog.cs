@@ -76,7 +76,7 @@ namespace PowerAudioManager
             sideBar.Items.Add(SidebarItem("  翻译"));
             sideBar.Items.Add(SidebarItem("  截图"));
             sideBar.Items.Add(SidebarItem("  剪贴板"));
-            sideBar.Items.Add(SidebarItem("  温度"));
+            sideBar.Items.Add(SidebarItem("  性能"));
 
             if (openTab >= 0 && openTab < sideBar.Items.Count)
             {
@@ -806,50 +806,65 @@ namespace PowerAudioManager
             var stack = new StackPanel { Margin = new Thickness(20) };
             var hw = HardwareMonitorService.Instance;
 
-            stack.Children.Add(new TextBlock { Text = "温度监控", Foreground = Brushes.White, FontWeight = FontWeights.SemiBold, FontSize = 13, Margin = new Thickness(0, 0, 0, 12) });
+            stack.Children.Add(new TextBlock { Text = "性能监控", Foreground = Brushes.White, FontWeight = FontWeights.SemiBold, FontSize = 13, Margin = new Thickness(0, 0, 0, 12) });
 
-            // CPU 传感器来源
-            stack.Children.Add(new TextBlock { Text = "CPU 温度来源", Foreground = Brushes.White, FontSize = 12, Margin = new Thickness(0, 0, 0, 4) });
+            // ---- 显示指标 ----
+            stack.Children.Add(new TextBlock { Text = "悬浮窗显示的指标", Foreground = Brushes.White, FontSize = 12, Margin = new Thickness(0, 0, 0, 6) });
+
+            var cbCpuTemp  = MakeMetricCb("🌡 CPU 温度",       "Monitor.ShowCpuTemp", true);
+            var cbGpuTemp  = MakeMetricCb("🎮 GPU 温度",       "Monitor.ShowGpuTemp", true);
+            var cbGpuHS    = MakeMetricCb("🔥 GPU Hot Spot",    "Monitor.ShowGpuHotSpot", false);
+            var cbGpuMem   = MakeMetricCb("💾 GPU 显存温度",    "Monitor.ShowGpuMemory", false);
+            var cbCpuFan   = MakeMetricCb("🌀 CPU 风扇",        "Monitor.ShowCpuFan", false);
+            var cbGpuFan   = MakeMetricCb("🌪 GPU 风扇",        "Monitor.ShowGpuFan", false);
+            stack.Children.Add(cbCpuTemp);
+            stack.Children.Add(cbGpuTemp);
+            stack.Children.Add(cbGpuHS);
+            stack.Children.Add(cbGpuMem);
+            stack.Children.Add(cbCpuFan);
+            stack.Children.Add(cbGpuFan);
+            stack.Children.Add(new TextBlock { Text = $"可用传感器: CPU {hw.AvailableCpuSensors.Count} / GPU {hw.AvailableGpuSensors.Count} / 风扇 {hw.AvailableFanSensors.Count}", Foreground = fg, FontSize = 10, Margin = new Thickness(0, 4, 0, 16) });
+
+            // ---- 传感器来源 ----
+            stack.Children.Add(new TextBlock { Text = "CPU 温度传感器", Foreground = Brushes.White, FontSize = 12, Margin = new Thickness(0, 0, 0, 4) });
             var cpuCombo = MakeSensorCombo(hw.AvailableCpuSensors, AppPrefs.GetString("Temp.CpuSensor", ""));
             stack.Children.Add(cpuCombo);
-            stack.Children.Add(new TextBlock { Text = "选择要显示的 CPU 温度传感器。\"自动\"由程序智能选择。", Foreground = fg, FontSize = 10, Margin = new Thickness(0, 2, 0, 16) });
 
-            // GPU 传感器来源
-            stack.Children.Add(new TextBlock { Text = "GPU 温度来源", Foreground = Brushes.White, FontSize = 12, Margin = new Thickness(0, 0, 0, 4) });
+            stack.Children.Add(new TextBlock { Text = "GPU 温度传感器", Foreground = Brushes.White, FontSize = 12, Margin = new Thickness(0, 8, 0, 4) });
             var gpuCombo = MakeSensorCombo(hw.AvailableGpuSensors, AppPrefs.GetString("Temp.GpuSensor", ""));
             stack.Children.Add(gpuCombo);
-            stack.Children.Add(new TextBlock { Text = "选择要显示的 GPU 温度传感器。", Foreground = fg, FontSize = 10, Margin = new Thickness(0, 2, 0, 16) });
 
-            // 更新间隔
-            stack.Children.Add(new TextBlock { Text = "更新间隔", Foreground = Brushes.White, FontSize = 12, Margin = new Thickness(0, 0, 0, 4) });
-            var intervalRow = new DockPanel { Margin = new Thickness(0, 0, 0, 16) };
+            // ---- 更新 + 阈值 ----
+            stack.Children.Add(new TextBlock { Text = "更新间隔", Foreground = Brushes.White, FontSize = 12, Margin = new Thickness(0, 12, 0, 4) });
+            var intervalRow = new DockPanel { Margin = new Thickness(0, 0, 0, 10) };
             var intervalBox = new TextBox { Width = 60, MinHeight = 24, Text = AppPrefs.GetInt("Temp.IntervalMs", 1000).ToString(), Background = new SolidColorBrush(Color.FromRgb(42, 39, 60)), Foreground = Brushes.White, BorderBrush = new SolidColorBrush(Color.FromRgb(80, 75, 120)), VerticalContentAlignment = VerticalAlignment.Center };
             intervalRow.Children.Add(intervalBox);
             intervalRow.Children.Add(new TextBlock { Text = " ms (500-60000)", Foreground = fg, FontSize = 12, VerticalAlignment = VerticalAlignment.Center });
             stack.Children.Add(intervalRow);
 
-            // 高温警告阈值
-            stack.Children.Add(new TextBlock { Text = "高温警告阈值", Foreground = Brushes.White, FontSize = 12, Margin = new Thickness(0, 0, 0, 4) });
-            var warnRow = new DockPanel { Margin = new Thickness(0, 0, 0, 8) };
+            var warnRow = new DockPanel { Margin = new Thickness(0, 0, 0, 4) };
             var warnBox = new TextBox { Width = 60, MinHeight = 24, Text = AppPrefs.GetInt("Temp.WarnC", 80).ToString(), Background = new SolidColorBrush(Color.FromRgb(42, 39, 60)), Foreground = Brushes.White, BorderBrush = new SolidColorBrush(Color.FromRgb(80, 75, 120)), VerticalContentAlignment = VerticalAlignment.Center };
             warnRow.Children.Add(warnBox);
-            warnRow.Children.Add(new TextBlock { Text = " °C  超过后显示橙色", Foreground = fg, FontSize = 12, VerticalAlignment = VerticalAlignment.Center });
+            warnRow.Children.Add(new TextBlock { Text = " °C 橙色警告", Foreground = fg, FontSize = 12, VerticalAlignment = VerticalAlignment.Center });
             stack.Children.Add(warnRow);
 
-            // 超高温警告阈值
-            stack.Children.Add(new TextBlock { Text = "超高温警告阈值", Foreground = Brushes.White, FontSize = 12, Margin = new Thickness(0, 0, 0, 4) });
             var critRow = new DockPanel { Margin = new Thickness(0, 0, 0, 16) };
             var critBox = new TextBox { Width = 60, MinHeight = 24, Text = AppPrefs.GetInt("Temp.CriticalC", 95).ToString(), Background = new SolidColorBrush(Color.FromRgb(42, 39, 60)), Foreground = Brushes.White, BorderBrush = new SolidColorBrush(Color.FromRgb(80, 75, 120)), VerticalContentAlignment = VerticalAlignment.Center };
             critRow.Children.Add(critBox);
-            critRow.Children.Add(new TextBlock { Text = " °C  超过后显示红色", Foreground = fg, FontSize = 12, VerticalAlignment = VerticalAlignment.Center });
+            critRow.Children.Add(new TextBlock { Text = " °C 红色警告", Foreground = fg, FontSize = 12, VerticalAlignment = VerticalAlignment.Center });
             stack.Children.Add(critRow);
-
-            stack.Children.Add(new TextBlock { Text = "温度通过 LibreHardwareMonitor 读取。如列表为空，说明硬件不支持或仍在扫描中——关闭窗口稍后再打开。", Foreground = fg, FontSize = 10, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 0) });
 
             var btns = MakeButtons();
             ((Button)btns.Children[0]).Click += (s, e) =>
             {
-                // 保存传感器选择
+                // 指标开关
+                AppPrefs.SetBool("Monitor.ShowCpuTemp",  cbCpuTemp.IsChecked == true);
+                AppPrefs.SetBool("Monitor.ShowGpuTemp",  cbGpuTemp.IsChecked == true);
+                AppPrefs.SetBool("Monitor.ShowGpuHotSpot", cbGpuHS.IsChecked == true);
+                AppPrefs.SetBool("Monitor.ShowGpuMemory",  cbGpuMem.IsChecked == true);
+                AppPrefs.SetBool("Monitor.ShowCpuFan",   cbCpuFan.IsChecked == true);
+                AppPrefs.SetBool("Monitor.ShowGpuFan",   cbGpuFan.IsChecked == true);
+                // 传感器选择
                 string cpuSel = (cpuCombo.SelectedItem as ComboBoxItem)?.Tag as string ?? "Auto";
                 string gpuSel = (gpuCombo.SelectedItem as ComboBoxItem)?.Tag as string ?? "Auto";
                 if (cpuSel == "Auto") cpuSel = "";
@@ -858,7 +873,7 @@ namespace PowerAudioManager
                 AppPrefs.SetString("Temp.GpuSensor", gpuSel);
                 hw.CpuSensorName = cpuSel;
                 hw.GpuSensorName = gpuSel;
-
+                // 间隔 & 阈值
                 int iv; if (int.TryParse(intervalBox.Text, out iv) && iv >= 500 && iv <= 60000) AppPrefs.SetInt("Temp.IntervalMs", iv);
                 int w; if (int.TryParse(warnBox.Text, out w) && w > 0) AppPrefs.SetInt("Temp.WarnC", w);
                 int c; if (int.TryParse(critBox.Text, out c) && c > 0) AppPrefs.SetInt("Temp.CriticalC", c);
@@ -869,6 +884,16 @@ namespace PowerAudioManager
             stack.Children.Add(btns);
 
             return Scroll(stack);
+        }
+
+        static CheckBox MakeMetricCb(string label, string key, bool defVal)
+        {
+            return new CheckBox
+            {
+                Content = label, Foreground = Brushes.White, FontSize = 12,
+                Margin = new Thickness(0, 3, 0, 0),
+                IsChecked = AppPrefs.GetBool(key, defVal)
+            };
         }
 
         static ComboBox MakeSensorCombo(List<SensorInfo> sensors, string savedName)
