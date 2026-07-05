@@ -1140,30 +1140,26 @@ namespace PowerAudioManager
                     return TextSecondary;
                 }
 
-                // 展开视图：每个指标用 TextBlock.Inlines 混合 emoji(EmojiFont) + 文字(AppFont)
+                // 展开视图：彩色矢量图标 + 文字，不依赖 emoji 字体
                 if (_metricRow != null)
                 {
                     _metricRow.Children.Clear();
                     for (int i = 0; i < metrics.Count; i++)
                     {
                         if (i > 0)
-                        {
                             _metricRow.Children.Add(new TextBlock { Text = " │ ", Foreground = new SolidColorBrush(BorderColor), FontSize = 11, VerticalAlignment = VerticalAlignment.Center, Opacity = 0.5 });
-                        }
 
                         var m = metrics[i];
-                        var color = m.IsTemp ? TempColor(m.Value) : TextSecondary;
+                        var valColor = m.IsTemp ? TempColor(m.Value) : TextSecondary;
+                        var iconColor = MetricIconColor(m); // 不同指标类型用不同图标颜色
                         var chip = new StackPanel { Orientation = Orientation.Horizontal };
-                        var emojiTb = new TextBlock { Text = m.Icon, FontFamily = EmojiFont, FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
-                        System.Windows.Media.TextOptions.SetTextFormattingMode(emojiTb, System.Windows.Media.TextFormattingMode.Display);
-                        chip.Children.Add(emojiTb);
-                        chip.Children.Add(new TextBlock { Text = $" {m.DisplayName} ", FontFamily = AppFont, FontSize = 11, Foreground = new SolidColorBrush(TextSecondary), VerticalAlignment = VerticalAlignment.Center });
-                        chip.Children.Add(new TextBlock
-                        {
+
+                        chip.Children.Add(MetricIcon(m, iconColor));  // 12x12 矢量图标
+                        chip.Children.Add(new TextBlock { Text = " " + m.DisplayName + " ", FontFamily = AppFont, FontSize = 11, Foreground = new SolidColorBrush(TextSecondary), VerticalAlignment = VerticalAlignment.Center });
+                        chip.Children.Add(new TextBlock {
                             Text = $"{m.Value?.ToString("0") ?? "--"}{m.Unit}",
-                            FontFamily = AppFont,
-                            FontSize = 11,
-                            Foreground = new SolidColorBrush(color),
+                            FontFamily = AppFont, FontSize = 11,
+                            Foreground = new SolidColorBrush(valColor),
                             FontWeight = FontWeights.SemiBold,
                             VerticalAlignment = VerticalAlignment.Center
                         });
@@ -1193,6 +1189,45 @@ namespace PowerAudioManager
                 }
             }
             catch { }
+        }
+
+        // ---- 彩色矢量图标 ----
+        static Image MetricIcon(MetricValue m, Color c)
+        {
+            var brush = new SolidColorBrush(c);
+            Geometry geo;
+            string dn = (m.DisplayName ?? "").ToLower();
+
+            if (m.Unit == "RPM")
+                geo = Geometry.Parse("M8,2 a3,3 0 1,0 0,4 l0,-2 a1.5,1.5 0 1,1 0,-2 z M8,6 a0.8,0.8 0 1,0 0,1.6 a0.8,0.8 0 1,0 0,-1.6");
+            else if (m.Unit == "%")
+                geo = Geometry.Parse("M3,6 h10 v1 h-10 z M7,2 h2 v8 h-2 z M10,4 h3 v1.5 h-3 z");
+            else if (dn.Contains("cpu"))
+                geo = Geometry.Parse("M5,1 h6 a1,1 0 0,1 1,1 v1 h1 v2 h-1 v1 h1 v2 h-1 v1 a1,1 0 0,1 -1,1 h-6 a1,1 0 0,1 -1,-1 v-1 h-1 v-2 h1 v-1 h-1 v-2 h1 v-1 a1,1 0 0,1 1,-1 z M6,4 h2 v2 h2 v-2 h-2 z");
+            else if (dn.Contains("gpu"))
+                geo = Geometry.Parse("M3,2 h10 v6 h-2.5 v1 h-1 v-1 h-1.5 v1 h-1 v-1 h-1.5 z M5,4 h1.5 v2 h-1.5 z M7.5,4 h1.5 v2 h-1.5 z M10,4 h1.5 v2 h-1.5 z");
+            else if (dn.Contains("hot"))
+                geo = Geometry.Parse("M8,0 l3,3 l-1.5,1.5 l1.5,2.5 l-1.5,2 l-2,-2.5 l-2,1.5 l1,-3 l-2.5,-0.8 l2.5,-1.5 z M8,5 a0.8,0.8 0 1,0 0,1.6 a0.8,0.8 0 1,0 0,-1.6");
+            else if (dn.Contains("vram") || dn.Contains("mem") || dn.Contains("显存"))
+                geo = Geometry.Parse("M2,4 h12 v5 a1,1 0 0,1 -1,1 h-10 a1,1 0 0,1 -1,-1 z M3,7 h1.5 v-1.5 h1 v1.5 h2 v-1.5 h1 v1.5 h1.5");
+            else
+                geo = Geometry.Parse("M8,3 a4,4 0 1,0 0,6 a4,4 0 1,0 0,-6");
+
+            return new Image { Source = new DrawingImage(new GeometryDrawing(brush, null, geo)), Width = 12, Height = 12, Stretch = Stretch.Uniform, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 1, 0, 0) };
+        }
+
+        static Color MetricIconColor(MetricValue m)
+        {
+            if (m.Unit == "RPM") return Color.FromRgb(80, 180, 220);
+            if (m.Unit == "%")   return Color.FromRgb(220, 200, 80);
+            string dn = (m.DisplayName ?? "").ToLower();
+            if (dn.Contains("cpu")) return Color.FromRgb(255, 140, 60);
+            if (dn.Contains("gpu") && !dn.Contains("hot") && !dn.Contains("vram") && !dn.Contains("mem"))
+                return Color.FromRgb(100, 210, 100);
+            if (dn.Contains("hot")) return Color.FromRgb(255, 70, 50);
+            if (dn.Contains("vram") || dn.Contains("mem") || dn.Contains("显存"))
+                return Color.FromRgb(180, 140, 255);
+            return Color.FromRgb(255, 180, 80);
         }
 
         // Material 风格按钮：三种变体共用一个圆角模板。
