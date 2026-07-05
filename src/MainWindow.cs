@@ -47,6 +47,12 @@ namespace PowerAudioManager
         private Border _titleBarBorder;
         private Border _mainBorder;
 
+        // 温度监控
+        private TextBlock _collapsedTempLabel;
+        private TextBlock _cpuTempLabel;
+        private TextBlock _gpuTempLabel;
+        private System.Threading.Timer _tempTimer;
+
         // 共享调色板，内部可见供 LauncherBar / TrayController 等复用。
         // 按 Material 层级排列：越底层表面越浅，叠层卡片有视觉深度。
         internal static readonly Color AccentColor = Color.FromRgb(142, 140, 216);   // 紫影 #8E8CD8
@@ -215,6 +221,8 @@ namespace PowerAudioManager
                 {
                     Dispatcher.BeginInvoke(new Action(() => { try { LoadData(); } catch (Exception ex) { AppLog.Log("Startup LoadData", ex); } }));
                 }, null, 50, System.Threading.Timeout.Infinite);
+                // 温度监控启动（后台初始化硬件传感器）
+                try { StartTempMonitor(); } catch { }
                 AppLog.Log("Startup", "OnLoaded done " + sw.ElapsedMilliseconds + "ms");
             }
             catch (Exception ex) { AppLog.Log("OnLoaded", ex); }
@@ -275,6 +283,15 @@ namespace PowerAudioManager
             };
             titleStack.Children.Add(titleIcon);
             titleStack.Children.Add(titleLabel);
+            _collapsedTempLabel = new TextBlock
+            {
+                Foreground = new SolidColorBrush(TextSecondary),
+                FontSize = 10,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(12, 0, 0, 0),
+                Visibility = Visibility.Collapsed
+            };
+            titleStack.Children.Add(_collapsedTempLabel);
             var pinBtn = new Button
             {
                 Content = PinIcon(_lockPosition),
@@ -355,6 +372,23 @@ namespace PowerAudioManager
 
             var contentPanel = new StackPanel { Margin = new Thickness(14, 10, 14, 14) };
             _contentPanel = contentPanel;
+
+            // 温度行（展开时显示在电源计划上方）
+            bool showTemp = ModuleVisible("Temp");
+            if (showTemp)
+            {
+                var tempRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 4) };
+                var tempIcon = new TextBlock { Text = "\U0001F321", FontFamily = EmojiFont, FontSize = 12, Foreground = new SolidColorBrush(TextSecondary), Margin = new Thickness(0, 0, 6, 0), VerticalAlignment = VerticalAlignment.Center };
+                tempRow.Children.Add(tempIcon);
+                _cpuTempLabel = new TextBlock { Text = "CPU --°C", Foreground = new SolidColorBrush(TextSecondary), FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
+                tempRow.Children.Add(_cpuTempLabel);
+                var tempSep = new TextBlock { Text = "  ·  ", Foreground = new SolidColorBrush(TextSecondary), FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
+                tempRow.Children.Add(tempSep);
+                _gpuTempLabel = new TextBlock { Text = "GPU --°C", Foreground = new SolidColorBrush(TextSecondary), FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
+                tempRow.Children.Add(_gpuTempLabel);
+                contentPanel.Children.Add(tempRow);
+                contentPanel.Children.Add(MakeDivider());
+            }
 
             // 板块可见性（用户可在设置中隐藏）。每个板块自带头部分割线（第一个除外），隐藏不会遗留孤立分割线。
             bool showPower = ModuleVisible("Power");
@@ -1056,6 +1090,98 @@ namespace PowerAudioManager
             if (_tray != null) _tray.UpdateTooltip();
         }
 
+        // ---- 温度监控 ----
+
+        void StartTempMonitor()
+        {
+            if (!ModuleVisible("Temp")) return;
+            var hw = HardwareMonitorService.Instance;
+            hw.CpuSensorName = AppPrefs.GetString("Temp.CpuSensor", "");
+            hw.GpuSensorName = AppPrefs.GetString("Temp.GpuSensor", "");
+            hw.Start();
+            StartTempTimer();
+        }
+
+        void StartTempTimer()
+        {
+            try { _tempTimer?.Dispose(); } catch { }
+            int intervalSec = AppPrefs.GetInt("Temp.IntervalSec", 1);
+            if (intervalSec < 1) intervalSec = 1;
+            if (intervalSec > 60) intervalSec = 60;
+            _tempTimer = new System.Threading.Timer(_ =>
+            {
+                HardwareMonitorService.Instance.Update();
+                Dispatcher.BeginInvoke(new Action(UpdateTempUI));
+            }, null, 2000, intervalSec * 1000);
+        }
+
+        internal void RestartTempTimer()
+        {
+            try { _tempTimer?.Dispose(); } catch { }
+            if (!ModuleVisible("Temp")) return;
+            HardwareMonitorService.Instance.Start();
+            StartTempTimer();
+        }
+
+        void UpdateTempUI()
+        {
+            try
+            {
+                var hw = HardwareMonitorService.Instance;
+                string cpuText = hw.CpuTemperature.HasValue
+                    ? $"CPU {hw.CpuTemperature.Value:0}°C"
+                    : "CPU --°C";
+                string gpuText = hw.GpuTemperature.HasValue
+                    ? $"GPU {hw.GpuTemperature.Value:0}°C"
+                    : "GPU --°C";
+
+                // 温度颜色：常温白/灰，高温橙，超高温红
+                var cpuColor = GetTempColor(hw.CpuTemperature);
+                var gpuColor = GetTempColor(hw.GpuTemperature);
+
+                if (_cpuTempLabel != null)
+                {
+                    _cpuTempLabel.Text = cpuText;
+                    _cpuTempLabel.Foreground = new SolidColorBrush(cpuColor);
+                }
+                if (_gpuTempLabel != null)
+                {
+                    _gpuTempLabel.Text = gpuText;
+                    _gpuTempLabel.Foreground = new SolidColorBrush(gpuColor);
+                }
+                if (_collapsedTempLabel != null)
+                {
+                    _collapsedTempLabel.Text = $"{cpuText}  {gpuText}";
+                    // 折叠栏用统一颜色：有任一高温就用警告色
+                    var maxColor = MaxTempColor(hw.CpuTemperature, hw.GpuTemperature);
+                    _collapsedTempLabel.Foreground = new SolidColorBrush(maxColor);
+                }
+            }
+            catch { }
+        }
+
+        static Color GetTempColor(float? temp)
+        {
+            if (!temp.HasValue) return TextSecondary;
+            int warnC = AppPrefs.GetInt("Temp.WarnC", 80);
+            int critC = AppPrefs.GetInt("Temp.CriticalC", 95);
+            if (temp.Value >= critC) return Color.FromRgb(255, 80, 80);
+            if (temp.Value >= warnC) return Color.FromRgb(255, 180, 80);
+            return TextSecondary;
+        }
+
+        static Color MaxTempColor(float? cpu, float? gpu)
+        {
+            var c = GetTempColor(cpu);
+            var g = GetTempColor(gpu);
+            // 红 > 橙 > 灰
+            bool IsRed(Color c) => c.R > 200 && c.G < 120;
+            bool IsOrange(Color c) => c.R > 200 && c.G > 120;
+            if (IsRed(c) || IsRed(g)) return Color.FromRgb(255, 80, 80);
+            if (IsOrange(c) || IsOrange(g)) return Color.FromRgb(255, 180, 80);
+            return TextSecondary;
+        }
+
         // Material 风格按钮：三种变体共用一个圆角模板。
         // primary=强调填充、default=卡片填充、isActive=激活态填充（选中电源计划/音频设备）。
         void StyleButton(Button btn, bool isActive) { StyleButton(btn, isActive, false); }
@@ -1128,6 +1254,7 @@ namespace PowerAudioManager
 
         internal void ExitApp()
         {
+            try { _tempTimer?.Dispose(); HardwareMonitorService.Instance.Stop(); } catch { }
             if (_deviceWatcher != null) _deviceWatcher.Stop();
             try { Microsoft.Win32.SystemEvents.DisplaySettingsChanged -= _scaling.OnDisplaySettingsChanged; } catch { }
             try { Microsoft.Win32.SystemEvents.UserPreferenceChanged -= _scaling.OnUserPreferenceChanged; } catch { }
@@ -1319,6 +1446,7 @@ namespace PowerAudioManager
                 if (_contentPanel != null) _contentPanel.Visibility = Visibility.Visible;
                 // 展开时标题栏下角保持直角与内容区衔接。
                 if (_titleBarBorder != null) _titleBarBorder.CornerRadius = new CornerRadius(10, 10, 0, 0);
+                if (_collapsedTempLabel != null) _collapsedTempLabel.Visibility = Visibility.Collapsed;
                 SizeToContent = SizeToContent.Height;
             }
             else
@@ -1326,6 +1454,8 @@ namespace PowerAudioManager
                 if (_contentPanel != null) _contentPanel.Visibility = Visibility.Collapsed;
                 // 折叠时仅标题栏可见，下角也圆角匹配外层卡片，避免方角超出圆角弧边。
                 if (_titleBarBorder != null) _titleBarBorder.CornerRadius = new CornerRadius(10);
+                if (_collapsedTempLabel != null && ModuleVisible("Temp"))
+                    _collapsedTempLabel.Visibility = Visibility.Visible;
                 SizeToContent = SizeToContent.Height;
                 MinHeight = 36;
             }

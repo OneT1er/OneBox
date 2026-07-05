@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
@@ -13,37 +14,124 @@ namespace PowerAudioManager
             Show(owner, 0);
         }
 
-        // openTab 参数：0=常规 1=板块 2=内存 3=翻译 4=截图 5=剪贴板
+        // openTab 参数：0=常规 1=板块 2=内存 3=翻译 4=截图 5=剪贴板 6=温度
         public static void Show(Window owner, int openTab)
         {
             var fg = new SolidColorBrush(Color.FromRgb(190, 188, 220));
             var lightText = new SolidColorBrush(Color.FromRgb(220, 218, 245));
 
-            // TabControl 是 OneBoxWindow.Create 包装的主体（含标题栏 + 圆角边框），先构建再围绕它创建窗口。
-            var tabs = new TabControl
+            // 左侧垂直 tab 栏 + 右侧内容的布局，适配 7 个 tab
+            var sideBar = new ListBox
             {
-                Margin = new Thickness(0),
-                Background = Brushes.Transparent,
+                Width = 100,
+                Background = new SolidColorBrush(Color.FromRgb(32, 30, 48)),
                 BorderBrush = Brushes.Transparent,
+                Margin = new Thickness(0),
                 Padding = new Thickness(0)
             };
-            AppResources.StyleDarkTabControl(tabs);
+            sideBar.ItemContainerStyle = SidebarItemStyle();
+            sideBar.SelectionChanged += (s, e) =>
+            {
+                // 更新所有 item 的文字颜色（选中白，未选中灰）
+                foreach (ListBoxItem item in sideBar.Items)
+                {
+                    var tb = item.Content as TextBlock;
+                    if (tb != null)
+                        tb.Foreground = item.IsSelected
+                            ? Brushes.White
+                            : new SolidColorBrush(Color.FromRgb(190, 188, 220));
+                }
+                if (sideBar.SelectedIndex >= 0)
+                    _contentHost.Content = _tabContents[sideBar.SelectedIndex];
+            };
 
-            var dlg = OneBoxWindow.Create(owner, "设置", 460, 560, tabs, true);
+            _contentHost = new ContentControl();
 
-            tabs.Items.Add(BuildGeneralTab(owner, dlg, fg, lightText));
-            tabs.Items.Add(BuildModulesTab(owner, dlg, fg, lightText));
-            tabs.Items.Add(BuildMemoryTab(owner, dlg, fg, lightText));
-            tabs.Items.Add(BuildTranslateTab(owner, dlg, fg, lightText));
-            tabs.Items.Add(BuildScreenshotTab(owner, dlg, fg, lightText));
-            tabs.Items.Add(BuildClipboardTab(owner, dlg, fg, lightText));
+            var layout = new Grid();
+            layout.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            layout.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            Grid.SetColumn(sideBar, 0);
+            Grid.SetColumn(_contentHost, 1);
+            layout.Children.Add(sideBar);
+            layout.Children.Add(_contentHost);
 
-            if (openTab >= 0 && openTab < tabs.Items.Count) tabs.SelectedIndex = openTab;
+            var dlg = OneBoxWindow.Create(owner, "设置", 500, 560, layout, true);
+
+            // 构建所有 tab 内容
+            _tabContents = new System.Collections.Generic.List<UIElement>
+            {
+                BuildGeneralTab(owner, dlg, fg, lightText),
+                BuildModulesTab(owner, dlg, fg, lightText),
+                BuildMemoryTab(owner, dlg, fg, lightText),
+                BuildTranslateTab(owner, dlg, fg, lightText),
+                BuildScreenshotTab(owner, dlg, fg, lightText),
+                BuildClipboardTab(owner, dlg, fg, lightText),
+                BuildTempTab(owner, dlg, fg, lightText),
+            };
+
+            // 填充侧栏
+            sideBar.Items.Add(SidebarItem("  常规"));
+            sideBar.Items.Add(SidebarItem("  板块"));
+            sideBar.Items.Add(SidebarItem("  内存"));
+            sideBar.Items.Add(SidebarItem("  翻译"));
+            sideBar.Items.Add(SidebarItem("  截图"));
+            sideBar.Items.Add(SidebarItem("  剪贴板"));
+            sideBar.Items.Add(SidebarItem("  温度"));
+
+            if (openTab >= 0 && openTab < sideBar.Items.Count)
+            {
+                sideBar.SelectedIndex = openTab;
+                _contentHost.Content = _tabContents[openTab];
+            }
+            else
+            {
+                sideBar.SelectedIndex = 0;
+                _contentHost.Content = _tabContents[0];
+            }
 
             dlg.ShowDialog();
         }
 
-        static TabItem BuildGeneralTab(Window owner, Window dlg, SolidColorBrush fg, SolidColorBrush lightText)
+        private static System.Collections.Generic.List<UIElement> _tabContents;
+        private static ContentControl _contentHost;
+
+        static ListBoxItem SidebarItem(string text)
+        {
+            return new ListBoxItem
+            {
+                Content = new TextBlock { Text = text, FontSize = 13, Foreground = new SolidColorBrush(Color.FromRgb(190, 188, 220)) },
+                Height = 40,
+                Padding = new Thickness(0)
+            };
+        }
+
+        static Style SidebarItemStyle()
+        {
+            var style = new Style(typeof(ListBoxItem));
+            style.Setters.Add(new Setter(ListBoxItem.BackgroundProperty, Brushes.Transparent));
+            style.Setters.Add(new Setter(ListBoxItem.BorderBrushProperty, Brushes.Transparent));
+            style.Setters.Add(new Setter(ListBoxItem.BorderThicknessProperty, new Thickness(0)));
+            style.Setters.Add(new Setter(ListBoxItem.PaddingProperty, new Thickness(12, 0, 12, 0)));
+            style.Setters.Add(new Setter(ListBoxItem.VerticalContentAlignmentProperty, VerticalAlignment.Center));
+            style.Setters.Add(new Setter(ListBoxItem.CursorProperty, System.Windows.Input.Cursors.Hand));
+            // 选中态：左侧紫条 + 深色底
+            var selectedTrigger = new Trigger { Property = ListBoxItem.IsSelectedProperty, Value = true };
+            selectedTrigger.Setters.Add(new Setter(ListBoxItem.BackgroundProperty, new SolidColorBrush(Color.FromRgb(42, 39, 60))));
+            // 左侧指示条用 BorderThickness + BorderBrush 实现
+            selectedTrigger.Setters.Add(new Setter(ListBoxItem.BorderBrushProperty, new SolidColorBrush(Color.FromRgb(142, 140, 216))));
+            selectedTrigger.Setters.Add(new Setter(ListBoxItem.BorderThicknessProperty, new Thickness(3, 0, 0, 0)));
+            // 选中文字变白
+            // 需要遍历设置 TextBlock.Foreground，这里用 DataTrigger 不行，直接用简单方法：在代码里更新
+            style.Triggers.Add(selectedTrigger);
+
+            var hoverTrigger = new Trigger { Property = ListBoxItem.IsMouseOverProperty, Value = true };
+            hoverTrigger.Setters.Add(new Setter(ListBoxItem.BackgroundProperty, new SolidColorBrush(Color.FromRgb(50, 47, 70))));
+            style.Triggers.Add(hoverTrigger);
+
+            return style;
+        }
+
+        static ScrollViewer BuildGeneralTab(Window owner, Window dlg, SolidColorBrush fg, SolidColorBrush lightText)
         {
             var stack = new StackPanel { Margin = new Thickness(20) };
 
@@ -221,10 +309,10 @@ namespace PowerAudioManager
             ((Button)btns.Children[1]).Click += (s, e) => { dlg.DialogResult = false; dlg.Close(); };
             stack.Children.Add(btns);
 
-            return new TabItem { Header = " 常规 ", Content = Scroll(stack) };
+            return Scroll(stack);
         }
 
-        static TabItem BuildModulesTab(Window owner, Window dlg, SolidColorBrush fg, SolidColorBrush lightText)
+        static ScrollViewer BuildModulesTab(Window owner, Window dlg, SolidColorBrush fg, SolidColorBrush lightText)
         {
             var stack = new StackPanel { Margin = new Thickness(20) };
             stack.Children.Add(new TextBlock { Text = "勾选要在悬浮窗中显示的板块：", Foreground = Brushes.White, FontSize = 13, Margin = new Thickness(0, 0, 0, 12) });
@@ -236,6 +324,7 @@ namespace PowerAudioManager
             var cbLaunch = MakeCb("快捷启动栏", "Launcher");
             var cbClip = MakeCb("剪贴板历史", "Clipboard");
             var cbGallery = MakeCb("截图图库", "Gallery");
+            var cbTemp = MakeCb("温度监控", "Temp");
             stack.Children.Add(cbPower);
             stack.Children.Add(cbAudio);
             stack.Children.Add(cbMem);
@@ -243,6 +332,7 @@ namespace PowerAudioManager
             stack.Children.Add(cbLaunch);
             stack.Children.Add(cbClip);
             stack.Children.Add(cbGallery);
+            stack.Children.Add(cbTemp);
             stack.Children.Add(new TextBlock { Text = "隐藏后悬浮窗立即刷新；托盘菜单与全局快捷键不受影响。", Foreground = fg, FontSize = 10, Margin = new Thickness(0, 14, 0, 0), TextWrapping = TextWrapping.Wrap });
 
             var btns = MakeButtons();
@@ -255,16 +345,17 @@ namespace PowerAudioManager
                 AppPrefs.SetBool("UI.ShowLauncher", cbLaunch.IsChecked == true);
                 AppPrefs.SetBool("UI.ShowClipboard", cbClip.IsChecked == true);
                 AppPrefs.SetBool("UI.ShowGallery", cbGallery.IsChecked == true);
+                AppPrefs.SetBool("UI.ShowTemp", cbTemp.IsChecked == true);
                 if (owner is MainWindow) ((MainWindow)owner).RebuildUI();
                 dlg.DialogResult = true; dlg.Close();
             };
             ((Button)btns.Children[1]).Click += (s, e) => { dlg.DialogResult = false; dlg.Close(); };
             stack.Children.Add(btns);
 
-            return new TabItem { Header = " 板块 ", Content = Scroll(stack) };
+            return Scroll(stack);
         }
 
-        static TabItem BuildMemoryTab(Window owner, Window dlg, SolidColorBrush fg, SolidColorBrush lightText)
+        static ScrollViewer BuildMemoryTab(Window owner, Window dlg, SolidColorBrush fg, SolidColorBrush lightText)
         {
             var stack = new StackPanel { Margin = new Thickness(20) };
             bool isAdmin = AdminUtils.IsAdmin();
@@ -372,7 +463,7 @@ namespace PowerAudioManager
             ((Button)btns.Children[1]).Click += (s, e) => { dlg.DialogResult = false; dlg.Close(); };
             stack.Children.Add(btns);
 
-            return new TabItem { Header = " 内存 ", Content = Scroll(stack) };
+            return Scroll(stack);
         }
 
         // 勾选"危险"清理项时弹确认框，用户取消则取消勾选。
@@ -385,7 +476,7 @@ namespace PowerAudioManager
             };
         }
 
-        static TabItem BuildTranslateTab(Window owner, Window dlg, SolidColorBrush fg, SolidColorBrush lightText)
+        static ScrollViewer BuildTranslateTab(Window owner, Window dlg, SolidColorBrush fg, SolidColorBrush lightText)
         {
             var stack = new StackPanel { Margin = new Thickness(20) };
             stack.Children.Add(new TextBlock { Text = "百度大模型翻译 API", Foreground = Brushes.White, FontSize = 13, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 0, 0, 4) });
@@ -412,10 +503,10 @@ namespace PowerAudioManager
             ((Button)btns.Children[1]).Click += (s, e) => { dlg.DialogResult = false; dlg.Close(); };
             stack.Children.Add(btns);
 
-            return new TabItem { Header = " 翻译 ", Content = Scroll(stack) };
+            return Scroll(stack);
         }
 
-        static TabItem BuildScreenshotTab(Window owner, Window dlg, SolidColorBrush fg, SolidColorBrush lightText)
+        static ScrollViewer BuildScreenshotTab(Window owner, Window dlg, SolidColorBrush fg, SolidColorBrush lightText)
         {
             var stack = new StackPanel { Margin = new Thickness(20) };
 
@@ -639,10 +730,10 @@ namespace PowerAudioManager
             ((Button)btns.Children[1]).Click += (s, e) => { dlg.DialogResult = false; dlg.Close(); };
             stack.Children.Add(btns);
 
-            return new TabItem { Header = " 截图 ", Content = Scroll(stack) };
+            return Scroll(stack);
         }
 
-        static TabItem BuildClipboardTab(Window owner, Window dlg, SolidColorBrush fg, SolidColorBrush lightText)
+        static ScrollViewer BuildClipboardTab(Window owner, Window dlg, SolidColorBrush fg, SolidColorBrush lightText)
         {
             var stack = new StackPanel { Margin = new Thickness(20) };
 
@@ -707,7 +798,131 @@ namespace PowerAudioManager
             ((Button)btns.Children[1]).Click += (s, e) => { dlg.DialogResult = false; dlg.Close(); };
             stack.Children.Add(btns);
 
-            return new TabItem { Header = " 剪贴板 ", Content = Scroll(stack) };
+            return Scroll(stack);
+        }
+
+        static ScrollViewer BuildTempTab(Window owner, Window dlg, SolidColorBrush fg, SolidColorBrush lightText)
+        {
+            var stack = new StackPanel { Margin = new Thickness(20) };
+            var hw = HardwareMonitorService.Instance;
+
+            stack.Children.Add(new TextBlock { Text = "温度监控", Foreground = Brushes.White, FontWeight = FontWeights.SemiBold, FontSize = 13, Margin = new Thickness(0, 0, 0, 12) });
+
+            // CPU 传感器来源
+            stack.Children.Add(new TextBlock { Text = "CPU 温度来源", Foreground = Brushes.White, FontSize = 12, Margin = new Thickness(0, 0, 0, 4) });
+            var cpuComboRaw = hw.AvailableCpuSensors;
+            var cpuCombo = MakeSensorCombo(cpuComboRaw, AppPrefs.GetString("Temp.CpuSensor", ""), true);
+            stack.Children.Add(cpuCombo);
+            stack.Children.Add(new TextBlock { Text = "选择要显示的 CPU 温度传感器。\"自动\"由程序智能选择。", Foreground = fg, FontSize = 10, Margin = new Thickness(0, 2, 0, 16) });
+
+            // GPU 传感器来源
+            stack.Children.Add(new TextBlock { Text = "GPU 温度来源", Foreground = Brushes.White, FontSize = 12, Margin = new Thickness(0, 0, 0, 4) });
+            var gpuCombo = MakeSensorCombo(hw.AvailableGpuSensors, AppPrefs.GetString("Temp.GpuSensor", ""));
+            stack.Children.Add(gpuCombo);
+            stack.Children.Add(new TextBlock { Text = "选择要显示的 GPU 温度传感器。", Foreground = fg, FontSize = 10, Margin = new Thickness(0, 2, 0, 16) });
+
+            // 更新间隔
+            stack.Children.Add(new TextBlock { Text = "更新间隔", Foreground = Brushes.White, FontSize = 12, Margin = new Thickness(0, 0, 0, 4) });
+            var intervalRow = new DockPanel { Margin = new Thickness(0, 0, 0, 16) };
+            var intervalBox = new TextBox { Width = 60, MinHeight = 24, Text = AppPrefs.GetInt("Temp.IntervalSec", 1).ToString(), Background = new SolidColorBrush(Color.FromRgb(42, 39, 60)), Foreground = Brushes.White, BorderBrush = new SolidColorBrush(Color.FromRgb(80, 75, 120)), VerticalContentAlignment = VerticalAlignment.Center };
+            intervalRow.Children.Add(intervalBox);
+            intervalRow.Children.Add(new TextBlock { Text = " 秒 (1-60)", Foreground = fg, FontSize = 12, VerticalAlignment = VerticalAlignment.Center });
+            stack.Children.Add(intervalRow);
+
+            // 高温警告阈值
+            stack.Children.Add(new TextBlock { Text = "高温警告阈值", Foreground = Brushes.White, FontSize = 12, Margin = new Thickness(0, 0, 0, 4) });
+            var warnRow = new DockPanel { Margin = new Thickness(0, 0, 0, 8) };
+            var warnBox = new TextBox { Width = 60, MinHeight = 24, Text = AppPrefs.GetInt("Temp.WarnC", 80).ToString(), Background = new SolidColorBrush(Color.FromRgb(42, 39, 60)), Foreground = Brushes.White, BorderBrush = new SolidColorBrush(Color.FromRgb(80, 75, 120)), VerticalContentAlignment = VerticalAlignment.Center };
+            warnRow.Children.Add(warnBox);
+            warnRow.Children.Add(new TextBlock { Text = " °C  超过后显示橙色", Foreground = fg, FontSize = 12, VerticalAlignment = VerticalAlignment.Center });
+            stack.Children.Add(warnRow);
+
+            // 超高温警告阈值
+            stack.Children.Add(new TextBlock { Text = "超高温警告阈值", Foreground = Brushes.White, FontSize = 12, Margin = new Thickness(0, 0, 0, 4) });
+            var critRow = new DockPanel { Margin = new Thickness(0, 0, 0, 16) };
+            var critBox = new TextBox { Width = 60, MinHeight = 24, Text = AppPrefs.GetInt("Temp.CriticalC", 95).ToString(), Background = new SolidColorBrush(Color.FromRgb(42, 39, 60)), Foreground = Brushes.White, BorderBrush = new SolidColorBrush(Color.FromRgb(80, 75, 120)), VerticalContentAlignment = VerticalAlignment.Center };
+            critRow.Children.Add(critBox);
+            critRow.Children.Add(new TextBlock { Text = " °C  超过后显示红色", Foreground = fg, FontSize = 12, VerticalAlignment = VerticalAlignment.Center });
+            stack.Children.Add(critRow);
+
+            stack.Children.Add(new TextBlock { Text = "温度通过 LibreHardwareMonitor 读取。如列表为空，说明硬件不支持或仍在扫描中——关闭窗口稍后再打开。", Foreground = fg, FontSize = 10, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 0) });
+
+            var btns = MakeButtons();
+            ((Button)btns.Children[0]).Click += (s, e) =>
+            {
+                // 保存传感器选择
+                string cpuSel = (cpuCombo.SelectedItem as ComboBoxItem)?.Tag as string ?? "Auto";
+                string gpuSel = (gpuCombo.SelectedItem as ComboBoxItem)?.Tag as string ?? "Auto";
+                if (cpuSel == "Auto") cpuSel = "";
+                if (cpuSel == "__WMI__") cpuSel = "__WMI__";
+                if (gpuSel == "Auto") gpuSel = "";
+                AppPrefs.SetString("Temp.CpuSensor", cpuSel);
+                AppPrefs.SetString("Temp.GpuSensor", gpuSel);
+                hw.CpuSensorName = cpuSel;
+                hw.GpuSensorName = gpuSel;
+
+                int iv; if (int.TryParse(intervalBox.Text, out iv) && iv >= 1 && iv <= 60) AppPrefs.SetInt("Temp.IntervalSec", iv);
+                int w; if (int.TryParse(warnBox.Text, out w) && w > 0) AppPrefs.SetInt("Temp.WarnC", w);
+                int c; if (int.TryParse(critBox.Text, out c) && c > 0) AppPrefs.SetInt("Temp.CriticalC", c);
+                if (owner is MainWindow mw) mw.RestartTempTimer();
+                dlg.DialogResult = true; dlg.Close();
+            };
+            ((Button)btns.Children[1]).Click += (s, e) => { dlg.DialogResult = false; dlg.Close(); };
+            stack.Children.Add(btns);
+
+            return Scroll(stack);
+        }
+
+        static ComboBox MakeSensorCombo(List<SensorInfo> sensors, string savedName)
+        {
+            return MakeSensorCombo(sensors, savedName, false);
+        }
+
+        static ComboBox MakeSensorCombo(List<SensorInfo> sensors, string savedName, bool includeWmi)
+        {
+            var combo = new ComboBox
+            {
+                Height = 28, FontSize = 12,
+                Background = new SolidColorBrush(Color.FromRgb(42, 39, 60)),
+                Foreground = new SolidColorBrush(Color.FromRgb(220, 218, 245)),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(80, 75, 120)),
+                VerticalContentAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, 0, 4)
+            };
+            AppResources.StyleDarkComboBox(combo);
+
+            var autoItem = new ComboBoxItem { Content = "自动", Tag = "Auto" };
+            combo.Items.Add(autoItem);
+
+            int selIdx = 0;
+            int idx = 1; // 0 = 自动
+
+            // WMI 选项（仅 CPU）
+            if (includeWmi)
+            {
+                var wmiItem = new ComboBoxItem { Content = "WMI (ACPI 热区)", Tag = "__WMI__" };
+                combo.Items.Add(wmiItem);
+                if (savedName == "__WMI__") selIdx = idx;
+                idx++;
+            }
+
+            foreach (var s in sensors)
+            {
+                var item = new ComboBoxItem { Content = s.ToString(), Tag = s.SensorName };
+                combo.Items.Add(item);
+                if (!string.IsNullOrEmpty(savedName) && s.SensorName == savedName)
+                    selIdx = idx;
+                idx++;
+            }
+
+            if (sensors.Count == 0 && !includeWmi)
+            {
+                var emptyItem = new ComboBoxItem { Content = "(无可用传感器)", Tag = "" };
+                combo.Items.Add(emptyItem);
+            }
+
+            combo.SelectedIndex = selIdx;
+            return combo;
         }
 
         static StackPanel MakeButtons()
