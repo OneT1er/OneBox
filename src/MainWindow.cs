@@ -1153,16 +1153,21 @@ namespace PowerAudioManager
 
                         var m = metrics[i];
                         var color = m.IsTemp ? TempColor(m.Value) : TextSecondary;
-                        // TextBlock 底用 EmojiFont 以启用彩色 glyph；文字 Run 显式覆盖 AppFont 保持统一
-                        var tb = new TextBlock { FontSize = 11, FontFamily = CompFont, VerticalAlignment = VerticalAlignment.Center };
-                        tb.Inlines.Add(new Run(m.Icon + " "));
-                        tb.Inlines.Add(new Run(m.DisplayName + " ") { Foreground = new SolidColorBrush(TextSecondary) });
-                        tb.Inlines.Add(new Run($"{m.Value?.ToString("0") ?? "--"}{m.Unit}")
+                        var chip = new StackPanel { Orientation = Orientation.Horizontal };
+                        var emojiTb = new TextBlock { Text = m.Icon, FontFamily = EmojiFont, FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
+                        System.Windows.Media.TextOptions.SetTextFormattingMode(emojiTb, System.Windows.Media.TextFormattingMode.Display);
+                        chip.Children.Add(emojiTb);
+                        chip.Children.Add(new TextBlock { Text = $" {m.DisplayName} ", FontFamily = AppFont, FontSize = 11, Foreground = new SolidColorBrush(TextSecondary), VerticalAlignment = VerticalAlignment.Center });
+                        chip.Children.Add(new TextBlock
                         {
-                                                        Foreground = new SolidColorBrush(color),
-                            FontWeight = FontWeights.SemiBold
+                            Text = $"{m.Value?.ToString("0") ?? "--"}{m.Unit}",
+                            FontFamily = AppFont,
+                            FontSize = 11,
+                            Foreground = new SolidColorBrush(color),
+                            FontWeight = FontWeights.SemiBold,
+                            VerticalAlignment = VerticalAlignment.Center
                         });
-                        _metricRow.Children.Add(tb);
+                        _metricRow.Children.Add(chip);
                     }
                     if (metrics.Count == 0)
                         _metricRow.Children.Add(new TextBlock { Text = "传感器初始化中…", Foreground = new SolidColorBrush(TextSecondary), FontSize = 11, VerticalAlignment = VerticalAlignment.Center });
