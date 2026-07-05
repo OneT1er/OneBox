@@ -27,9 +27,6 @@ namespace PowerAudioManager
         public float? GpuTemperature { get; private set; }
         public bool IsAvailable { get; private set; }
 
-        // WMI 是否成功提供了 CPU 温度（当 LHM 硬件扫描无 CPU 传感器时可用）
-        public bool UsingWmiFallback { get; private set; }
-
         public List<SensorInfo> AvailableCpuSensors { get; } = new List<SensorInfo>();
         public List<SensorInfo> AvailableGpuSensors { get; } = new List<SensorInfo>();
 
@@ -47,19 +44,8 @@ namespace PowerAudioManager
                 _started = true;
             }
 
-            // 全部初始化在后台线程，不阻塞 UI
             System.Threading.ThreadPool.QueueUserWorkItem(_ =>
             {
-                // 先试 WMI（快速，无需驱动）
-                TryWmiCpuTemp();
-                if (CpuTemperature.HasValue)
-                {
-                    IsAvailable = true;
-                    UsingWmiFallback = true;
-                    AppLog.Log("Temp", string.Format("WMI CPU={0:0}°C (fallback)", CpuTemperature.Value));
-                }
-
-                // 再开 LHM 硬件扫描
                 try
                 {
                     _computer = new Computer
@@ -73,55 +59,24 @@ namespace PowerAudioManager
                     DiscoverSensors();
                     _hwReady = true;
                     IsAvailable = true;
-
-                    // WMI 已有值就不刷掉
-                    if (!CpuTemperature.HasValue)
-                        ReadCpuFromLhm();
-
+                    // 首读
+                    ReadCpu();
+                    ReadGpu();
                     AppLog.Log("Temp", string.Format(
-                        "LHM ready: hw={0} cpuSensors={1} gpuSensors={2} admin={3} cpuTemp={4}",
+                        "ready: hw={0} cpuSensors={1} gpuSensors={2} admin={3} cpu={4}°C gpu={5}°C",
                         _computer.Hardware.Count,
                         AvailableCpuSensors.Count,
                         AvailableGpuSensors.Count,
                         AdminUtils.IsAdmin(),
-                        CpuTemperature?.ToString("0") ?? "null"));
+                        CpuTemperature?.ToString("0") ?? "null",
+                        GpuTemperature?.ToString("0") ?? "null"));
                 }
                 catch (Exception ex)
                 {
-                    AppLog.Log("Temp", "LHM init failed: " + ex.Message);
+                    AppLog.Log("Temp", "init failed: " + ex.Message);
                     _hwReady = false;
-                    IsAvailable = CpuTemperature.HasValue;
                 }
             });
-        }
-
-        void TryWmiCpuTemp()
-        {
-            try
-            {
-                using (var searcher = new System.Management.ManagementObjectSearcher(
-                    @"root\WMI", "SELECT * FROM MSAcpi_ThermalZoneTemperature"))
-                {
-                    foreach (System.Management.ManagementObject obj in searcher.Get())
-                    {
-                        try
-                        {
-                            double raw = Convert.ToDouble(obj["CurrentTemperature"]);
-                            double celsius = (raw / 10.0) - 273.15;
-                            if (celsius > 0 && celsius < 150)
-                            {
-                                CpuTemperature = (float)celsius;
-                                return;
-                            }
-                        }
-                        catch { }
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                AppLog.Log("Temp", "WMI query failed: " + ex.Message);
-            }
         }
 
         void DiscoverSensors()
@@ -167,57 +122,26 @@ namespace PowerAudioManager
 
         public void Update()
         {
-            if (!IsAvailable) return;
+            if (!IsAvailable || _computer == null || !_hwReady) return;
             try
             {
                 _updateCount++;
-
-                // 强制 WMI 模式（用户选择了 "WMI (ACPI 热区)"）
-                if (CpuSensorName == "__WMI__")
-                {
-                    TryWmiCpuTemp();
-                    UsingWmiFallback = true;
-                }
-                else
-                {
-                    // WMI 兜底：每次更新都读 WMI（<1ms），LHM 读到 CPU 传感器时才覆盖
-                    TryWmiCpuTemp();
-                    if (CpuTemperature.HasValue)
-                        UsingWmiFallback = AvailableCpuSensors.Count == 0;
-                }
-
-                // LHM 读取（如硬件已就绪）
-                if (_hwReady && _computer != null)
-                {
-                    _computer.Accept(new UpdateVisitor());
-                    if (CpuSensorName != "__WMI__")
-                        ReadCpuFromLhm();
-                    ReadGpuFromLhm();
-                }
-
-                if (_updateCount == 1)
-                    AppLog.Log("Temp", string.Format(
-                        "first update: CPU={0}°C GPU={1}°C wmi={2} lhmReady={3} cpuSensors={4}",
-                        CpuTemperature?.ToString("0") ?? "null",
-                        GpuTemperature?.ToString("0") ?? "null",
-                        UsingWmiFallback, _hwReady, AvailableCpuSensors.Count));
+                _computer.Accept(new UpdateVisitor());
+                ReadCpu();
+                ReadGpu();
             }
-            catch (Exception ex)
-            {
-                if (_updateCount <= 3) AppLog.Log("Temp", "update err: " + ex.Message);
-            }
+            catch { }
         }
 
-        void ReadCpuFromLhm()
+        void ReadCpu()
         {
-            if (_computer == null || !_hwReady) return;
             try
             {
-                SensorInfo cpuTarget = null;
-                if (!string.IsNullOrEmpty(CpuSensorName) && CpuSensorName != "Auto")
-                    cpuTarget = AvailableCpuSensors.FirstOrDefault(s => s.SensorName == CpuSensorName);
+                SensorInfo target = null;
+                if (!string.IsNullOrEmpty(CpuSensorName))
+                    target = AvailableCpuSensors.FirstOrDefault(s => s.SensorName == CpuSensorName);
 
-                float? cpuTemp = null;
+                float? val = null;
 
                 void ScanHw(IHardware hw)
                 {
@@ -225,17 +149,16 @@ namespace PowerAudioManager
                     foreach (var s in hw.Sensors)
                     {
                         if (s.SensorType != SensorType.Temperature) continue;
-                        if (!IsValidTemp(s.Value)) continue;
+                        if (!IsValid(s.Value)) continue;
 
-                        if (cpuTarget != null && s.Name == cpuTarget.SensorName)
-                            { cpuTemp = s.Value; return; }
-                        if (cpuTarget != null) continue;
+                        if (target != null && s.Name == target.SensorName)
+                            { val = s.Value; return; }
+                        if (target != null) continue;
 
-                        // 自动模式：优先封装级传感器
-                        if (cpuTemp == null) cpuTemp = s.Value;
+                        if (val == null) val = s.Value;
                         if (s.Name.Contains("Package") || s.Name.Contains("Tctl") || s.Name.Contains("Tdie")
                             || s.Name.Contains("Die") || s.Name.Contains("Core Max"))
-                            { cpuTemp = s.Value; return; }
+                            { val = s.Value; return; }
                     }
                 }
 
@@ -246,24 +169,20 @@ namespace PowerAudioManager
                         try { ScanHw(sub); } catch { }
                 }
 
-                if (cpuTemp.HasValue)
-                {
-                    CpuTemperature = cpuTemp;
-                    UsingWmiFallback = false;
-                }
+                if (val.HasValue) CpuTemperature = val;
             }
             catch { }
         }
 
-        void ReadGpuFromLhm()
+        void ReadGpu()
         {
             try
             {
-                SensorInfo gpuTarget = null;
-                if (!string.IsNullOrEmpty(GpuSensorName) && GpuSensorName != "Auto")
-                    gpuTarget = AvailableGpuSensors.FirstOrDefault(s => s.SensorName == GpuSensorName);
+                SensorInfo target = null;
+                if (!string.IsNullOrEmpty(GpuSensorName))
+                    target = AvailableGpuSensors.FirstOrDefault(s => s.SensorName == GpuSensorName);
 
-                float? gpuTemp = null;
+                float? val = null;
 
                 foreach (var hw in _computer.Hardware)
                 {
@@ -275,28 +194,24 @@ namespace PowerAudioManager
                     foreach (var s in hw.Sensors)
                     {
                         if (s.SensorType != SensorType.Temperature) continue;
-                        if (!IsValidTemp(s.Value)) continue;
+                        if (!IsValid(s.Value)) continue;
 
-                        if (gpuTarget != null && s.Name == gpuTarget.SensorName)
-                            { gpuTemp = s.Value; break; }
-                        if (gpuTarget != null) continue;
+                        if (target != null && s.Name == target.SensorName)
+                            { val = s.Value; break; }
+                        if (target != null) continue;
 
-                        if (gpuTemp == null) gpuTemp = s.Value;
+                        if (val == null) val = s.Value;
                         if (s.Name.Contains("Core") || s.Name.Contains("GPU"))
-                            { gpuTemp = s.Value; break; }
+                            { val = s.Value; break; }
                     }
                 }
 
-                GpuTemperature = gpuTemp;
+                if (val.HasValue) GpuTemperature = val;
             }
             catch { }
         }
 
-        static bool IsValidTemp(float? v)
-        {
-            if (!v.HasValue) return false;
-            return v.Value > 0 && v.Value < 150;
-        }
+        static bool IsValid(float? v) => v.HasValue && v.Value > 0 && v.Value < 150;
 
         public void Stop()
         {
@@ -306,7 +221,6 @@ namespace PowerAudioManager
             _hwReady = false;
             _updateCount = 0;
             IsAvailable = false;
-            UsingWmiFallback = false;
             AvailableCpuSensors.Clear();
             AvailableGpuSensors.Clear();
         }

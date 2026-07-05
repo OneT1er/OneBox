@@ -1105,21 +1105,24 @@ namespace PowerAudioManager
         void StartTempTimer()
         {
             try { _tempTimer?.Dispose(); } catch { }
-            int intervalSec = AppPrefs.GetInt("Temp.IntervalSec", 1);
-            if (intervalSec < 1) intervalSec = 1;
-            if (intervalSec > 60) intervalSec = 60;
+            int intervalMs = AppPrefs.GetInt("Temp.IntervalMs", 1000);
+            if (intervalMs < 500) intervalMs = 500;
+            if (intervalMs > 60000) intervalMs = 60000;
             _tempTimer = new System.Threading.Timer(_ =>
             {
                 HardwareMonitorService.Instance.Update();
                 Dispatcher.BeginInvoke(new Action(UpdateTempUI));
-            }, null, 2000, intervalSec * 1000);
+            }, null, 2000, intervalMs);
         }
 
         internal void RestartTempTimer()
         {
             try { _tempTimer?.Dispose(); } catch { }
             if (!ModuleVisible("Temp")) return;
-            HardwareMonitorService.Instance.Start();
+            var hw = HardwareMonitorService.Instance;
+            hw.CpuSensorName = AppPrefs.GetString("Temp.CpuSensor", "");
+            hw.GpuSensorName = AppPrefs.GetString("Temp.GpuSensor", "");
+            hw.Start();
             StartTempTimer();
         }
 

@@ -810,8 +810,7 @@ namespace PowerAudioManager
 
             // CPU 传感器来源
             stack.Children.Add(new TextBlock { Text = "CPU 温度来源", Foreground = Brushes.White, FontSize = 12, Margin = new Thickness(0, 0, 0, 4) });
-            var cpuComboRaw = hw.AvailableCpuSensors;
-            var cpuCombo = MakeSensorCombo(cpuComboRaw, AppPrefs.GetString("Temp.CpuSensor", ""), true);
+            var cpuCombo = MakeSensorCombo(hw.AvailableCpuSensors, AppPrefs.GetString("Temp.CpuSensor", ""));
             stack.Children.Add(cpuCombo);
             stack.Children.Add(new TextBlock { Text = "选择要显示的 CPU 温度传感器。\"自动\"由程序智能选择。", Foreground = fg, FontSize = 10, Margin = new Thickness(0, 2, 0, 16) });
 
@@ -824,9 +823,9 @@ namespace PowerAudioManager
             // 更新间隔
             stack.Children.Add(new TextBlock { Text = "更新间隔", Foreground = Brushes.White, FontSize = 12, Margin = new Thickness(0, 0, 0, 4) });
             var intervalRow = new DockPanel { Margin = new Thickness(0, 0, 0, 16) };
-            var intervalBox = new TextBox { Width = 60, MinHeight = 24, Text = AppPrefs.GetInt("Temp.IntervalSec", 1).ToString(), Background = new SolidColorBrush(Color.FromRgb(42, 39, 60)), Foreground = Brushes.White, BorderBrush = new SolidColorBrush(Color.FromRgb(80, 75, 120)), VerticalContentAlignment = VerticalAlignment.Center };
+            var intervalBox = new TextBox { Width = 60, MinHeight = 24, Text = AppPrefs.GetInt("Temp.IntervalMs", 1000).ToString(), Background = new SolidColorBrush(Color.FromRgb(42, 39, 60)), Foreground = Brushes.White, BorderBrush = new SolidColorBrush(Color.FromRgb(80, 75, 120)), VerticalContentAlignment = VerticalAlignment.Center };
             intervalRow.Children.Add(intervalBox);
-            intervalRow.Children.Add(new TextBlock { Text = " 秒 (1-60)", Foreground = fg, FontSize = 12, VerticalAlignment = VerticalAlignment.Center });
+            intervalRow.Children.Add(new TextBlock { Text = " ms (500-60000)", Foreground = fg, FontSize = 12, VerticalAlignment = VerticalAlignment.Center });
             stack.Children.Add(intervalRow);
 
             // 高温警告阈值
@@ -854,14 +853,13 @@ namespace PowerAudioManager
                 string cpuSel = (cpuCombo.SelectedItem as ComboBoxItem)?.Tag as string ?? "Auto";
                 string gpuSel = (gpuCombo.SelectedItem as ComboBoxItem)?.Tag as string ?? "Auto";
                 if (cpuSel == "Auto") cpuSel = "";
-                if (cpuSel == "__WMI__") cpuSel = "__WMI__";
                 if (gpuSel == "Auto") gpuSel = "";
                 AppPrefs.SetString("Temp.CpuSensor", cpuSel);
                 AppPrefs.SetString("Temp.GpuSensor", gpuSel);
                 hw.CpuSensorName = cpuSel;
                 hw.GpuSensorName = gpuSel;
 
-                int iv; if (int.TryParse(intervalBox.Text, out iv) && iv >= 1 && iv <= 60) AppPrefs.SetInt("Temp.IntervalSec", iv);
+                int iv; if (int.TryParse(intervalBox.Text, out iv) && iv >= 500 && iv <= 60000) AppPrefs.SetInt("Temp.IntervalMs", iv);
                 int w; if (int.TryParse(warnBox.Text, out w) && w > 0) AppPrefs.SetInt("Temp.WarnC", w);
                 int c; if (int.TryParse(critBox.Text, out c) && c > 0) AppPrefs.SetInt("Temp.CriticalC", c);
                 if (owner is MainWindow mw) mw.RestartTempTimer();
@@ -874,11 +872,6 @@ namespace PowerAudioManager
         }
 
         static ComboBox MakeSensorCombo(List<SensorInfo> sensors, string savedName)
-        {
-            return MakeSensorCombo(sensors, savedName, false);
-        }
-
-        static ComboBox MakeSensorCombo(List<SensorInfo> sensors, string savedName, bool includeWmi)
         {
             var combo = new ComboBox
             {
@@ -895,17 +888,7 @@ namespace PowerAudioManager
             combo.Items.Add(autoItem);
 
             int selIdx = 0;
-            int idx = 1; // 0 = 自动
-
-            // WMI 选项（仅 CPU）
-            if (includeWmi)
-            {
-                var wmiItem = new ComboBoxItem { Content = "WMI (ACPI 热区)", Tag = "__WMI__" };
-                combo.Items.Add(wmiItem);
-                if (savedName == "__WMI__") selIdx = idx;
-                idx++;
-            }
-
+            int idx = 1;
             foreach (var s in sensors)
             {
                 var item = new ComboBoxItem { Content = s.ToString(), Tag = s.SensorName };
@@ -915,9 +898,9 @@ namespace PowerAudioManager
                 idx++;
             }
 
-            if (sensors.Count == 0 && !includeWmi)
+            if (sensors.Count == 0)
             {
-                var emptyItem = new ComboBoxItem { Content = "(无可用传感器)", Tag = "" };
+                var emptyItem = new ComboBoxItem { Content = "(扫描中…)", Tag = "" };
                 combo.Items.Add(emptyItem);
             }
 
