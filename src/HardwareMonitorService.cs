@@ -17,8 +17,8 @@ namespace PowerAudioManager
 
     public class MetricValue
     {
-        public string DisplayName;  // 用户自定义简称
-        public string Icon;         // "🌡", "🎮", etc.
+        public string DisplayName;
+        public string IconKey;      // "cpu","gpu","hot","vram","fan","ctrl","def"
         public float? Value;
         public string Unit;         // "°C", "RPM", "%"
         public bool IsTemp => Unit == "°C";
@@ -124,21 +124,44 @@ namespace PowerAudioManager
             EnabledMetrics = raw.Split(';', StringSplitOptions.RemoveEmptyEntries).Select(s => s.Trim()).Where(s => s.Length > 0).ToList();
         }
 
-        public static string EncodeConfig(SensorInfo s, string displayName)
+        public static string EncodeConfig(SensorInfo s, string displayName) => EncodeConfig(s, displayName, AutoIconKey(displayName, s));
+
+        public static string EncodeConfig(SensorInfo s, string displayName, string iconKey)
         {
             string type = s.SensorType.ToString();
-            return $"{type}|{s.HardwareName}|{s.SensorName}|{displayName}";
+            return $"{type}|{s.HardwareName}|{s.SensorName}|{displayName}|{iconKey}";
         }
 
-        public static SensorInfo DecodeConfig(string key, out string displayName)
+        public static SensorInfo DecodeConfig(string key, out string displayName, out string iconKey)
         {
-            displayName = "";
+            displayName = ""; iconKey = "def";
             var parts = key.Split('|');
             if (parts.Length < 3) return null;
             SensorType st;
             if (!Enum.TryParse(parts[0], out st)) st = SensorType.Temperature;
             displayName = parts.Length >= 4 ? parts[3] : DefaultDisplayName(parts[1], parts[2], st);
+            iconKey = parts.Length >= 5 ? parts[4] : AutoIconKey(displayName, null);
             return new SensorInfo { SensorType = st, HardwareName = parts[1], SensorName = parts[2] };
+        }
+
+        // 从 displayName + sensorInfo 推断默认图标 key
+        public static string AutoIconKey(string displayName, SensorInfo s)
+        {
+            string dn = (displayName ?? "").ToLower();
+            if (s != null)
+            {
+                if (s.SensorType == SensorType.Fan) return "fan";
+                if (s.SensorType == SensorType.Control) return "ctrl";
+                if (s.SensorName.Contains("Hot Spot")) return "hot";
+                if (s.SensorName.Contains("Memory") || s.SensorName.Contains("Junction")) return "vram";
+            }
+            if (dn.Contains("cpu") && !dn.Contains("fan")) return "cpu";
+            if (dn.Contains("gpu") && !dn.Contains("hot") && !dn.Contains("vram") && !dn.Contains("mem") && !dn.Contains("fan")) return "gpu";
+            if (dn.Contains("hot")) return "hot";
+            if (dn.Contains("vram") || dn.Contains("mem") || dn.Contains("显存")) return "vram";
+            if (dn.Contains("fan") && !dn.Contains("control") && !dn.Contains("%")) return "fan";
+            if (dn.Contains("%") || dn.Contains("control")) return "ctrl";
+            return "def";
         }
 
         public static string DefaultDisplayName(string hwName, string sensorName, SensorType st)
@@ -191,8 +214,8 @@ namespace PowerAudioManager
 
                 foreach (var key in EnabledMetrics)
                 {
-                    string displayName;
-                    var cfg = DecodeConfig(key, out displayName);
+                    string displayName, iconKey;
+                    var cfg = DecodeConfig(key, out displayName, out iconKey);
                     if (cfg == null) continue;
                     var sensor = FindSensor(cfg);
                     if (sensor == null) continue;
@@ -200,10 +223,9 @@ namespace PowerAudioManager
                     float? val = ReadSensorValue(sensor);
                     if (val.HasValue)
                     {
-                        string icon = AutoIcon(cfg);
                         string unit = cfg.SensorType == SensorType.Temperature ? "°C" :
                                       cfg.SensorType == SensorType.Control ? "%" : "RPM";
-                        values.Add(new MetricValue { DisplayName = displayName, Icon = icon, Value = val, Unit = unit, ConfigKey = key });
+                        values.Add(new MetricValue { DisplayName = displayName, IconKey = iconKey, Value = val, Unit = unit, ConfigKey = key });
                     }
                 }
 

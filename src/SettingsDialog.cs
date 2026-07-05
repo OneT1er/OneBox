@@ -865,36 +865,37 @@ namespace PowerAudioManager
             return Scroll(stack);
         }
 
+        static readonly string[] IconKeyOptions = { "cpu", "gpu", "hot", "vram", "fan", "ctrl", "def" };
+        static readonly string[] IconKeyLabels = { "CPU芯片", "GPU显卡", "火焰", "内存条", "风扇", "滑动条", "圆点" };
+
         static void RefreshMetricList(StackPanel list, HardwareMonitorService hw, SolidColorBrush fg)
         {
             list.Children.Clear();
             foreach (var key in hw.EnabledMetrics)
             {
-                string displayName;
-                var cfg = HardwareMonitorService.DecodeConfig(key, out displayName);
+                string displayName, iconKey;
+                var cfg = HardwareMonitorService.DecodeConfig(key, out displayName, out iconKey);
                 if (cfg == null) continue;
-                var row = new DockPanel { Margin = new Thickness(0, 2, 0, 2), LastChildFill = true };
-                string icon = HardwareMonitorService.AutoIcon(cfg);
+                var row = new DockPanel { Margin = new Thickness(0, 3, 0, 3), LastChildFill = true };
                 string unit = cfg.SensorType == SensorType.Temperature ? "°C" :
                               cfg.SensorType == SensorType.Control ? "%" : "RPM";
                 float? val = hw.ReadSensorPreview(cfg);
-                string valStr = val.HasValue ? $"  {val.Value:0}{unit}" : "";
+                string valStr = val.HasValue ? $" {val.Value:0}{unit}" : "";
 
+                // 矢量图标 + 名称 + 值
                 var nameRow = new StackPanel { Orientation = Orientation.Horizontal };
-                nameRow.Children.Add(new TextBlock { Text = $"{icon} ", Foreground = Brushes.White, FontSize = 11, VerticalAlignment = VerticalAlignment.Center });
-                nameRow.Children.Add(new TextBlock { Text = displayName, Foreground = Brushes.White, FontSize = 11, FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center });
+                var iconColor = MainWindow.MetricIconColorByKey(iconKey);
+                nameRow.Children.Add(MainWindow.MetricIcon(iconKey, iconColor));
+                nameRow.Children.Add(new TextBlock { Text = " " + displayName, Foreground = Brushes.White, FontSize = 11, FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center });
                 nameRow.Children.Add(new TextBlock { Text = valStr, Foreground = fg, FontSize = 11, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0, 0, 0) });
-                nameRow.Children.Add(new TextBlock { Text = $"  ({cfg.SensorName})", Foreground = fg, FontSize = 10, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(4, 0, 0, 0) });
+                nameRow.Children.Add(new TextBlock { Text = $"  {cfg.SensorName}", Foreground = fg, FontSize = 9, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(4, 0, 0, 0) });
                 row.Children.Add(nameRow);
 
-                // 重命名按钮
-                var renameBtn = new Button { Content = "✎", Width = 24, Height = 22, Background = Brushes.Transparent, BorderBrush = Brushes.Transparent, Foreground = fg, FontSize = 12, Cursor = System.Windows.Input.Cursors.Hand, Padding = new Thickness(0), ToolTip = "重命名" };
-                MainWindow.ApplyFlatStyle(renameBtn);
-                renameBtn.MinWidth = 0; renameBtn.MinHeight = 0;
-                // 删除按钮
+                // 编辑按钮 → 内联编辑所有属性
+                var editBtn = new Button { Content = "✎", Width = 24, Height = 22, Background = Brushes.Transparent, BorderBrush = Brushes.Transparent, Foreground = fg, FontSize = 12, Cursor = System.Windows.Input.Cursors.Hand, Padding = new Thickness(0), ToolTip = "编辑" };
+                MainWindow.ApplyFlatStyle(editBtn); editBtn.MinWidth = 0; editBtn.MinHeight = 0;
                 var delBtn = new Button { Content = "✕", Width = 24, Height = 22, Background = Brushes.Transparent, BorderBrush = Brushes.Transparent, Foreground = new SolidColorBrush(Color.FromRgb(200, 100, 100)), FontSize = 12, Cursor = System.Windows.Input.Cursors.Hand, Padding = new Thickness(0), ToolTip = "删除" };
-                MainWindow.ApplyFlatStyle(delBtn);
-                delBtn.MinWidth = 0; delBtn.MinHeight = 0;
+                MainWindow.ApplyFlatStyle(delBtn); delBtn.MinWidth = 0; delBtn.MinHeight = 0;
 
                 string capturedKey = key;
                 var capturedList = list;
@@ -905,50 +906,77 @@ namespace PowerAudioManager
                     hw.SaveEnabledMetrics(updated);
                     RefreshMetricList(capturedList, hw, fg);
                 };
-                renameBtn.Click += (s2, e2) =>
+                editBtn.Click += (s2, e2) =>
                 {
-                    // 弹出输入框改显示名
-                    var input = new TextBox { Text = displayName, Width = 120, Height = 22, FontSize = 11, Background = new SolidColorBrush(Color.FromRgb(42, 39, 60)), Foreground = Brushes.White, BorderBrush = new SolidColorBrush(Color.FromRgb(80, 75, 120)) };
-                    input.KeyDown += (s3, e3) =>
+                    // 展开内联编辑面板
+                    row.Children.Clear();
+                    var editPanel = new StackPanel();
+                    // 名称
+                    editPanel.Children.Add(new TextBlock { Text = "名称", Foreground = fg, FontSize = 10, Margin = new Thickness(0, 0, 0, 2) });
+                    var nameBox = new TextBox { Text = displayName, Width = 120, Height = 22, FontSize = 11, Background = new SolidColorBrush(Color.FromRgb(42, 39, 60)), Foreground = Brushes.White, BorderBrush = new SolidColorBrush(Color.FromRgb(80, 75, 120)) };
+                    editPanel.Children.Add(nameBox);
+                    // 图标
+                    editPanel.Children.Add(new TextBlock { Text = "图标", Foreground = fg, FontSize = 10, Margin = new Thickness(0, 6, 0, 2) });
+                    var iconCombo = new ComboBox { Height = 24, FontSize = 11, Background = new SolidColorBrush(Color.FromRgb(42, 39, 60)), Foreground = Brushes.White, BorderBrush = new SolidColorBrush(Color.FromRgb(80, 75, 120)) };
+                    AppResources.StyleDarkComboBox(iconCombo);
+                    int selIcon = 0;
+                    for (int ii = 0; ii < IconKeyOptions.Length; ii++)
                     {
-                        if (e3.Key == System.Windows.Input.Key.Enter)
-                        {
-                            var updated = new List<string>(hw.EnabledMetrics);
-                            int idx = updated.IndexOf(capturedKey);
-                            if (idx >= 0)
-                            {
-                                string dn;
-                                var c = HardwareMonitorService.DecodeConfig(capturedKey, out dn);
-                                updated[idx] = HardwareMonitorService.EncodeConfig(c, input.Text.Trim().Length > 0 ? input.Text.Trim() : dn);
-                                hw.SaveEnabledMetrics(updated);
-                                RefreshMetricList(capturedList, hw, fg);
-                            }
-                        }
-                    };
-                    input.LostFocus += (s3, e3) =>
+                        var item = new ComboBoxItem { Content = $"{IconKeyLabels[ii]}", Tag = IconKeyOptions[ii] };
+                        iconCombo.Items.Add(item);
+                        if (IconKeyOptions[ii] == iconKey) selIcon = ii;
+                    }
+                    iconCombo.SelectedIndex = selIcon;
+                    editPanel.Children.Add(iconCombo);
+                    // 传感器
+                    editPanel.Children.Add(new TextBlock { Text = "传感器", Foreground = fg, FontSize = 10, Margin = new Thickness(0, 6, 0, 2) });
+                    var sensorCombo2 = new ComboBox { Height = 24, FontSize = 11, Background = new SolidColorBrush(Color.FromRgb(42, 39, 60)), Foreground = Brushes.White, BorderBrush = new SolidColorBrush(Color.FromRgb(80, 75, 120)) };
+                    AppResources.StyleDarkComboBox(sensorCombo2);
+                    var pool = cfg.SensorType == SensorType.Fan ? hw.AllFanSensors :
+                               cfg.SensorType == SensorType.Control ? hw.AllControlSensors : hw.AllTempSensors;
+                    int selSensor = 0;
+                    for (int si = 0; si < pool.Count; si++)
                     {
+                        var s = pool[si];
+                        sensorCombo2.Items.Add(new ComboBoxItem { Content = $"{s.HardwareName} — {s.SensorName}", Tag = HardwareMonitorService.EncodeConfig(s, displayName, iconKey) });
+                        if (s.HardwareName == cfg.HardwareName && s.SensorName == cfg.SensorName) selSensor = si;
+                    }
+                    sensorCombo2.SelectedIndex = selSensor;
+                    editPanel.Children.Add(sensorCombo2);
+                    // 保存/取消
+                    var actRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 6, 0, 0) };
+                    var saveBtn = new Button { Content = "保存", Height = 22, FontSize = 11, Padding = new Thickness(8, 0, 8, 0) };
+                    AppResources.StyleDialogButton(saveBtn, true);
+                    var cancelBtn2 = new Button { Content = "取消", Height = 22, FontSize = 11, Padding = new Thickness(8, 0, 8, 0), Margin = new Thickness(6, 0, 0, 0) };
+                    AppResources.StyleDialogButton(cancelBtn2, false);
+                    actRow.Children.Add(saveBtn); actRow.Children.Add(cancelBtn2);
+                    editPanel.Children.Add(actRow);
+
+                    saveBtn.Click += (s3, e3) =>
+                    {
+                        var selKey = (sensorCombo2.SelectedItem as ComboBoxItem)?.Tag as string ?? capturedKey;
+                        var newIcon = (iconCombo.SelectedItem as ComboBoxItem)?.Tag as string ?? iconKey;
+                        var newName = string.IsNullOrWhiteSpace(nameBox.Text) ? displayName : nameBox.Text.Trim();
+                        // 重建 key：用新传感器 + 新名称 + 新图标
+                        string dn2; string ik2;
+                        var newCfg = HardwareMonitorService.DecodeConfig(selKey, out dn2, out ik2);
+                        var finalKey = HardwareMonitorService.EncodeConfig(newCfg, newName, newIcon);
                         var updated = new List<string>(hw.EnabledMetrics);
                         int idx = updated.IndexOf(capturedKey);
-                        if (idx >= 0)
-                        {
-                            string dn;
-                            var c = HardwareMonitorService.DecodeConfig(capturedKey, out dn);
-                            updated[idx] = HardwareMonitorService.EncodeConfig(c, input.Text.Trim().Length > 0 ? input.Text.Trim() : dn);
-                            hw.SaveEnabledMetrics(updated);
-                            RefreshMetricList(capturedList, hw, fg);
-                        }
+                        if (idx >= 0) updated[idx] = finalKey;
+                        else updated.Add(finalKey);
+                        hw.SaveEnabledMetrics(updated);
+                        RefreshMetricList(capturedList, hw, fg);
                     };
-                    // 替换行内内容为输入框
-                    row.Children.Clear();
-                    row.Children.Add(input);
-                    input.Focus();
-                    input.SelectAll();
+                    cancelBtn2.Click += (s3, e3) => RefreshMetricList(capturedList, hw, fg);
+
+                    row.Children.Add(editPanel);
                 };
 
                 DockPanel.SetDock(delBtn, Dock.Right);
-                DockPanel.SetDock(renameBtn, Dock.Right);
+                DockPanel.SetDock(editBtn, Dock.Right);
                 row.Children.Add(delBtn);
-                row.Children.Add(renameBtn);
+                row.Children.Add(editBtn);
 
                 list.Children.Add(row);
             }
@@ -994,11 +1022,11 @@ namespace PowerAudioManager
                 {
                     foreach (var s in pool)
                     {
-                        string icon = HardwareMonitorService.AutoIcon(s);
                         float? preview = hw.ReadSensorPreview(s);
                         string valStr = preview.HasValue ? $"  [{preview.Value:0}{unit}]" : "  [--]";
                         string dn = HardwareMonitorService.DefaultDisplayName(s.HardwareName, s.SensorName, s.SensorType);
-                        sensorCombo.Items.Add(new ComboBoxItem { Content = $"{icon} {s.HardwareName} — {s.SensorName}{valStr}", Tag = HardwareMonitorService.EncodeConfig(s, dn) });
+                        string ik = HardwareMonitorService.AutoIconKey(dn, s);
+                        sensorCombo.Items.Add(new ComboBoxItem { Content = $"{s.HardwareName} — {s.SensorName}{valStr}", Tag = HardwareMonitorService.EncodeConfig(s, dn, ik) });
                     }
                 }
                 sensorCombo.SelectedIndex = pool.Count > 0 ? 0 : -1;
