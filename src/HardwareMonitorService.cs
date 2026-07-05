@@ -74,21 +74,25 @@ namespace PowerAudioManager
         void DiscoverSensors()
         {
             AllTempSensors.Clear(); AllFanSensors.Clear();
+            var seen = new HashSet<string>();
 
             void Scan(IHardware hw)
             {
                 foreach (var s in hw.Sensors)
                 {
+                    var key = $"{hw.Name}|{s.Name}|{s.SensorType}";
+                    if (!seen.Add(key)) continue; // 去重：不同层级可能有同名传感器
+
                     var info = new SensorInfo { HardwareName = hw.Name, SensorName = s.Name, HwType = hw.HardwareType, SensorType = s.SensorType };
                     if (s.SensorType == SensorType.Temperature)
                     {
                         AllTempSensors.Add(info);
-                        AppLog.Log("Temp", $"  [T] {info}");
+                        AppLog.Log("Temp", $"  [T] {info} ({s.Value?.ToString("0") ?? "null"})");
                     }
                     if (s.SensorType == SensorType.Fan || s.SensorType == SensorType.Control)
                     {
                         AllFanSensors.Add(info);
-                        AppLog.Log("Temp", $"  [F] {info}");
+                        AppLog.Log("Temp", $"  [F] {info} type={s.SensorType} val={s.Value?.ToString("0") ?? "null"}");
                     }
                 }
                 foreach (var sub in hw.SubHardware) Scan(sub);
@@ -163,12 +167,9 @@ namespace PowerAudioManager
                     {
                         string icon = AutoIcon(cfg);
                         string label = cfg.SensorName.Length > 10 ? cfg.SensorName.Substring(0, 10) : cfg.SensorName;
-                        values.Add(new MetricValue
-                        {
-                            Label = label, Icon = icon, Value = val,
-                            Unit = cfg.SensorType == SensorType.Fan ? "RPM" : "°C",
-                            ConfigKey = key
-                        });
+                        string unit = cfg.SensorType == SensorType.Temperature ? "°C" :
+                                      cfg.SensorType == SensorType.Control ? "%" : "RPM";
+                        values.Add(new MetricValue { Label = label, Icon = icon, Value = val, Unit = unit, ConfigKey = key });
                     }
                 }
 
@@ -228,7 +229,8 @@ namespace PowerAudioManager
                             if (float.IsNaN(v)) return null;
                             if (cfg.SensorType == SensorType.Temperature && (v <= 0 || v > 150)) return null;
                             bool isFanType = cfg.SensorType == SensorType.Fan || cfg.SensorType == SensorType.Control;
-                            if (isFanType && (v < 0 || v > 10000)) return null;
+                            if (cfg.SensorType == SensorType.Control && (v < 0 || v > 100)) return null;
+                            if (cfg.SensorType == SensorType.Fan && (v < 0 || v > 10000)) return null;
                             return v;
                         }
                     }
