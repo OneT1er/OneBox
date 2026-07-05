@@ -118,7 +118,7 @@ namespace PowerAudioManager
 
         public static string EncodeConfig(SensorInfo s)
         {
-            string type = (s.SensorType == SensorType.Temperature) ? "Temp" : "Fan";
+            string type = s.SensorType.ToString(); // "Temperature", "Fan", "Control"
             return $"{type}|{s.HardwareName}|{s.SensorName}";
         }
 
@@ -126,7 +126,9 @@ namespace PowerAudioManager
         {
             var parts = key.Split('|');
             if (parts.Length < 3) return null;
-            return new SensorInfo { SensorType = parts[0] == "Fan" ? SensorType.Fan : SensorType.Temperature, HardwareName = parts[1], SensorName = parts[2] };
+            SensorType st;
+            if (!Enum.TryParse(parts[0], out st)) st = SensorType.Temperature;
+            return new SensorInfo { SensorType = st, HardwareName = parts[1], SensorName = parts[2] };
         }
 
         public void SaveEnabledMetrics(List<string> list)
@@ -175,15 +177,11 @@ namespace PowerAudioManager
             catch { }
         }
 
-        // 设置中预览传感器实时值
+        // 设置中预览传感器实时值（读取缓存值，不触发硬件刷新）
         public float? ReadSensorPreview(SensorInfo cfg)
         {
             if (_computer == null || !_hwReady) return null;
-            try
-            {
-                _computer.Accept(new UpdateVisitor());
-                return ReadSensorValue(cfg);
-            }
+            try { return ReadSensorValue(cfg); }
             catch { return null; }
         }
 
@@ -213,19 +211,33 @@ namespace PowerAudioManager
         float? ReadSensorValue(SensorInfo cfg)
         {
             if (_computer == null) return null;
-            foreach (var hw in _computer.Hardware)
+            return ReadSensorValueIn(_computer.Hardware, cfg);
+        }
+
+        float? ReadSensorValueIn(IList<IHardware> hardwareList, SensorInfo cfg)
+        {
+            foreach (var hw in hardwareList)
             {
-                if (hw.Name != cfg.HardwareName) continue;
-                foreach (var s in hw.Sensors)
+                if (hw.Name == cfg.HardwareName)
                 {
-                    if (s.Name == cfg.SensorName && s.SensorType == cfg.SensorType)
+                    foreach (var s in hw.Sensors)
                     {
-                        float v = s.Value ?? float.NaN;
-                        if (float.IsNaN(v)) return null;
-                        if (cfg.SensorType == SensorType.Temperature && (v <= 0 || v > 150)) return null;
-                        if (cfg.SensorType == SensorType.Fan && v < 0) return null;
-                        return v;
+                        if (s.Name == cfg.SensorName && s.SensorType == cfg.SensorType)
+                        {
+                            float v = s.Value ?? float.NaN;
+                            if (float.IsNaN(v)) return null;
+                            if (cfg.SensorType == SensorType.Temperature && (v <= 0 || v > 150)) return null;
+                            bool isFanType = cfg.SensorType == SensorType.Fan || cfg.SensorType == SensorType.Control;
+                            if (isFanType && (v < 0 || v > 10000)) return null;
+                            return v;
+                        }
                     }
+                }
+                // 也搜子硬件
+                if (hw.SubHardware != null && hw.SubHardware.Length > 0)
+                {
+                    var subResult = ReadSensorValueIn(hw.SubHardware, cfg);
+                    if (subResult.HasValue) return subResult;
                 }
             }
             return null;
