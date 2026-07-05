@@ -285,7 +285,7 @@ namespace PowerAudioManager
             _collapsedTempLabel = new TextBlock
             {
                 Foreground = new SolidColorBrush(TextSecondary),
-                FontFamily = AppFont,
+                FontFamily = EmojiFont,
                 FontSize = 10,
                 VerticalAlignment = VerticalAlignment.Center,
                 Margin = new Thickness(12, 0, 0, 0),
@@ -451,13 +451,14 @@ namespace PowerAudioManager
             {
             if (contentPanel.Children.Count > 0) contentPanel.Children.Add(MakeDivider());
             var memHeader = new TextBlock {
+                FontFamily = EmojiFont,
                 Foreground = new SolidColorBrush(AccentColor),
                 FontSize = 12,
                 FontWeight = FontWeights.SemiBold,
                 Margin = new Thickness(0, 0, 0, 6)
             };
-            memHeader.Inlines.Add(new Run("🗑") { FontFamily = EmojiFont });
-            memHeader.Inlines.Add(new Run(" 内存清理"));
+            memHeader.Inlines.Add(new Run("🗑 "));
+            memHeader.Inlines.Add(new Run("内存清理") { FontFamily = AppFont });
             contentPanel.Children.Add(memHeader);
             _memStatusLabel = new TextBlock {
                 Foreground = new SolidColorBrush(TextSecondary),
@@ -498,8 +499,9 @@ namespace PowerAudioManager
                 FontSize = 12,
                 Foreground = new SolidColorBrush(TextSecondary)
             };
-            trContent.Inlines.Add(new Run("\uD83D\uDCDD") { FontFamily = EmojiFont });
-            trContent.Inlines.Add(new Run("  打开翻译窗口"));
+            trContent.FontFamily = EmojiFont;
+            trContent.Inlines.Add(new Run("\uD83D\uDCDD "));
+            trContent.Inlines.Add(new Run(" 打开翻译窗口") { FontFamily = AppFont });
             var trBtn = new Button {
                 Content = trContent,
                 Padding = new Thickness(10, 6, 10, 6),
@@ -567,9 +569,9 @@ namespace PowerAudioManager
 
         void BuildClipboardButton(StackPanel contentPanel)
         {
-            var cbContent = new TextBlock { FontSize = 12, Foreground = new SolidColorBrush(TextSecondary) };
-            cbContent.Inlines.Add(new Run("📋") { FontFamily = EmojiFont });
-            cbContent.Inlines.Add(new Run("  剪贴板历史"));
+            var cbContent = new TextBlock { FontSize = 12, FontFamily = EmojiFont, Foreground = new SolidColorBrush(TextSecondary) };
+            cbContent.Inlines.Add(new Run("📋 "));
+            cbContent.Inlines.Add(new Run(" 剪贴板历史") { FontFamily = AppFont });
             var cbBtn = new Button {
                 Content = cbContent,
                 Padding = new Thickness(10, 6, 10, 6),
@@ -584,9 +586,9 @@ namespace PowerAudioManager
 
         void BuildGalleryButton(StackPanel contentPanel)
         {
-            var gContent = new TextBlock { FontSize = 12, Foreground = new SolidColorBrush(TextSecondary) };
-            gContent.Inlines.Add(new Run("🖼") { FontFamily = EmojiFont });
-            gContent.Inlines.Add(new Run("  截图图库"));
+            var gContent = new TextBlock { FontSize = 12, FontFamily = EmojiFont, Foreground = new SolidColorBrush(TextSecondary) };
+            gContent.Inlines.Add(new Run("🖼 "));
+            gContent.Inlines.Add(new Run(" 截图图库") { FontFamily = AppFont });
             var gBtn = new Button {
                 Content = gContent,
                 Padding = new Thickness(10, 6, 10, 6),
@@ -619,8 +621,9 @@ namespace PowerAudioManager
             DockPanel.SetDock(arrow, Dock.Left);
             dock.Children.Add(arrow);
 
-            // \u6807\u9898\uFF1Aemoji + \u6587\u5B57\u878D\u5408\u8FDB\u4E00\u4E2A TextBlock\uFF0C\u4FDD\u6301\u548C"\uD83D\uDDD1 \u5185\u5B58\u6E05\u7406"\u98CE\u683C\u7EDF\u4E00
+            // \u6807\u9898\uFF1A\u914D\u7F6E\u4FDD\u5B58 emoji \u5E95\u8272\u8BA9\u5F69\u8272 glyph \u53EF\u6E32\u67D3\uFF0C\u6587\u5B57 Run \u8986\u76D6 AppFont
             var label = new TextBlock {
+                FontFamily = EmojiFont,
                 Foreground = new SolidColorBrush(AccentColor),
                 FontSize = 12,
                 FontWeight = FontWeights.SemiBold,
@@ -628,8 +631,8 @@ namespace PowerAudioManager
             };
             if (!string.IsNullOrEmpty(emoji))
             {
-                label.Inlines.Add(new Run(emoji + " ") { FontFamily = EmojiFont });
-                label.Inlines.Add(new Run(title));
+                label.Inlines.Add(new Run(emoji + " "));
+                label.Inlines.Add(new Run(title) { FontFamily = AppFont });
             }
             else
             {
@@ -1152,11 +1155,13 @@ namespace PowerAudioManager
 
                         var m = metrics[i];
                         var color = m.IsTemp ? TempColor(m.Value) : TextSecondary;
-                        var tb = new TextBlock { FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
-                        tb.Inlines.Add(new Run(m.Icon + " ") { FontFamily = EmojiFont });
-                        tb.Inlines.Add(new Run(m.DisplayName + " ") { Foreground = new SolidColorBrush(TextSecondary) });
+                        // TextBlock 底用 EmojiFont 以启用彩色 glyph；文字 Run 显式覆盖 AppFont 保持统一
+                        var tb = new TextBlock { FontSize = 11, FontFamily = EmojiFont, VerticalAlignment = VerticalAlignment.Center };
+                        tb.Inlines.Add(new Run(m.Icon + " "));
+                        tb.Inlines.Add(new Run(m.DisplayName + " ") { FontFamily = AppFont, Foreground = new SolidColorBrush(TextSecondary) });
                         tb.Inlines.Add(new Run($"{m.Value?.ToString("0") ?? "--"}{m.Unit}")
                         {
+                            FontFamily = AppFont,
                             Foreground = new SolidColorBrush(color),
                             FontWeight = FontWeights.SemiBold
                         });
@@ -1171,17 +1176,17 @@ namespace PowerAudioManager
                 {
                     var hw = HardwareMonitorService.Instance;
                     _collapsedTempLabel.Inlines.Clear();
-                    _collapsedTempLabel.FontFamily = AppFont;
+                    _collapsedTempLabel.FontFamily = EmojiFont;
                     _collapsedTempLabel.FontSize = 10;
                     if (hw.CpuTemperature.HasValue)
                     {
-                        _collapsedTempLabel.Inlines.Add(new Run("\U0001F321") { FontFamily = EmojiFont });
-                        _collapsedTempLabel.Inlines.Add(new Run($"{hw.CpuTemperature.Value:0}  "));
+                        _collapsedTempLabel.Inlines.Add(new Run("\U0001F321 "));
+                        _collapsedTempLabel.Inlines.Add(new Run($"{hw.CpuTemperature.Value:0}  ") { FontFamily = AppFont });
                     }
                     if (hw.GpuTemperature.HasValue)
                     {
-                        _collapsedTempLabel.Inlines.Add(new Run("\U0001F3AE") { FontFamily = EmojiFont });
-                        _collapsedTempLabel.Inlines.Add(new Run($"{hw.GpuTemperature.Value:0}"));
+                        _collapsedTempLabel.Inlines.Add(new Run("\U0001F3AE "));
+                        _collapsedTempLabel.Inlines.Add(new Run($"{hw.GpuTemperature.Value:0}") { FontFamily = AppFont });
                     }
                 }
             }
