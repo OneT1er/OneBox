@@ -619,18 +619,17 @@ namespace PowerAudioManager
             DockPanel.SetDock(arrow, Dock.Left);
             dock.Children.Add(arrow);
 
-            // emoji \u4F18\u5148\u4E8E\u56FE\u7247\u6587\u4EF6
+            // \u6807\u9898\uFF1Aemoji + \u6587\u5B57\u878D\u5408\u8FDB\u4E00\u4E2A TextBlock\uFF0C\u4FDD\u6301\u548C"\uD83D\uDDD1 \u5185\u5B58\u6E05\u7406"\u98CE\u683C\u7EDF\u4E00
+            var label = new TextBlock {
+                Foreground = new SolidColorBrush(AccentColor),
+                FontSize = 12,
+                FontWeight = FontWeights.SemiBold,
+                VerticalAlignment = VerticalAlignment.Center
+            };
             if (!string.IsNullOrEmpty(emoji))
             {
-                var emojiTb = new TextBlock {
-                    Text = emoji,
-                    FontFamily = EmojiFont,
-                    FontSize = 13,
-                    Margin = new Thickness(0, 0, 6, 0),
-                    VerticalAlignment = VerticalAlignment.Center
-                };
-                DockPanel.SetDock(emojiTb, Dock.Left);
-                dock.Children.Add(emojiTb);
+                label.Inlines.Add(new Run(emoji + " ") { FontFamily = EmojiFont });
+                label.Inlines.Add(new Run(title));
             }
             else
             {
@@ -647,14 +646,8 @@ namespace PowerAudioManager
                     DockPanel.SetDock(img, Dock.Left);
                     dock.Children.Add(img);
                 }
+                label.Text = title;
             }
-            var label = new TextBlock {
-                Text = title,
-                Foreground = new SolidColorBrush(AccentColor),
-                FontSize = 12,
-                FontWeight = FontWeights.SemiBold,
-                VerticalAlignment = VerticalAlignment.Center
-            };
             dock.Children.Add(label);
 
             // 异步应用折叠状态，等区块元素创建后再设置可见性。
