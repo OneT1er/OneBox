@@ -64,6 +64,12 @@ namespace PowerAudioManager
         public static readonly FontFamily EmojiFont =
             new FontFamily("Segoe UI Emoji");
 
+        // 复合字体：文字用用户字体，emoji 自动落到 Segoe UI Emoji（彩色）
+        public static FontFamily CompositeFont
+        {
+            get { return new FontFamily(AppFont.Source + ", Segoe UI Emoji"); }
+        }
+
         // WinForms 托盘菜单对应的 AppFont：用同一字体名称构建 System.Drawing.Font，保持右键菜单风格一致。
         static System.Drawing.Font _trayFont;
         static string _trayFontName;
