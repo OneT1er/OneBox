@@ -1151,13 +1151,13 @@ namespace PowerAudioManager
                         _metricRow.Children.Add(new TextBlock { Text = "传感器初始化中…", Foreground = new SolidColorBrush(TextSecondary), FontSize = 11, VerticalAlignment = VerticalAlignment.Center });
                 }
 
-                // 折叠视图
+                // 折叠视图：固定显示 CPU + GPU 温度（简洁、始终可读）
                 if (_collapsedTempLabel != null)
                 {
-                    var parts = new List<string>();
-                    foreach (var m in metrics)
-                        parts.Add($"{m.Icon}{m.Value?.ToString("0") ?? "--"}");
-                    _collapsedTempLabel.Text = parts.Count > 0 ? string.Join(" ", parts) : "";
+                    var hw = HardwareMonitorService.Instance;
+                    string cpu = hw.CpuTemperature.HasValue ? $"\U0001F321{hw.CpuTemperature.Value:0}" : "";
+                    string gpu = hw.GpuTemperature.HasValue ? $"\U0001F3AE{hw.GpuTemperature.Value:0}" : "";
+                    _collapsedTempLabel.Text = (cpu + "  " + gpu).Trim();
                 }
             }
             catch { }

@@ -36,6 +36,8 @@ namespace PowerAudioManager
         private readonly object _lock = new object();
 
         public bool IsAvailable { get; private set; }
+        public float? CpuTemperature { get; private set; }
+        public float? GpuTemperature { get; private set; }
         public List<SensorInfo> AllTempSensors { get; } = new();
         public List<SensorInfo> AllFanSensors { get; } = new();
 
@@ -143,6 +145,10 @@ namespace PowerAudioManager
                 _computer.Accept(new UpdateVisitor());
                 var values = new List<MetricValue>();
 
+                // 始终读 CPU / GPU 温度（折叠栏固定显示）
+                CpuTemperature = ReadCpuTemp();
+                GpuTemperature = ReadGpuTemp();
+
                 foreach (var key in EnabledMetrics)
                 {
                     var cfg = DecodeConfig(key);
@@ -167,6 +173,35 @@ namespace PowerAudioManager
                 lock (_lock) { ActiveMetrics.Clear(); ActiveMetrics.AddRange(values); }
             }
             catch { }
+        }
+
+        // 设置中预览传感器实时值
+        public float? ReadSensorPreview(SensorInfo cfg)
+        {
+            if (_computer == null || !_hwReady) return null;
+            try
+            {
+                _computer.Accept(new UpdateVisitor());
+                return ReadSensorValue(cfg);
+            }
+            catch { return null; }
+        }
+
+        float? ReadCpuTemp()
+        {
+            var sensor = AllTempSensors.FirstOrDefault(s => s.HwType == HardwareType.Cpu);
+            return sensor != null ? ReadSensorValue(sensor) : null;
+        }
+
+        float? ReadGpuTemp()
+        {
+            var sensor = AllTempSensors.FirstOrDefault(s =>
+                s.HwType == HardwareType.GpuNvidia || s.HwType == HardwareType.GpuAmd || s.HwType == HardwareType.GpuIntel);
+            if (sensor == null) return null;
+            // 优先 GPU Core，排除 Hot Spot
+            var coreSensor = AllTempSensors.FirstOrDefault(s =>
+                s.HardwareName == sensor.HardwareName && s.SensorName.Contains("Core") && !s.SensorName.Contains("Hot"));
+            return ReadSensorValue(coreSensor ?? sensor);
         }
 
         SensorInfo FindSensor(SensorInfo cfg)

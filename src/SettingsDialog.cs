@@ -931,7 +931,9 @@ namespace PowerAudioManager
                     foreach (var s in pool)
                     {
                         string icon = HardwareMonitorService.AutoIcon(s);
-                        sensorCombo.Items.Add(new ComboBoxItem { Content = $"{icon} {s}", Tag = HardwareMonitorService.EncodeConfig(s) });
+                        float? preview = hw.ReadSensorPreview(s);
+                        string valStr = preview.HasValue ? $"  [{preview.Value:0}{(!isFan ? "°C" : "RPM")}]" : "  [--]";
+                        sensorCombo.Items.Add(new ComboBoxItem { Content = $"{icon} {s}{valStr}", Tag = HardwareMonitorService.EncodeConfig(s) });
                     }
                 }
                 sensorCombo.SelectedIndex = pool.Count > 0 ? 0 : -1;
