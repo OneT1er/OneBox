@@ -17,14 +17,12 @@ namespace PowerAudioManager
 
     public class MetricValue
     {
-        public string Label;     // "CPU", "GPU", etc.
-        public string Icon;      // "🌡", "🎮", etc.
+        public string DisplayName;  // 用户自定义简称
+        public string Icon;         // "🌡", "🎮", etc.
         public float? Value;
-        public string Unit;      // "°C", "RPM"
+        public string Unit;         // "°C", "RPM", "%"
         public bool IsTemp => Unit == "°C";
-
-        // 从配置反序列化
-        public string ConfigKey; // "Temp|AMD Ryzen 7 9800X3D|Core (Tctl/Tdie)"
+        public string ConfigKey;
     }
 
     public class HardwareMonitorService : IDisposable
@@ -117,28 +115,58 @@ namespace PowerAudioManager
                     s.HwType == HardwareType.GpuNvidia || s.HwType == HardwareType.GpuAmd || s.HwType == HardwareType.GpuIntel);
                 var list = new List<string>();
                 if (cpuSensor != null)
-                    list.Add(EncodeConfig(cpuSensor));
+                    list.Add(EncodeConfig(cpuSensor, "CPU"));
                 if (gpuSensor != null)
-                    list.Add(EncodeConfig(gpuSensor));
+                    list.Add(EncodeConfig(gpuSensor, "GPU"));
                 raw = string.Join(";", list);
                 if (list.Count > 0) AppPrefs.SetString("Monitor.Metrics", raw);
             }
             EnabledMetrics = raw.Split(';', StringSplitOptions.RemoveEmptyEntries).Select(s => s.Trim()).Where(s => s.Length > 0).ToList();
         }
 
-        public static string EncodeConfig(SensorInfo s)
+        public static string EncodeConfig(SensorInfo s, string displayName)
         {
-            string type = s.SensorType.ToString(); // "Temperature", "Fan", "Control"
-            return $"{type}|{s.HardwareName}|{s.SensorName}";
+            string type = s.SensorType.ToString();
+            return $"{type}|{s.HardwareName}|{s.SensorName}|{displayName}";
         }
 
-        public static SensorInfo DecodeConfig(string key)
+        public static SensorInfo DecodeConfig(string key, out string displayName)
         {
+            displayName = "";
             var parts = key.Split('|');
             if (parts.Length < 3) return null;
             SensorType st;
             if (!Enum.TryParse(parts[0], out st)) st = SensorType.Temperature;
+            displayName = parts.Length >= 4 ? parts[3] : DefaultDisplayName(parts[1], parts[2], st);
             return new SensorInfo { SensorType = st, HardwareName = parts[1], SensorName = parts[2] };
+        }
+
+        public static string DefaultDisplayName(string hwName, string sensorName, SensorType st)
+        {
+            bool isCpu = hwName.ToLower().Contains("cpu") || hwName.ToLower().Contains("ryzen");
+            bool isGpu = hwName.ToLower().Contains("nvidia") || hwName.ToLower().Contains("geforce") || hwName.ToLower().Contains("rtx") || hwName.ToLower().Contains("radeon");
+
+            if (st == SensorType.Temperature)
+            {
+                if (sensorName.Contains("Hot Spot")) return "GPU HotSpot";
+                if (sensorName.Contains("Memory") || sensorName.Contains("Junction")) return "VRAM";
+                if (isCpu) return "CPU";
+                if (isGpu) return "GPU";
+                return "Temp";
+            }
+            if (st == SensorType.Fan)
+            {
+                if (isCpu) return "CPU Fan";
+                if (isGpu) return "GPU Fan";
+                return sensorName;
+            }
+            if (st == SensorType.Control)
+            {
+                if (isCpu) return "CPU Fan%";
+                if (isGpu) return "GPU Fan%";
+                return sensorName;
+            }
+            return sensorName;
         }
 
         public void SaveEnabledMetrics(List<string> list)
@@ -163,7 +191,8 @@ namespace PowerAudioManager
 
                 foreach (var key in EnabledMetrics)
                 {
-                    var cfg = DecodeConfig(key);
+                    string displayName;
+                    var cfg = DecodeConfig(key, out displayName);
                     if (cfg == null) continue;
                     var sensor = FindSensor(cfg);
                     if (sensor == null) continue;
@@ -172,10 +201,9 @@ namespace PowerAudioManager
                     if (val.HasValue)
                     {
                         string icon = AutoIcon(cfg);
-                        string label = cfg.SensorName.Length > 10 ? cfg.SensorName.Substring(0, 10) : cfg.SensorName;
                         string unit = cfg.SensorType == SensorType.Temperature ? "°C" :
                                       cfg.SensorType == SensorType.Control ? "%" : "RPM";
-                        values.Add(new MetricValue { Label = label, Icon = icon, Value = val, Unit = unit, ConfigKey = key });
+                        values.Add(new MetricValue { DisplayName = displayName, Icon = icon, Value = val, Unit = unit, ConfigKey = key });
                     }
                 }
 

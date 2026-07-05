@@ -870,17 +870,32 @@ namespace PowerAudioManager
             list.Children.Clear();
             foreach (var key in hw.EnabledMetrics)
             {
-                var cfg = HardwareMonitorService.DecodeConfig(key);
+                string displayName;
+                var cfg = HardwareMonitorService.DecodeConfig(key, out displayName);
                 if (cfg == null) continue;
-                var row = new DockPanel { Margin = new Thickness(0, 1, 0, 1), LastChildFill = true };
+                var row = new DockPanel { Margin = new Thickness(0, 2, 0, 2), LastChildFill = true };
                 string icon = HardwareMonitorService.AutoIcon(cfg);
-                string label = cfg.SensorType == SensorType.Fan ? "RPM" :
-                               cfg.SensorType == SensorType.Control ? "控制" : "温度";
-                row.Children.Add(new TextBlock { Text = $"{icon}  {label}  —  {cfg.HardwareName}  »  {cfg.SensorName}", Foreground = fg, FontSize = 11, VerticalAlignment = VerticalAlignment.Center });
+                string unit = cfg.SensorType == SensorType.Temperature ? "°C" :
+                              cfg.SensorType == SensorType.Control ? "%" : "RPM";
+                float? val = hw.ReadSensorPreview(cfg);
+                string valStr = val.HasValue ? $"  {val.Value:0}{unit}" : "";
 
-                var delBtn = new Button { Content = "✕", Width = 22, Height = 22, Background = Brushes.Transparent, BorderBrush = Brushes.Transparent, Foreground = fg, FontSize = 11, Cursor = System.Windows.Input.Cursors.Hand, Padding = new Thickness(0) };
+                var nameRow = new StackPanel { Orientation = Orientation.Horizontal };
+                nameRow.Children.Add(new TextBlock { Text = $"{icon} ", Foreground = Brushes.White, FontSize = 11, VerticalAlignment = VerticalAlignment.Center });
+                nameRow.Children.Add(new TextBlock { Text = displayName, Foreground = Brushes.White, FontSize = 11, FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center });
+                nameRow.Children.Add(new TextBlock { Text = valStr, Foreground = fg, FontSize = 11, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0, 0, 0) });
+                nameRow.Children.Add(new TextBlock { Text = $"  ({cfg.SensorName})", Foreground = fg, FontSize = 10, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(4, 0, 0, 0) });
+                row.Children.Add(nameRow);
+
+                // 重命名按钮
+                var renameBtn = new Button { Content = "✎", Width = 24, Height = 22, Background = Brushes.Transparent, BorderBrush = Brushes.Transparent, Foreground = fg, FontSize = 12, Cursor = System.Windows.Input.Cursors.Hand, Padding = new Thickness(0), ToolTip = "重命名" };
+                MainWindow.ApplyFlatStyle(renameBtn);
+                renameBtn.MinWidth = 0; renameBtn.MinHeight = 0;
+                // 删除按钮
+                var delBtn = new Button { Content = "✕", Width = 24, Height = 22, Background = Brushes.Transparent, BorderBrush = Brushes.Transparent, Foreground = new SolidColorBrush(Color.FromRgb(200, 100, 100)), FontSize = 12, Cursor = System.Windows.Input.Cursors.Hand, Padding = new Thickness(0), ToolTip = "删除" };
                 MainWindow.ApplyFlatStyle(delBtn);
                 delBtn.MinWidth = 0; delBtn.MinHeight = 0;
+
                 string capturedKey = key;
                 var capturedList = list;
                 delBtn.Click += (s2, e2) =>
@@ -890,13 +905,55 @@ namespace PowerAudioManager
                     hw.SaveEnabledMetrics(updated);
                     RefreshMetricList(capturedList, hw, fg);
                 };
+                renameBtn.Click += (s2, e2) =>
+                {
+                    // 弹出输入框改显示名
+                    var input = new TextBox { Text = displayName, Width = 120, Height = 22, FontSize = 11, Background = new SolidColorBrush(Color.FromRgb(42, 39, 60)), Foreground = Brushes.White, BorderBrush = new SolidColorBrush(Color.FromRgb(80, 75, 120)) };
+                    input.KeyDown += (s3, e3) =>
+                    {
+                        if (e3.Key == System.Windows.Input.Key.Enter)
+                        {
+                            var updated = new List<string>(hw.EnabledMetrics);
+                            int idx = updated.IndexOf(capturedKey);
+                            if (idx >= 0)
+                            {
+                                string dn;
+                                var c = HardwareMonitorService.DecodeConfig(capturedKey, out dn);
+                                updated[idx] = HardwareMonitorService.EncodeConfig(c, input.Text.Trim().Length > 0 ? input.Text.Trim() : dn);
+                                hw.SaveEnabledMetrics(updated);
+                                RefreshMetricList(capturedList, hw, fg);
+                            }
+                        }
+                    };
+                    input.LostFocus += (s3, e3) =>
+                    {
+                        var updated = new List<string>(hw.EnabledMetrics);
+                        int idx = updated.IndexOf(capturedKey);
+                        if (idx >= 0)
+                        {
+                            string dn;
+                            var c = HardwareMonitorService.DecodeConfig(capturedKey, out dn);
+                            updated[idx] = HardwareMonitorService.EncodeConfig(c, input.Text.Trim().Length > 0 ? input.Text.Trim() : dn);
+                            hw.SaveEnabledMetrics(updated);
+                            RefreshMetricList(capturedList, hw, fg);
+                        }
+                    };
+                    // 替换行内内容为输入框
+                    row.Children.Clear();
+                    row.Children.Add(input);
+                    input.Focus();
+                    input.SelectAll();
+                };
+
                 DockPanel.SetDock(delBtn, Dock.Right);
+                DockPanel.SetDock(renameBtn, Dock.Right);
                 row.Children.Add(delBtn);
+                row.Children.Add(renameBtn);
 
                 list.Children.Add(row);
             }
             if (hw.EnabledMetrics.Count == 0)
-                list.Children.Add(new TextBlock { Text = "(无指标)", Foreground = fg, FontSize = 11, FontStyle = FontStyles.Italic });
+                list.Children.Add(new TextBlock { Text = "(无指标，点下方按钮添加)", Foreground = fg, FontSize = 11, FontStyle = FontStyles.Italic });
         }
 
         static UIElement BuildAddForm(StackPanel metricList, StackPanel addPanel, HardwareMonitorService hw, SolidColorBrush fg)
@@ -940,13 +997,34 @@ namespace PowerAudioManager
                         string icon = HardwareMonitorService.AutoIcon(s);
                         float? preview = hw.ReadSensorPreview(s);
                         string valStr = preview.HasValue ? $"  [{preview.Value:0}{unit}]" : "  [--]";
-                        sensorCombo.Items.Add(new ComboBoxItem { Content = $"{icon} {s.HardwareName} — {s.SensorName}{valStr}", Tag = HardwareMonitorService.EncodeConfig(s) });
+                        string dn = HardwareMonitorService.DefaultDisplayName(s.HardwareName, s.SensorName, s.SensorType);
+                        sensorCombo.Items.Add(new ComboBoxItem { Content = $"{icon} {s.HardwareName} — {s.SensorName}{valStr}", Tag = HardwareMonitorService.EncodeConfig(s, dn) });
                     }
                 }
                 sensorCombo.SelectedIndex = pool.Count > 0 ? 0 : -1;
             }
             PopulateSensors();
             typeCombo.SelectionChanged += (_, _) => PopulateSensors();
+
+            // 显示名称
+            form.Children.Add(new TextBlock { Text = "显示名称", Foreground = fg, FontSize = 11, Margin = new Thickness(0, 6, 0, 2) });
+            var nameBox = new TextBox { Height = 24, FontSize = 11, Background = new SolidColorBrush(Color.FromRgb(42, 39, 60)), Foreground = Brushes.White, BorderBrush = new SolidColorBrush(Color.FromRgb(80, 75, 120)), VerticalContentAlignment = VerticalAlignment.Center, Padding = new Thickness(6, 0, 6, 0) };
+            // 传感器切换时更新默认名称
+            sensorCombo.SelectionChanged += (_, _) =>
+            {
+                var item = sensorCombo.SelectedItem as ComboBoxItem;
+                if (item?.Tag is string key && key.Contains("|"))
+                {
+                    var parts = key.Split('|');
+                    if (parts.Length >= 4) nameBox.Text = parts[3];
+                }
+            };
+            form.Children.Add(nameBox);
+            if (sensorCombo.SelectedItem is ComboBoxItem initItem && initItem.Tag is string initKey && initKey.Contains("|"))
+            {
+                var initParts = initKey.Split('|');
+                if (initParts.Length >= 4) nameBox.Text = initParts[3];
+            }
 
             // 按钮行
             var btnRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 8, 0, 0) };
@@ -960,13 +1038,18 @@ namespace PowerAudioManager
 
             confirmBtn.Click += (_, _) =>
             {
-                var key = (sensorCombo.SelectedItem as ComboBoxItem)?.Tag as string;
-                if (!string.IsNullOrEmpty(key))
+                var keyTemplate = (sensorCombo.SelectedItem as ComboBoxItem)?.Tag as string;
+                if (!string.IsNullOrEmpty(keyTemplate))
                 {
+                    // 用用户输入的显示名重建 key
+                    var parts = keyTemplate.Split('|');
+                    if (parts.Length >= 4)
+                        parts[3] = string.IsNullOrWhiteSpace(nameBox.Text) ? parts[3] : nameBox.Text.Trim();
+                    var finalKey = string.Join("|", parts);
                     var updated = new List<string>(hw.EnabledMetrics);
-                    if (!updated.Contains(key))
+                    if (!updated.Contains(finalKey))
                     {
-                        updated.Add(key);
+                        updated.Add(finalKey);
                         hw.SaveEnabledMetrics(updated);
                     }
                 }

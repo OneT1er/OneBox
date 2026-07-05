@@ -49,7 +49,7 @@ namespace PowerAudioManager
 
         // 温度/性能监控
         private TextBlock _collapsedTempLabel;
-        private StackPanel _metricRow;          // 展开视图的指标行
+        private Panel _metricRow;                // 展开视图的指标行 (WrapPanel)
         private System.Threading.Timer _tempTimer;
 
         // 共享调色板，内部可见供 LauncherBar / TrayController 等复用。
@@ -376,7 +376,7 @@ namespace PowerAudioManager
             bool showTemp = ModuleVisible("Temp");
             if (showTemp)
             {
-                _metricRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 4) };
+                _metricRow = new WrapPanel { Margin = new Thickness(0, 0, 0, 4) };
                 contentPanel.Children.Add(_metricRow);
                 contentPanel.Children.Add(MakeDivider());
             }
@@ -1134,18 +1134,28 @@ namespace PowerAudioManager
                     for (int i = 0; i < metrics.Count; i++)
                     {
                         if (i > 0)
-                            _metricRow.Children.Add(new TextBlock { Text = "  ", Foreground = new SolidColorBrush(TextSecondary), FontSize = 11, VerticalAlignment = VerticalAlignment.Center });
+                        {
+                            var sep = new TextBlock { Text = " │ ", Foreground = new SolidColorBrush(BorderColor), FontSize = 11, VerticalAlignment = VerticalAlignment.Center, Opacity = 0.5 };
+                            _metricRow.Children.Add(sep);
+                        }
 
                         var m = metrics[i];
                         var color = m.IsTemp ? TempColor(m.Value) : TextSecondary;
-                        var tb = new TextBlock
+                        var chip = new StackPanel { Orientation = Orientation.Horizontal };
+
+                        chip.Children.Add(new TextBlock { Text = m.Icon + " ", FontSize = 11, VerticalAlignment = VerticalAlignment.Center });
+                        chip.Children.Add(new TextBlock { Text = m.DisplayName + " ", FontSize = 11, Foreground = new SolidColorBrush(TextSecondary), VerticalAlignment = VerticalAlignment.Center });
+
+                        var valTb = new TextBlock
                         {
-                            Text = $"{m.Icon} {m.Value?.ToString("0") ?? "--"}{m.Unit}",
+                            Text = $"{m.Value?.ToString("0") ?? "--"}{m.Unit}",
                             Foreground = new SolidColorBrush(color),
                             FontSize = 11,
+                            FontWeight = FontWeights.SemiBold,
                             VerticalAlignment = VerticalAlignment.Center
                         };
-                        _metricRow.Children.Add(tb);
+                        chip.Children.Add(valTb);
+                        _metricRow.Children.Add(chip);
                     }
                     if (metrics.Count == 0)
                         _metricRow.Children.Add(new TextBlock { Text = "传感器初始化中…", Foreground = new SolidColorBrush(TextSecondary), FontSize = 11, VerticalAlignment = VerticalAlignment.Center });
