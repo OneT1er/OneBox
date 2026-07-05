@@ -285,8 +285,8 @@ namespace PowerAudioManager
             _collapsedTempLabel = new TextBlock
             {
                 Foreground = new SolidColorBrush(TextSecondary),
+                FontFamily = AppFont,
                 FontSize = 10,
-                FontFamily = EmojiFont,
                 VerticalAlignment = VerticalAlignment.Center,
                 Margin = new Thickness(12, 0, 0, 0),
                 Visibility = Visibility.Collapsed
@@ -1139,7 +1139,7 @@ namespace PowerAudioManager
                     return TextSecondary;
                 }
 
-                // 展开视图
+                // 展开视图：每个指标用 TextBlock.Inlines 混合 emoji(EmojiFont) + 文字(AppFont)
                 if (_metricRow != null)
                 {
                     _metricRow.Children.Clear();
@@ -1147,39 +1147,42 @@ namespace PowerAudioManager
                     {
                         if (i > 0)
                         {
-                            var sep = new TextBlock { Text = " │ ", Foreground = new SolidColorBrush(BorderColor), FontSize = 11, VerticalAlignment = VerticalAlignment.Center, Opacity = 0.5 };
-                            _metricRow.Children.Add(sep);
+                            _metricRow.Children.Add(new TextBlock { Text = " │ ", Foreground = new SolidColorBrush(BorderColor), FontSize = 11, VerticalAlignment = VerticalAlignment.Center, Opacity = 0.5 });
                         }
 
                         var m = metrics[i];
                         var color = m.IsTemp ? TempColor(m.Value) : TextSecondary;
-                        var chip = new StackPanel { Orientation = Orientation.Horizontal };
-
-                        chip.Children.Add(new TextBlock { Text = m.Icon + " ", FontSize = 11, FontFamily = EmojiFont, VerticalAlignment = VerticalAlignment.Center });
-                        chip.Children.Add(new TextBlock { Text = m.DisplayName + " ", FontSize = 11, Foreground = new SolidColorBrush(TextSecondary), VerticalAlignment = VerticalAlignment.Center });
-
-                        var valTb = new TextBlock
+                        var tb = new TextBlock { FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
+                        tb.Inlines.Add(new Run(m.Icon + " ") { FontFamily = EmojiFont });
+                        tb.Inlines.Add(new Run(m.DisplayName + " ") { Foreground = new SolidColorBrush(TextSecondary) });
+                        tb.Inlines.Add(new Run($"{m.Value?.ToString("0") ?? "--"}{m.Unit}")
                         {
-                            Text = $"{m.Value?.ToString("0") ?? "--"}{m.Unit}",
                             Foreground = new SolidColorBrush(color),
-                            FontSize = 11,
-                            FontWeight = FontWeights.SemiBold,
-                            VerticalAlignment = VerticalAlignment.Center
-                        };
-                        chip.Children.Add(valTb);
-                        _metricRow.Children.Add(chip);
+                            FontWeight = FontWeights.SemiBold
+                        });
+                        _metricRow.Children.Add(tb);
                     }
                     if (metrics.Count == 0)
                         _metricRow.Children.Add(new TextBlock { Text = "传感器初始化中…", Foreground = new SolidColorBrush(TextSecondary), FontSize = 11, VerticalAlignment = VerticalAlignment.Center });
                 }
 
-                // 折叠视图：固定显示 CPU + GPU 温度（简洁、始终可读）
+                // 折叠视图：固定 CPU + GPU，也用 Inlines 保持字体统一
                 if (_collapsedTempLabel != null)
                 {
                     var hw = HardwareMonitorService.Instance;
-                    string cpu = hw.CpuTemperature.HasValue ? $"\U0001F321{hw.CpuTemperature.Value:0}" : "";
-                    string gpu = hw.GpuTemperature.HasValue ? $"\U0001F3AE{hw.GpuTemperature.Value:0}" : "";
-                    _collapsedTempLabel.Text = (cpu + "  " + gpu).Trim();
+                    _collapsedTempLabel.Inlines.Clear();
+                    _collapsedTempLabel.FontFamily = AppFont;
+                    _collapsedTempLabel.FontSize = 10;
+                    if (hw.CpuTemperature.HasValue)
+                    {
+                        _collapsedTempLabel.Inlines.Add(new Run("\U0001F321") { FontFamily = EmojiFont });
+                        _collapsedTempLabel.Inlines.Add(new Run($"{hw.CpuTemperature.Value:0}  "));
+                    }
+                    if (hw.GpuTemperature.HasValue)
+                    {
+                        _collapsedTempLabel.Inlines.Add(new Run("\U0001F3AE") { FontFamily = EmojiFont });
+                        _collapsedTempLabel.Inlines.Add(new Run($"{hw.GpuTemperature.Value:0}"));
+                    }
                 }
             }
             catch { }
