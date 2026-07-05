@@ -286,6 +286,7 @@ namespace PowerAudioManager
             {
                 Foreground = new SolidColorBrush(TextSecondary),
                 FontSize = 10,
+                FontFamily = EmojiFont,
                 VerticalAlignment = VerticalAlignment.Center,
                 Margin = new Thickness(12, 0, 0, 0),
                 Visibility = Visibility.Collapsed
@@ -389,7 +390,7 @@ namespace PowerAudioManager
 
             if (showPower)
             {
-            var powerHeader = MakeCollapsibleHeader("电源计划", "icon-power.png", () => _powerSection, AppPrefs.GetBool("UI.PowerCollapsed", false));
+            var powerHeader = MakeCollapsibleHeader("电源计划", "icon-power.png", () => _powerSection, AppPrefs.GetBool("UI.PowerCollapsed", false), "⚡");
             contentPanel.Children.Add(powerHeader);
             _powerSection = new StackPanel { Margin = new Thickness(0, 0, 0, 4) };
             contentPanel.Children.Add(_powerSection);
@@ -399,7 +400,7 @@ namespace PowerAudioManager
             {
             if (contentPanel.Children.Count > 0) contentPanel.Children.Add(MakeDivider());
 
-            var audioHeader = MakeCollapsibleHeader("音频输出", "icon-audio.png", () => _audioSection, AppPrefs.GetBool("UI.AudioCollapsed", false));
+            var audioHeader = MakeCollapsibleHeader("音频输出", "icon-audio.png", () => _audioSection, AppPrefs.GetBool("UI.AudioCollapsed", false), "🔊");
             contentPanel.Children.Add(audioHeader);
             _audioSection = new StackPanel();
             contentPanel.Children.Add(_audioSection);
@@ -599,7 +600,8 @@ namespace PowerAudioManager
         }
 
 
-        FrameworkElement MakeCollapsibleHeader(string title, string iconFile, Func<UIElement> sectionGetter, bool initiallyCollapsed)
+        FrameworkElement MakeCollapsibleHeader(string title, string iconFile, Func<UIElement> sectionGetter, bool initiallyCollapsed,
+            string emoji = null)
         {
             var dock = new DockPanel {
                 Margin = new Thickness(0, 0, 0, 6),
@@ -616,18 +618,35 @@ namespace PowerAudioManager
             };
             DockPanel.SetDock(arrow, Dock.Left);
             dock.Children.Add(arrow);
-            var iconImg = LoadAppImage(iconFile);
-            if (iconImg != null)
+
+            // emoji \u4F18\u5148\u4E8E\u56FE\u7247\u6587\u4EF6
+            if (!string.IsNullOrEmpty(emoji))
             {
-                var img = new System.Windows.Controls.Image {
-                    Source = iconImg,
-                    Width = 14, Height = 14,
+                var emojiTb = new TextBlock {
+                    Text = emoji,
+                    FontFamily = EmojiFont,
+                    FontSize = 13,
                     Margin = new Thickness(0, 0, 6, 0),
-                    VerticalAlignment = VerticalAlignment.Center,
-                    Stretch = System.Windows.Media.Stretch.Uniform
+                    VerticalAlignment = VerticalAlignment.Center
                 };
-                DockPanel.SetDock(img, Dock.Left);
-                dock.Children.Add(img);
+                DockPanel.SetDock(emojiTb, Dock.Left);
+                dock.Children.Add(emojiTb);
+            }
+            else
+            {
+                var iconImg = LoadAppImage(iconFile);
+                if (iconImg != null)
+                {
+                    var img = new System.Windows.Controls.Image {
+                        Source = iconImg,
+                        Width = 14, Height = 14,
+                        Margin = new Thickness(0, 0, 6, 0),
+                        VerticalAlignment = VerticalAlignment.Center,
+                        Stretch = System.Windows.Media.Stretch.Uniform
+                    };
+                    DockPanel.SetDock(img, Dock.Left);
+                    dock.Children.Add(img);
+                }
             }
             var label = new TextBlock {
                 Text = title,
@@ -1143,7 +1162,7 @@ namespace PowerAudioManager
                         var color = m.IsTemp ? TempColor(m.Value) : TextSecondary;
                         var chip = new StackPanel { Orientation = Orientation.Horizontal };
 
-                        chip.Children.Add(new TextBlock { Text = m.Icon + " ", FontSize = 11, VerticalAlignment = VerticalAlignment.Center });
+                        chip.Children.Add(new TextBlock { Text = m.Icon + " ", FontSize = 11, FontFamily = EmojiFont, VerticalAlignment = VerticalAlignment.Center });
                         chip.Children.Add(new TextBlock { Text = m.DisplayName + " ", FontSize = 11, Foreground = new SolidColorBrush(TextSecondary), VerticalAlignment = VerticalAlignment.Center });
 
                         var valTb = new TextBlock
