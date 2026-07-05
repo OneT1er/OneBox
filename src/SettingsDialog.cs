@@ -865,8 +865,8 @@ namespace PowerAudioManager
             return Scroll(stack);
         }
 
-        static readonly string[] IconKeyOptions = { "cpu", "gpu", "hot", "vram", "fan", "ctrl", "def" };
-        static readonly string[] IconKeyLabels = { "CPU芯片", "GPU显卡", "火焰", "内存条", "风扇", "滑动条", "圆点" };
+        static readonly string[] IconKeyOptions = { "cpu", "gpu", "hot", "vram", "dram", "disk", "fan", "ctrl", "mb", "def" };
+        static readonly string[] IconKeyLabels = { "CPU芯片", "GPU显卡", "火焰", "显存", "内存条", "硬盘", "风扇", "滑动条", "主板", "圆点" };
 
         static void RefreshMetricList(StackPanel list, HardwareMonitorService hw, SolidColorBrush fg)
         {
@@ -922,9 +922,15 @@ namespace PowerAudioManager
                     int selIcon = 0;
                     for (int ii = 0; ii < IconKeyOptions.Length; ii++)
                     {
-                        var item = new ComboBoxItem { Content = $"{IconKeyLabels[ii]}", Tag = IconKeyOptions[ii] };
+                        var ik = IconKeyOptions[ii];
+                        var panel = new StackPanel { Orientation = Orientation.Horizontal };
+                        var iconImg = MainWindow.MetricIcon(ik, MainWindow.MetricIconColorByKey(ik));
+                        iconImg.Width = 14; iconImg.Height = 14;
+                        panel.Children.Add(iconImg);
+                        panel.Children.Add(new TextBlock { Text = " " + IconKeyLabels[ii], FontSize = 11, VerticalAlignment = VerticalAlignment.Center });
+                        var item = new ComboBoxItem { Content = panel, Tag = ik };
                         iconCombo.Items.Add(item);
-                        if (IconKeyOptions[ii] == iconKey) selIcon = ii;
+                        if (ik == iconKey) selIcon = ii;
                     }
                     iconCombo.SelectedIndex = selIcon;
                     editPanel.Children.Add(iconCombo);
@@ -1020,6 +1026,8 @@ namespace PowerAudioManager
                 }
                 else
                 {
+                    // 先触发一次硬件刷新确保预览值有效
+                    hw.Update();
                     foreach (var s in pool)
                     {
                         float? preview = hw.ReadSensorPreview(s);

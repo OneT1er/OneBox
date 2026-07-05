@@ -148,17 +148,27 @@ namespace PowerAudioManager
         public static string AutoIconKey(string displayName, SensorInfo s)
         {
             string dn = (displayName ?? "").ToLower();
+            string hw = (s?.HardwareName ?? "").ToLower();
+            string sn = (s?.SensorName ?? "").ToLower();
+
             if (s != null)
             {
                 if (s.SensorType == SensorType.Fan) return "fan";
                 if (s.SensorType == SensorType.Control) return "ctrl";
-                if (s.SensorName.Contains("Hot Spot")) return "hot";
-                if (s.SensorName.Contains("Memory") || s.SensorName.Contains("Junction")) return "vram";
+                if (sn.Contains("hot spot")) return "hot";
+                if (sn.Contains("memory") || sn.Contains("junction")) return "vram";
+                // 硬件名推断
+                if (hw.Contains("memory") || hw.Contains("dram") || hw.Contains("dim") || hw.Contains("ram")) return "dram";
+                if (hw.Contains("ssd") || hw.Contains("hdd") || hw.Contains("nvme") || hw.Contains("disk") || hw.Contains("stor")) return "disk";
+                if (hw.Contains("motherboard") || hw.Contains("super") || hw.Contains("nuvoton") || hw.Contains("ite ")) return "mb";
             }
             if (dn.Contains("cpu") && !dn.Contains("fan")) return "cpu";
             if (dn.Contains("gpu") && !dn.Contains("hot") && !dn.Contains("vram") && !dn.Contains("mem") && !dn.Contains("fan")) return "gpu";
             if (dn.Contains("hot")) return "hot";
-            if (dn.Contains("vram") || dn.Contains("mem") || dn.Contains("显存")) return "vram";
+            if (dn.Contains("vram") || dn.Contains("显存")) return "vram";
+            if (dn.Contains("内存") || dn.Contains("dram") || dn.Contains("ram")) return "dram";
+            if (dn.Contains("硬盘") || dn.Contains("磁盘") || dn.Contains("ssd") || dn.Contains("disk")) return "disk";
+            if (dn.Contains("主板") || dn.Contains("mb")) return "mb";
             if (dn.Contains("fan") && !dn.Contains("control") && !dn.Contains("%")) return "fan";
             if (dn.Contains("%") || dn.Contains("control")) return "ctrl";
             return "def";
