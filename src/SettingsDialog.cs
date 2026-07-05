@@ -828,7 +828,7 @@ namespace PowerAudioManager
             stack.Children.Add(addBtn);
             stack.Children.Add(addPanel);
 
-            stack.Children.Add(new TextBlock { Text = $"已发现 {hw.AllTempSensors.Count} 个温度传感器 · {hw.AllFanSensors.Count} 个风扇传感器", Foreground = fg, FontSize = 10, Margin = new Thickness(0, 10, 0, 12) });
+            stack.Children.Add(new TextBlock { Text = $"已发现 {hw.AllTempSensors.Count} 温度 · {hw.AllFanSensors.Count} 风扇RPM · {hw.AllControlSensors.Count} 控制%", Foreground = fg, FontSize = 10, Margin = new Thickness(0, 10, 0, 12) });
 
             // ---- 更新 + 阈值 ----
             stack.Children.Add(new TextBlock { Text = "更新间隔", Foreground = Brushes.White, FontSize = 12, Margin = new Thickness(0, 0, 0, 4) });
@@ -874,7 +874,8 @@ namespace PowerAudioManager
                 if (cfg == null) continue;
                 var row = new DockPanel { Margin = new Thickness(0, 1, 0, 1), LastChildFill = true };
                 string icon = HardwareMonitorService.AutoIcon(cfg);
-                string label = cfg.SensorType == SensorType.Fan ? "风扇" : "温度";
+                string label = cfg.SensorType == SensorType.Fan ? "RPM" :
+                               cfg.SensorType == SensorType.Control ? "控制" : "温度";
                 row.Children.Add(new TextBlock { Text = $"{icon}  {label}  —  {cfg.HardwareName}  »  {cfg.SensorName}", Foreground = fg, FontSize = 11, VerticalAlignment = VerticalAlignment.Center });
 
                 var delBtn = new Button { Content = "✕", Width = 22, Height = 22, Background = Brushes.Transparent, BorderBrush = Brushes.Transparent, Foreground = fg, FontSize = 11, Cursor = System.Windows.Input.Cursors.Hand, Padding = new Thickness(0) };
@@ -907,7 +908,8 @@ namespace PowerAudioManager
             var typeCombo = new ComboBox { Height = 26, FontSize = 11, Background = new SolidColorBrush(Color.FromRgb(42, 39, 60)), Foreground = new SolidColorBrush(Color.FromRgb(220, 218, 245)), BorderBrush = new SolidColorBrush(Color.FromRgb(80, 75, 120)) };
             AppResources.StyleDarkComboBox(typeCombo);
             typeCombo.Items.Add(new ComboBoxItem { Content = "温度", Tag = "Temp" });
-            typeCombo.Items.Add(new ComboBoxItem { Content = "风扇转速", Tag = "Fan" });
+            typeCombo.Items.Add(new ComboBoxItem { Content = "风扇转速 (RPM)", Tag = "Fan" });
+            typeCombo.Items.Add(new ComboBoxItem { Content = "风扇控制 (%)", Tag = "Control" });
             typeCombo.SelectedIndex = 0;
             form.Children.Add(typeCombo);
 
@@ -920,8 +922,13 @@ namespace PowerAudioManager
             void PopulateSensors()
             {
                 sensorCombo.Items.Clear();
-                bool isFan = ((typeCombo.SelectedItem as ComboBoxItem)?.Tag as string) == "Fan";
-                var pool = isFan ? hw.AllFanSensors : hw.AllTempSensors;
+                var tag = (typeCombo.SelectedItem as ComboBoxItem)?.Tag as string;
+                List<SensorInfo> pool;
+                string unit;
+                if (tag == "Fan")      { pool = hw.AllFanSensors;    unit = "RPM"; }
+                else if (tag == "Control") { pool = hw.AllControlSensors; unit = "%"; }
+                else                     { pool = hw.AllTempSensors;  unit = "°C"; }
+
                 if (pool.Count == 0)
                 {
                     sensorCombo.Items.Add(new ComboBoxItem { Content = "(无可用传感器)", Tag = null });
@@ -932,8 +939,8 @@ namespace PowerAudioManager
                     {
                         string icon = HardwareMonitorService.AutoIcon(s);
                         float? preview = hw.ReadSensorPreview(s);
-                        string valStr = preview.HasValue ? $"  [{preview.Value:0}{(!isFan ? "°C" : "RPM")}]" : "  [--]";
-                        sensorCombo.Items.Add(new ComboBoxItem { Content = $"{icon} {s}{valStr}", Tag = HardwareMonitorService.EncodeConfig(s) });
+                        string valStr = preview.HasValue ? $"  [{preview.Value:0}{unit}]" : "  [--]";
+                        sensorCombo.Items.Add(new ComboBoxItem { Content = $"{icon} {s.HardwareName} — {s.SensorName}{valStr}", Tag = HardwareMonitorService.EncodeConfig(s) });
                     }
                 }
                 sensorCombo.SelectedIndex = pool.Count > 0 ? 0 : -1;

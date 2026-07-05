@@ -39,7 +39,8 @@ namespace PowerAudioManager
         public float? CpuTemperature { get; private set; }
         public float? GpuTemperature { get; private set; }
         public List<SensorInfo> AllTempSensors { get; } = new();
-        public List<SensorInfo> AllFanSensors { get; } = new();
+        public List<SensorInfo> AllFanSensors { get; } = new();      // Fan (RPM)
+        public List<SensorInfo> AllControlSensors { get; } = new();   // Control (%)
 
         // 用户配置的指标（注册表持久化）
         public List<string> EnabledMetrics { get; private set; } = new();
@@ -89,10 +90,15 @@ namespace PowerAudioManager
                         AllTempSensors.Add(info);
                         AppLog.Log("Temp", $"  [T] {info} ({s.Value?.ToString("0") ?? "null"})");
                     }
-                    if (s.SensorType == SensorType.Fan || s.SensorType == SensorType.Control)
+                    if (s.SensorType == SensorType.Fan)
                     {
                         AllFanSensors.Add(info);
-                        AppLog.Log("Temp", $"  [F] {info} type={s.SensorType} val={s.Value?.ToString("0") ?? "null"}");
+                        AppLog.Log("Temp", $"  [FAN] {info} val={s.Value?.ToString("0") ?? "null"} RPM");
+                    }
+                    if (s.SensorType == SensorType.Control)
+                    {
+                        AllControlSensors.Add(info);
+                        AppLog.Log("Temp", $"  [CTRL] {info} val={s.Value?.ToString("0") ?? "null"} %");
                     }
                 }
                 foreach (var sub in hw.SubHardware) Scan(sub);
@@ -205,7 +211,12 @@ namespace PowerAudioManager
 
         SensorInfo FindSensor(SensorInfo cfg)
         {
-            var pool = cfg.SensorType == SensorType.Fan ? AllFanSensors : AllTempSensors;
+            List<SensorInfo> pool = cfg.SensorType switch
+            {
+                SensorType.Fan => AllFanSensors,
+                SensorType.Control => AllControlSensors,
+                _ => AllTempSensors
+            };
             return pool.FirstOrDefault(s => s.HardwareName == cfg.HardwareName && s.SensorName == cfg.SensorName);
         }
 
@@ -269,7 +280,7 @@ namespace PowerAudioManager
         {
             try { _computer?.Close(); } catch { }
             _computer = null; _started = false; _hwReady = false; IsAvailable = false;
-            AllTempSensors.Clear(); AllFanSensors.Clear();
+            AllTempSensors.Clear(); AllFanSensors.Clear(); AllControlSensors.Clear();
             ActiveMetrics.Clear();
         }
 
