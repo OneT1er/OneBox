@@ -57,7 +57,14 @@ namespace PowerAudioManager
             {
                 try
                 {
-                    _computer = new Computer { IsCpuEnabled = true, IsGpuEnabled = true, IsMotherboardEnabled = true };
+                    _computer = new Computer
+                    {
+                        IsCpuEnabled = true,
+                        IsGpuEnabled = true,
+                        IsMotherboardEnabled = true,
+                        IsMemoryEnabled = true,
+                        IsStorageEnabled = true,
+                    };
                     _computer.Open();
                     _computer.Accept(new UpdateVisitor());
                     DiscoverSensors();

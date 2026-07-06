@@ -979,10 +979,38 @@ namespace PowerAudioManager
                     row.Children.Add(editPanel);
                 };
 
+                // 上移/下移按钮
+                int curIdx = hw.EnabledMetrics.IndexOf(capturedKey);
+                var upBtn = new Button { Content = "▲", Width = 24, Height = 22, Background = Brushes.Transparent, BorderBrush = Brushes.Transparent, Foreground = fg, FontSize = 9, Cursor = System.Windows.Input.Cursors.Hand, Padding = new Thickness(0), ToolTip = "上移", IsEnabled = curIdx > 0 };
+                MainWindow.ApplyFlatStyle(upBtn); upBtn.MinWidth = 0; upBtn.MinHeight = 0;
+                var downBtn = new Button { Content = "▼", Width = 24, Height = 22, Background = Brushes.Transparent, BorderBrush = Brushes.Transparent, Foreground = fg, FontSize = 9, Cursor = System.Windows.Input.Cursors.Hand, Padding = new Thickness(0), ToolTip = "下移", IsEnabled = curIdx < hw.EnabledMetrics.Count - 1 };
+                MainWindow.ApplyFlatStyle(downBtn); downBtn.MinWidth = 0; downBtn.MinHeight = 0;
+
+                upBtn.Click += (s3, e3) =>
+                {
+                    var updated = new List<string>(hw.EnabledMetrics);
+                    int idx = updated.IndexOf(capturedKey);
+                    if (idx > 0) { var tmp = updated[idx]; updated[idx] = updated[idx - 1]; updated[idx - 1] = tmp; }
+                    hw.SaveEnabledMetrics(updated);
+                    RefreshMetricList(capturedList, hw, fg);
+                };
+                downBtn.Click += (s3, e3) =>
+                {
+                    var updated = new List<string>(hw.EnabledMetrics);
+                    int idx = updated.IndexOf(capturedKey);
+                    if (idx >= 0 && idx < updated.Count - 1) { var tmp = updated[idx]; updated[idx] = updated[idx + 1]; updated[idx + 1] = tmp; }
+                    hw.SaveEnabledMetrics(updated);
+                    RefreshMetricList(capturedList, hw, fg);
+                };
+
                 DockPanel.SetDock(delBtn, Dock.Right);
                 DockPanel.SetDock(editBtn, Dock.Right);
+                DockPanel.SetDock(downBtn, Dock.Right);
+                DockPanel.SetDock(upBtn, Dock.Right);
                 row.Children.Add(delBtn);
                 row.Children.Add(editBtn);
+                row.Children.Add(downBtn);
+                row.Children.Add(upBtn);
 
                 list.Children.Add(row);
             }
