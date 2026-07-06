@@ -29,7 +29,7 @@ namespace PowerAudioManager
         public const string Owner = "OneT1er";
         public const string Repo = "OneBox";
         // 发版时升级此值，需与 GitHub release tag 一致。
-        public static readonly Version CurrentVersion = new Version(1, 5, 0);
+        public static readonly Version CurrentVersion = new Version(1, 5, 1);
 
         const string ApiUrl = $"https://api.github.com/repos/{Owner}/{Repo}/releases/latest";
         const string ReleasesPage = $"https://github.com/{Owner}/{Repo}/releases/latest";
@@ -288,39 +288,39 @@ namespace PowerAudioManager
             return tmp;
         }
 
-        // 写批处理：等待当前进程退出 → 覆盖运行中 exe → 重新启动。然后关闭应用让覆盖生效。
+        // 写批处理：等待进程退出 → 强杀所有 OneBox → 覆盖 exe → 重新启动。
         static void LaunchUpdaterAndExit(string downloadedExePath)
         {
             string currentExe = Environment.ProcessPath;
-            string currentDir = Path.GetDirectoryName(currentExe);
             // 随机批处理名，防本地攻击者预置恶意 .bat。
             string batPath = Path.Combine(Path.GetTempPath(), $"OneBox_{Path.GetRandomFileName()}.bat");
-            // 等待当前进程退出（exe 被其锁定）。
-            int pid = System.Diagnostics.Process.GetCurrentProcess().Id;
             var sb = new StringBuilder();
             sb.AppendLine("@echo off");
             sb.AppendLine("chcp 65001 >nul");
-            sb.AppendLine(":wait");
-            sb.AppendLine($"tasklist /fi \"PID eq {pid}\" 2>nul | find \"{pid}\" >nul");
-            sb.AppendLine("if not errorlevel 1 (");
-            sb.AppendLine("  timeout /t 1 /nobreak >nul");
-            sb.AppendLine("  goto wait");
-            sb.AppendLine(")");
-            // 覆盖 exe，重试数次以防残留锁定。
+            sb.AppendLine($"echo [Update] copy \"{downloadedExePath}\" -> \"{currentExe}\"");
+            // 先等当前进程退出（释放 exe 文件锁）
+            sb.AppendLine("timeout /t 2 /nobreak >nul");
+            // 杀掉所有 OneBox 实例（包括服务启动的），确保 exe 不被占用
+            sb.AppendLine("taskkill /f /im OneBox.exe >nul 2>&1");
+            sb.AppendLine("timeout /t 1 /nobreak >nul");
+            // 重试复制，最多 10 次
             sb.AppendLine("set /a tries=0");
             sb.AppendLine(":copy");
             sb.AppendLine($"copy /Y \"{downloadedExePath}\" \"{currentExe}\" >nul 2>&1");
             sb.AppendLine("if errorlevel 1 (");
             sb.AppendLine("  set /a tries+=1");
+            sb.AppendLine("  echo [Update] copy failed, retry %tries%");
             sb.AppendLine("  if %tries% LSS 10 (");
+            sb.AppendLine("    taskkill /f /im OneBox.exe >nul 2>&1");
             sb.AppendLine("    timeout /t 1 /nobreak >nul");
             sb.AppendLine("    goto copy");
             sb.AppendLine("  )");
             sb.AppendLine(")");
             sb.AppendLine($"del /f /q \"{downloadedExePath}\" >nul 2>&1");
+            sb.AppendLine($"echo [Update] starting \"{currentExe}\"");
             sb.AppendLine($"start \"\" \"{currentExe}\"");
             sb.AppendLine("(goto) 2>nul & del \"%~f0\"");
-            File.WriteAllText(batPath, sb.ToString(), Encoding.GetEncoding(936)); // GBK 确保 cmd 正确处理 chcp 路径
+            File.WriteAllText(batPath, sb.ToString(), Encoding.GetEncoding(936));
 
             var psi = new System.Diagnostics.ProcessStartInfo
             {
@@ -331,7 +331,6 @@ namespace PowerAudioManager
             };
             System.Diagnostics.Process.Start(psi);
 
-            // 退出应用使批处理能替换 exe。
             System.Windows.Application.Current.Shutdown();
         }
     }
