@@ -32,6 +32,8 @@ namespace PowerAudioManager
         public const uint SWP_NOSIZE = 0x0001;
         public const uint SWP_NOACTIVATE = 0x0010;
         public const int DWMWA_USE_IMMERSIVE_DARK_MODE = 20;
+        public const int DWMWA_SYSTEMBACKDROP_TYPE = 38;    // Win11 22H2+
+        public const int DWMWA_MICA = 1029;                  // Win11 preview builds fallback
 
         [DllImport("user32.dll")]
         public static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);

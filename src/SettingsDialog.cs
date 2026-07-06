@@ -24,11 +24,12 @@ namespace PowerAudioManager
             // 左侧垂直 tab 栏 + 右侧内容的布局，适配 7 个 tab
             var sideBar = new ListBox
             {
-                Width = 100,
-                Background = new SolidColorBrush(Color.FromRgb(32, 30, 48)),
-                BorderBrush = Brushes.Transparent,
+                Width = 105,
+                Background = new SolidColorBrush(Color.FromRgb(26, 24, 42)),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(50, 46, 70)),
+                BorderThickness = new Thickness(0, 0, 1, 0),
                 Margin = new Thickness(0),
-                Padding = new Thickness(0)
+                Padding = new Thickness(0, 12, 0, 0)
             };
             sideBar.ItemContainerStyle = SidebarItemStyle();
             sideBar.SelectionChanged += (s, e) =>
@@ -56,7 +57,7 @@ namespace PowerAudioManager
             layout.Children.Add(sideBar);
             layout.Children.Add(_contentHost);
 
-            var dlg = OneBoxWindow.Create(owner, "设置", 500, 560, layout, true);
+            var dlg = OneBoxWindow.Create(owner, "设置", 520, 560, layout, true);
 
             // 构建所有 tab 内容
             _tabContents = new System.Collections.Generic.List<UIElement>
@@ -101,8 +102,8 @@ namespace PowerAudioManager
             return new ListBoxItem
             {
                 Content = new TextBlock { Text = text, FontSize = 13, Foreground = new SolidColorBrush(Color.FromRgb(190, 188, 220)) },
-                Height = 40,
-                Padding = new Thickness(0)
+                Height = 38,
+                Padding = new Thickness(14, 0, 14, 0)
             };
         }
 
@@ -112,13 +113,12 @@ namespace PowerAudioManager
             style.Setters.Add(new Setter(ListBoxItem.BackgroundProperty, Brushes.Transparent));
             style.Setters.Add(new Setter(ListBoxItem.BorderBrushProperty, Brushes.Transparent));
             style.Setters.Add(new Setter(ListBoxItem.BorderThicknessProperty, new Thickness(0)));
-            style.Setters.Add(new Setter(ListBoxItem.PaddingProperty, new Thickness(12, 0, 12, 0)));
+            style.Setters.Add(new Setter(ListBoxItem.PaddingProperty, new Thickness(0)));
             style.Setters.Add(new Setter(ListBoxItem.VerticalContentAlignmentProperty, VerticalAlignment.Center));
             style.Setters.Add(new Setter(ListBoxItem.CursorProperty, System.Windows.Input.Cursors.Hand));
             // 选中态：左侧紫条 + 深色底
             var selectedTrigger = new Trigger { Property = ListBoxItem.IsSelectedProperty, Value = true };
-            selectedTrigger.Setters.Add(new Setter(ListBoxItem.BackgroundProperty, new SolidColorBrush(Color.FromRgb(42, 39, 60))));
-            // 左侧指示条用 BorderThickness + BorderBrush 实现
+            selectedTrigger.Setters.Add(new Setter(ListBoxItem.BackgroundProperty, new SolidColorBrush(Color.FromRgb(40, 38, 58))));
             selectedTrigger.Setters.Add(new Setter(ListBoxItem.BorderBrushProperty, new SolidColorBrush(Color.FromRgb(142, 140, 216))));
             selectedTrigger.Setters.Add(new Setter(ListBoxItem.BorderThicknessProperty, new Thickness(3, 0, 0, 0)));
             // 选中文字变白

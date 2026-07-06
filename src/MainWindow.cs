@@ -186,6 +186,16 @@ namespace PowerAudioManager
                 var hwnd = new System.Windows.Interop.WindowInteropHelper(this).Handle;
                 int darkMode = 1;
                 try { Native.DwmSetWindowAttribute(hwnd, Native.DWMWA_USE_IMMERSIVE_DARK_MODE, ref darkMode, sizeof(int)); } catch { }
+                // Win11 Mica 云母效果
+                try
+                {
+                    if (Environment.OSVersion.Version.Build >= 22000)
+                    {
+                        int backdrop = 2; // 2=Mica, 3=Acrylic, 4=MicaAlt
+                        Native.DwmSetWindowAttribute(hwnd, Native.DWMWA_SYSTEMBACKDROP_TYPE, ref backdrop, sizeof(int));
+                    }
+                }
+                catch { }
                 int exStyle = Native.GetWindowLong(hwnd, Native.GWL_EXSTYLE);
                 Native.SetWindowLong(hwnd, Native.GWL_EXSTYLE, exStyle | Native.WS_EX_TOOLWINDOW);
                 Native.SetWindowPos(hwnd,
