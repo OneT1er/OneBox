@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Documents;
 using System.Windows.Media;
 using LibreHardwareMonitor.Hardware;
 
@@ -809,62 +810,77 @@ namespace PowerAudioManager
             var stack = new StackPanel { Margin = new Thickness(20) };
             var hw = HardwareMonitorService.Instance;
 
-            stack.Children.Add(new TextBlock { Text = "性能监控", Foreground = Brushes.White, FontWeight = FontWeights.SemiBold, FontSize = 13, Margin = new Thickness(0, 0, 0, 10) });
+            // 标题
+            var title = new TextBlock { FontSize = 14, FontWeight = FontWeights.SemiBold, Foreground = Brushes.White, Margin = new Thickness(0, 0, 0, 12) };
+            title.Inlines.Add(new Run("◉ ") { Foreground = new SolidColorBrush(Color.FromRgb(142, 140, 216)) });
+            title.Inlines.Add(new Run("性能监控"));
+            stack.Children.Add(title);
 
-            // ---- 当前指标列表 ----
-            var metricList = new StackPanel(); // 动态填充
+            // 传感器统计
+            var stats = new TextBlock { Foreground = fg, FontSize = 10, Margin = new Thickness(0, 0, 0, 10) };
+            stats.Inlines.Add($"已发现 ");
+            stats.Inlines.Add(new Run($"{hw.AllTempSensors.Count}") { Foreground = Brushes.White, FontWeight = FontWeights.SemiBold });
+            stats.Inlines.Add($" 温度 · ");
+            stats.Inlines.Add(new Run($"{hw.AllFanSensors.Count}") { Foreground = Brushes.White, FontWeight = FontWeights.SemiBold });
+            stats.Inlines.Add($" 风扇 · ");
+            stats.Inlines.Add(new Run($"{hw.AllControlSensors.Count}") { Foreground = Brushes.White, FontWeight = FontWeights.SemiBold });
+            stats.Inlines.Add($" 控制");
+            stack.Children.Add(stats);
+
+            // Card: 指标列表
+            var metricList = new StackPanel();
             RefreshMetricList(metricList, hw, fg);
+            var metricCard = new Border { Background = new SolidColorBrush(Color.FromRgb(34, 32, 50)), CornerRadius = new CornerRadius(6), Padding = new Thickness(10), Margin = new Thickness(0, 0, 0, 10) };
+            var metricInner = new StackPanel();
+            metricInner.Children.Add(new TextBlock { Text = "已添加的指标", Foreground = fg, FontSize = 10, Margin = new Thickness(2, 0, 0, 6) });
+            metricInner.Children.Add(metricList);
+            var addPanel = new StackPanel { Margin = new Thickness(2, 4, 2, 0) };
+            var addBtn = new Button { Content = "+ 添加", Height = 26, FontSize = 11, HorizontalAlignment = HorizontalAlignment.Left, Padding = new Thickness(10, 0, 10, 0) };
+            AppResources.StyleDialogButton(addBtn, true);
+            addBtn.Click += (_, _) => { addPanel.Children.Clear(); addPanel.Children.Add(BuildAddForm(metricList, addPanel, hw, fg)); };
+            metricInner.Children.Add(addBtn);
+            metricInner.Children.Add(addPanel);
+            metricCard.Child = metricInner;
+            stack.Children.Add(metricCard);
 
-            stack.Children.Add(new TextBlock { Text = "已添加的指标：", Foreground = fg, FontSize = 11, Margin = new Thickness(0, 0, 0, 4) });
-            stack.Children.Add(metricList);
+            // Card: 刷新设置
+            var setCard = new Border { Background = new SolidColorBrush(Color.FromRgb(34, 32, 50)), CornerRadius = new CornerRadius(6), Padding = new Thickness(12) };
+            var setInner = new StackPanel();
+            setInner.Children.Add(new TextBlock { Text = "刷新设置", Foreground = fg, FontSize = 10, Margin = new Thickness(0, 0, 0, 8) });
 
-            // ---- 添加指标 ----
-            var addPanel = new StackPanel { Margin = new Thickness(0, 8, 0, 0) };
-            var addBtn = new Button { Content = "+ 添加指标", Height = 28, FontSize = 12, HorizontalAlignment = HorizontalAlignment.Left, Padding = new Thickness(10, 0, 10, 0) };
-            AppResources.StyleDialogButton(addBtn, false);
-            addBtn.Click += (s, e) =>
-            {
-                addPanel.Children.Clear();
-                addPanel.Children.Add(BuildAddForm(metricList, addPanel, hw, fg));
-            };
-            stack.Children.Add(addBtn);
-            stack.Children.Add(addPanel);
-
-            stack.Children.Add(new TextBlock { Text = $"已发现 {hw.AllTempSensors.Count} 温度 · {hw.AllFanSensors.Count} 风扇RPM · {hw.AllControlSensors.Count} 控制%", Foreground = fg, FontSize = 10, Margin = new Thickness(0, 10, 0, 12) });
-
-            // ---- 更新 + 阈值 ----
-            stack.Children.Add(new TextBlock { Text = "更新间隔", Foreground = Brushes.White, FontSize = 12, Margin = new Thickness(0, 0, 0, 4) });
-            var intervalRow = new DockPanel { Margin = new Thickness(0, 0, 0, 10) };
-            var intervalBox = new TextBox { Width = 60, MinHeight = 24, Text = AppPrefs.GetInt("Temp.IntervalMs", 1000).ToString(), Background = new SolidColorBrush(Color.FromRgb(42, 39, 60)), Foreground = Brushes.White, BorderBrush = new SolidColorBrush(Color.FromRgb(80, 75, 120)), VerticalContentAlignment = VerticalAlignment.Center };
-            intervalRow.Children.Add(intervalBox);
-            intervalRow.Children.Add(new TextBlock { Text = " ms (500-60000)", Foreground = fg, FontSize = 12, VerticalAlignment = VerticalAlignment.Center });
-            stack.Children.Add(intervalRow);
-
-            var warnRow = new DockPanel { Margin = new Thickness(0, 0, 0, 4) };
-            var warnBox = new TextBox { Width = 60, MinHeight = 24, Text = AppPrefs.GetInt("Temp.WarnC", 80).ToString(), Background = new SolidColorBrush(Color.FromRgb(42, 39, 60)), Foreground = Brushes.White, BorderBrush = new SolidColorBrush(Color.FromRgb(80, 75, 120)), VerticalContentAlignment = VerticalAlignment.Center };
-            warnRow.Children.Add(warnBox);
-            warnRow.Children.Add(new TextBlock { Text = " °C 橙色", Foreground = fg, FontSize = 12, VerticalAlignment = VerticalAlignment.Center });
-            stack.Children.Add(warnRow);
-
-            var critRow = new DockPanel { Margin = new Thickness(0, 0, 0, 16) };
-            var critBox = new TextBox { Width = 60, MinHeight = 24, Text = AppPrefs.GetInt("Temp.CriticalC", 95).ToString(), Background = new SolidColorBrush(Color.FromRgb(42, 39, 60)), Foreground = Brushes.White, BorderBrush = new SolidColorBrush(Color.FromRgb(80, 75, 120)), VerticalContentAlignment = VerticalAlignment.Center };
-            critRow.Children.Add(critBox);
-            critRow.Children.Add(new TextBlock { Text = " °C 红色", Foreground = fg, FontSize = 12, VerticalAlignment = VerticalAlignment.Center });
-            stack.Children.Add(critRow);
+            var ivBox = AddSetRow(setInner, "刷新间隔", AppPrefs.GetInt("Temp.IntervalMs", 1000).ToString(), "ms", 70);
+            var warnBox = AddSetRow(setInner, "🟠 高温警告", AppPrefs.GetInt("Temp.WarnC", 80).ToString(), "°C", 50);
+            var critBox = AddSetRow(setInner, "🔴 超高温", AppPrefs.GetInt("Temp.CriticalC", 95).ToString(), "°C", 50);
+            setCard.Child = setInner;
+            stack.Children.Add(setCard);
 
             var btns = MakeButtons();
-            ((Button)btns.Children[0]).Click += (s, e) =>
+            ((Button)btns.Children[0]).Click += (_, _) =>
             {
-                int iv; if (int.TryParse(intervalBox.Text, out iv) && iv >= 500 && iv <= 60000) AppPrefs.SetInt("Temp.IntervalMs", iv);
-                int w; if (int.TryParse(warnBox.Text, out w) && w > 0) AppPrefs.SetInt("Temp.WarnC", w);
-                int c; if (int.TryParse(critBox.Text, out c) && c > 0) AppPrefs.SetInt("Temp.CriticalC", c);
+                int iv; if (int.TryParse(ivBox.Text, out iv) && iv >= 500 && iv <= 60000) AppPrefs.SetInt("Temp.IntervalMs", iv);
+                int w;  if (int.TryParse(warnBox.Text, out w) && w > 0) AppPrefs.SetInt("Temp.WarnC", w);
+                int c;  if (int.TryParse(critBox.Text, out c) && c > 0) AppPrefs.SetInt("Temp.CriticalC", c);
                 if (owner is MainWindow mw) mw.RestartTempTimer();
                 dlg.DialogResult = true; dlg.Close();
             };
-            ((Button)btns.Children[1]).Click += (s, e) => { dlg.DialogResult = false; dlg.Close(); };
+            ((Button)btns.Children[1]).Click += (_, _) => { dlg.DialogResult = false; dlg.Close(); };
             stack.Children.Add(btns);
 
             return Scroll(stack);
+        }
+
+        static TextBox AddSetRow(StackPanel parent, string label, string value, string unit, int width)
+        {
+            var row = new DockPanel { Margin = new Thickness(0, 3, 0, 3), LastChildFill = true };
+            row.Children.Add(new TextBlock { Text = label, Foreground = new SolidColorBrush(Color.FromRgb(190, 188, 220)), FontSize = 11, VerticalAlignment = VerticalAlignment.Center });
+            var box = new TextBox { Text = value, Width = width, MinHeight = 26, FontSize = 11, Padding = new Thickness(6, 0, 6, 0), Background = new SolidColorBrush(Color.FromRgb(20, 18, 28)), Foreground = Brushes.White, BorderBrush = new SolidColorBrush(Color.FromRgb(60, 55, 80)), BorderThickness = new Thickness(1), VerticalContentAlignment = VerticalAlignment.Center };
+            var inputStack = new StackPanel { Orientation = Orientation.Horizontal };
+            inputStack.Children.Add(box);
+            inputStack.Children.Add(new TextBlock { Text = " " + unit, Foreground = new SolidColorBrush(Color.FromRgb(190, 188, 220)), FontSize = 10, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(4, 0, 0, 0) });
+            DockPanel.SetDock(inputStack, Dock.Right);
+            row.Children.Add(inputStack);
+            parent.Children.Add(row);
+            return box;
         }
 
         static readonly string[] IconKeyOptions = { "cpu", "gpu", "hot", "vram", "dram", "disk", "fan", "ctrl", "mb", "def" };
