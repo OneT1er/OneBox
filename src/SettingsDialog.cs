@@ -21,32 +21,30 @@ namespace PowerAudioManager
             var fg = new SolidColorBrush(Color.FromRgb(190, 188, 220));
             var lightText = new SolidColorBrush(Color.FromRgb(220, 218, 245));
 
-            // 左侧垂直 tab 栏 + 右侧内容的布局，适配 7 个 tab
+            // ---- 侧栏 ----
             var sideBar = new ListBox
             {
-                Width = 100,
-                Background = new SolidColorBrush(Color.FromRgb(32, 30, 48)),
-                BorderBrush = Brushes.Transparent,
+                Width = 130,
+                Background = new SolidColorBrush(Color.FromRgb(24, 22, 36)),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(40, 36, 56)),
+                BorderThickness = new Thickness(0, 0, 1, 0),
                 Margin = new Thickness(0),
-                Padding = new Thickness(0)
+                Padding = new Thickness(0, 10, 0, 0)
             };
             sideBar.ItemContainerStyle = SidebarItemStyle();
             sideBar.SelectionChanged += (s, e) =>
             {
-                // 更新所有 item 的文字颜色（选中白，未选中灰）
                 foreach (ListBoxItem item in sideBar.Items)
                 {
-                    var tb = item.Content as TextBlock;
+                    var tb = (item.Content as StackPanel)?.Children[1] as TextBlock;
                     if (tb != null)
-                        tb.Foreground = item.IsSelected
-                            ? Brushes.White
-                            : new SolidColorBrush(Color.FromRgb(190, 188, 220));
+                        tb.Foreground = item.IsSelected ? Brushes.White : new SolidColorBrush(Color.FromRgb(180, 177, 210));
                 }
                 if (sideBar.SelectedIndex >= 0)
                     _contentHost.Content = _tabContents[sideBar.SelectedIndex];
             };
 
-            _contentHost = new ContentControl();
+            _contentHost = new ContentControl { Background = new SolidColorBrush(Color.FromRgb(28, 26, 40)) };
 
             var layout = new Grid();
             layout.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
@@ -56,9 +54,8 @@ namespace PowerAudioManager
             layout.Children.Add(sideBar);
             layout.Children.Add(_contentHost);
 
-            var dlg = OneBoxWindow.Create(owner, "设置", 500, 560, layout, true);
+            var dlg = OneBoxWindow.Create(owner, "设置", 520, 570, layout, true);
 
-            // 构建所有 tab 内容
             _tabContents = new System.Collections.Generic.List<UIElement>
             {
                 BuildGeneralTab(owner, dlg, fg, lightText),
@@ -70,25 +67,20 @@ namespace PowerAudioManager
                 BuildTempTab(owner, dlg, fg, lightText),
             };
 
-            // 填充侧栏
-            sideBar.Items.Add(SidebarItem("  常规"));
-            sideBar.Items.Add(SidebarItem("  板块"));
-            sideBar.Items.Add(SidebarItem("  内存"));
-            sideBar.Items.Add(SidebarItem("  翻译"));
-            sideBar.Items.Add(SidebarItem("  截图"));
-            sideBar.Items.Add(SidebarItem("  剪贴板"));
-            sideBar.Items.Add(SidebarItem("  性能"));
+            sideBar.Items.Add(SidebarItem("⚙", "常规"));
+            sideBar.Items.Add(SidebarItem("▣", "板块"));
+            sideBar.Items.Add(SidebarItem("◈", "内存"));
+            sideBar.Items.Add(SidebarItem("↗", "翻译"));
+            sideBar.Items.Add(SidebarItem("◻", "截图"));
+            sideBar.Items.Add(SidebarItem("▤", "剪贴板"));
+            sideBar.Items.Add(SidebarItem("◉", "性能 "));
 
             if (openTab >= 0 && openTab < sideBar.Items.Count)
             {
                 sideBar.SelectedIndex = openTab;
                 _contentHost.Content = _tabContents[openTab];
             }
-            else
-            {
-                sideBar.SelectedIndex = 0;
-                _contentHost.Content = _tabContents[0];
-            }
+            else { sideBar.SelectedIndex = 0; _contentHost.Content = _tabContents[0]; }
 
             dlg.ShowDialog();
         }
@@ -96,14 +88,12 @@ namespace PowerAudioManager
         private static System.Collections.Generic.List<UIElement> _tabContents;
         private static ContentControl _contentHost;
 
-        static ListBoxItem SidebarItem(string text)
+        static ListBoxItem SidebarItem(string icon, string text)
         {
-            return new ListBoxItem
-            {
-                Content = new TextBlock { Text = text, FontSize = 13, Foreground = new SolidColorBrush(Color.FromRgb(190, 188, 220)) },
-                Height = 40,
-                Padding = new Thickness(0)
-            };
+            var row = new StackPanel { Orientation = Orientation.Horizontal };
+            row.Children.Add(new TextBlock { Text = icon, FontFamily = AppResources.AppFont, FontSize = 14, Foreground = new SolidColorBrush(Color.FromRgb(180, 177, 210)), Width = 20, TextAlignment = TextAlignment.Center, VerticalAlignment = VerticalAlignment.Center });
+            row.Children.Add(new TextBlock { Text = text, FontSize = 13, Foreground = new SolidColorBrush(Color.FromRgb(190, 188, 220)), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0, 0, 0) });
+            return new ListBoxItem { Content = row, Height = 42, Padding = new Thickness(10, 0, 10, 0) };
         }
 
         static Style SidebarItemStyle()
@@ -112,24 +102,37 @@ namespace PowerAudioManager
             style.Setters.Add(new Setter(ListBoxItem.BackgroundProperty, Brushes.Transparent));
             style.Setters.Add(new Setter(ListBoxItem.BorderBrushProperty, Brushes.Transparent));
             style.Setters.Add(new Setter(ListBoxItem.BorderThicknessProperty, new Thickness(0)));
-            style.Setters.Add(new Setter(ListBoxItem.PaddingProperty, new Thickness(12, 0, 12, 0)));
+            style.Setters.Add(new Setter(ListBoxItem.PaddingProperty, new Thickness(0)));
             style.Setters.Add(new Setter(ListBoxItem.VerticalContentAlignmentProperty, VerticalAlignment.Center));
             style.Setters.Add(new Setter(ListBoxItem.CursorProperty, System.Windows.Input.Cursors.Hand));
-            // 选中态：左侧紫条 + 深色底
-            var selectedTrigger = new Trigger { Property = ListBoxItem.IsSelectedProperty, Value = true };
-            selectedTrigger.Setters.Add(new Setter(ListBoxItem.BackgroundProperty, new SolidColorBrush(Color.FromRgb(42, 39, 60))));
-            // 左侧指示条用 BorderThickness + BorderBrush 实现
-            selectedTrigger.Setters.Add(new Setter(ListBoxItem.BorderBrushProperty, new SolidColorBrush(Color.FromRgb(142, 140, 216))));
-            selectedTrigger.Setters.Add(new Setter(ListBoxItem.BorderThicknessProperty, new Thickness(3, 0, 0, 0)));
-            // 选中文字变白
-            // 需要遍历设置 TextBlock.Foreground，这里用 DataTrigger 不行，直接用简单方法：在代码里更新
-            style.Triggers.Add(selectedTrigger);
+            style.Setters.Add(new Setter(ListBoxItem.MarginProperty, new Thickness(6, 2, 6, 2)));
 
-            var hoverTrigger = new Trigger { Property = ListBoxItem.IsMouseOverProperty, Value = true };
-            hoverTrigger.Setters.Add(new Setter(ListBoxItem.BackgroundProperty, new SolidColorBrush(Color.FromRgb(50, 47, 70))));
-            style.Triggers.Add(hoverTrigger);
+            // 选中态：紫色圆角填充 + 左侧指示点
+            var sel = new Trigger { Property = ListBoxItem.IsSelectedProperty, Value = true };
+            sel.Setters.Add(new Setter(ListBoxItem.BackgroundProperty, new SolidColorBrush(Color.FromRgb(60, 52, 100))));
+            sel.Setters.Add(new Setter(ListBoxItem.BorderBrushProperty, new SolidColorBrush(Color.FromRgb(142, 140, 216))));
+            sel.Setters.Add(new Setter(ListBoxItem.BorderThicknessProperty, new Thickness(3, 0, 0, 0)));
+            style.Triggers.Add(sel);
+
+            var hover = new Trigger { Property = ListBoxItem.IsMouseOverProperty, Value = true };
+            hover.Setters.Add(new Setter(ListBoxItem.BackgroundProperty, new SolidColorBrush(Color.FromRgb(45, 42, 62))));
+            style.Triggers.Add(hover);
 
             return style;
+        }
+
+        static Border Card(UIElement child) => new Border
+        {
+            Background = new SolidColorBrush(Color.FromRgb(34, 32, 50)),
+            CornerRadius = new CornerRadius(6),
+            Padding = new Thickness(14),
+            Margin = new Thickness(0, 0, 0, 10),
+            Child = child
+        };
+
+        static TextBox RoundedInput(string text, int width = 80)
+        {
+            return new TextBox { Text = text, Width = width, MinHeight = 26, FontSize = 12, Padding = new Thickness(8, 0, 8, 0), Background = new SolidColorBrush(Color.FromRgb(20, 18, 28)), Foreground = Brushes.White, BorderBrush = new SolidColorBrush(Color.FromRgb(60, 55, 80)), BorderThickness = new Thickness(1), VerticalContentAlignment = VerticalAlignment.Center };
         }
 
         static ScrollViewer BuildGeneralTab(Window owner, Window dlg, SolidColorBrush fg, SolidColorBrush lightText)
