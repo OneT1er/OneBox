@@ -1,4 +1,6 @@
 using System;
+using System.IO;
+using System.IO.Pipes;
 using System.Runtime.InteropServices;
 using System.ServiceProcess;
 using System.Threading.Tasks;
@@ -46,11 +48,50 @@ namespace PowerAudioManager
         protected override void OnStart(string[] _)
         {
             AppLog.Log("Service", "started");
+            // 启动温度 helper（Session 0 SYSTEM，无 UAC），跑 LibreHardwareMonitor 经 Global 管道推送
+            try
+            {
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(Environment.ProcessPath, "--temp-monitor")
+                { UseShellExecute = false, WindowStyle = System.Diagnostics.ProcessWindowStyle.Hidden });
+                AppLog.Log("Service", "started --temp-monitor helper");
+            }
+            catch (Exception ex) { AppLog.Log("Service", "temp helper fail: " + ex.Message); }
+            // 内存清理管道服务器（OneBox 普通进程命令服务执行 CleanAll，无 UAC）
+            System.Threading.ThreadPool.QueueUserWorkItem(_ => RunMemCleanPipe());
             // 主动扫描所有已登录的活跃会话并启动 GUI（OnSessionChange 只在会话变化时触发，
             // 服务重启/重新安装时不会收到已有会话的事件）。
             EnumerateAndLaunch();
         }
         protected override void OnStop() { AppLog.Log("Service", "stopped"); }
+
+        // 内存清理管道服务器：OneBox 普通进程发 flags，服务（SYSTEM）执行 CleanAll，回写释放量
+        void RunMemCleanPipe()
+        {
+            try
+            {
+                while (true)
+                {
+                    var security = new PipeSecurity();
+                    security.AddAccessRule(new PipeAccessRule(new System.Security.Principal.SecurityIdentifier(System.Security.Principal.WellKnownSidType.WorldSid, null), PipeAccessRights.ReadWrite, System.Security.AccessControl.AccessControlType.Allow));
+                    using (var server = NamedPipeServerStreamAcl.Create("Global\\OneBox\\MemClean", PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.None, 0, 0, security))
+                    {
+                        server.WaitForConnection();
+                        try
+                        {
+                            int flags = new BinaryReader(server, System.Text.Encoding.UTF8, true).ReadInt32();
+                            var r = MemoryCleaner.CleanAll((MemoryCleaner.CleanFlags)flags);
+                            var bw = new BinaryWriter(server, System.Text.Encoding.UTF8, true);
+                            bw.Write((ulong)r.FreedBytes);
+                            bw.Flush();
+                            AppLog.Log("Service", "memclean done flags=" + flags + " freed=" + (int)(r.FreedBytes / 1024 / 1024) + "MB");
+                        }
+                        catch (Exception ex) { AppLog.Log("Service", "memclean err: " + ex.Message); }
+                        try { server.Disconnect(); } catch { }
+                    }
+                }
+            }
+            catch (Exception ex) { AppLog.Log("Service", "memclean pipe fatal: " + ex.Message); }
+        }
 
         void EnumerateAndLaunch()
         {
@@ -95,50 +136,12 @@ namespace PowerAudioManager
                 { AppLog.Log("Service", "WTSQueryUserToken failed"); return; }
                 try
                 {
-                    // 获取用户的 UAC 提权令牌（TokenLinkedToken）。
-                    // 管理员用户有过滤令牌（普通权限）和链接令牌（完整管理员）。
-                    // SYSTEM 服务可直接使用链接令牌启动进程，无需 UAC 弹窗。
-                    IntPtr adminToken = IntPtr.Zero;
-                    int infoLen = 0;
-                    GetTokenInformation(userToken, TokenLinkedToken, IntPtr.Zero, 0, out infoLen);
-                    if (infoLen > 0)
-                    {
-                        IntPtr buf = Marshal.AllocHGlobal(infoLen);
-                        try
-                        {
-                            if (GetTokenInformation(userToken, TokenLinkedToken, buf, infoLen, out _))
-                            {
-                                adminToken = Marshal.ReadIntPtr(buf);
-                                // 复制为主令牌供 CreateProcessAsUser 使用
-                                if (!DuplicateTokenEx(adminToken, MAXIMUM_ALLOWED, IntPtr.Zero,
-                                    SecurityImpersonation, TokenPrimary, out var dup))
-                                { AppLog.Log("Service", "DuplicateTokenEx(admin) failed"); }
-                                else
-                                {
-                                    CloseHandle(adminToken);
-                                    adminToken = dup;
-                                }
-                            }
-                        }
-                        finally { Marshal.FreeHGlobal(buf); }
-                    }
-
-                    if (adminToken != IntPtr.Zero)
-                    {
-                        AppLog.Log("Service", "using elevated admin token (no UAC)");
-                        try { LaunchWithToken(adminToken); }
-                        finally { CloseHandle(adminToken); }
-                    }
-                    else
-                    {
-                        // 回退：用户不是管理员，用普通 token
-                        AppLog.Log("Service", "no admin token, using user token");
-                        if (!DuplicateTokenEx(userToken, MAXIMUM_ALLOWED, IntPtr.Zero,
-                            SecurityImpersonation, TokenPrimary, out var dupToken) || dupToken == IntPtr.Zero)
-                        { AppLog.Log("Service", "DuplicateTokenEx failed"); return; }
-                        try { LaunchWithToken(dupToken); }
-                        finally { CloseHandle(dupToken); }
-                    }
+                    // 普通权限启动 OneBox（拖放无 UIPI 限制；温度/内存由服务的 --temp-monitor helper 提供）
+                    if (!DuplicateTokenEx(userToken, MAXIMUM_ALLOWED, IntPtr.Zero,
+                        SecurityImpersonation, TokenPrimary, out var dupToken) || dupToken == IntPtr.Zero)
+                    { AppLog.Log("Service", "DuplicateTokenEx failed"); return; }
+                    try { LaunchWithToken(dupToken); }
+                    finally { CloseHandle(dupToken); }
                 }
                 finally { CloseHandle(userToken); }
             }

@@ -59,6 +59,53 @@ namespace PowerAudioManager
                 return;
             }
 
+            // --disable-autostart: 提权辅助进程，删除开机自启（服务/任务/注册表）后退出
+            if (args.Length > 0 && args[0] == "--disable-autostart")
+            {
+                AppLog.Log("AutoStart", "disable helper start");
+                string err = PowerAudioManager.AutoStartService.Disable();
+                if (err != null)
+                    System.Windows.MessageBox.Show(err, "开机自启", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Warning);
+                return;
+            }
+
+            // --clean-memory <flags>: 提权辅助进程，执行内存清理后退出（非管理员 GUI 实例调用以启用全部清理项）
+            if (args.Length > 1 && args[0] == "--clean-memory")
+            {
+                try
+                {
+                    if (int.TryParse(args[1], out int f))
+                    {
+                        AppLog.Log("CleanHelper", "start flags=" + f);
+                        PowerAudioManager.MemoryCleaner.CleanAll((PowerAudioManager.MemoryCleaner.CleanFlags)f);
+                        AppLog.Log("CleanHelper", "done");
+                    }
+                }
+                catch (Exception ex) { AppLog.Log("CleanHelper", ex); }
+                return;
+            }
+
+            // --temp-monitor: admin 温度 helper 进程，运行 LibreHardwareMonitor 经命名管道推送温度给普通主进程
+            if (args.Length > 0 && args[0] == "--temp-monitor")
+            {
+                AppLog.Log("TempHelper", "start");
+                PowerAudioManager.TempMonitorHelper.Run();
+                return;
+            }
+
+            // --launcher <parentHwnd>: 普通权限快捷启动窗口，SetParent 嵌入 admin 悬浮窗容器
+            if (args.Length > 1 && args[0] == "--launcher")
+            {
+                AppLog.Log("Launcher", "start parent=" + args[1]);
+                var lapp = new Application();
+                var win = new LauncherWindow();
+                win.Show();
+                if (long.TryParse(args[1], out long parentHwnd))
+                    win.EmbedTo((IntPtr)parentHwnd);
+                lapp.Run();
+                return;
+            }
+
             // 后台预热内存 PerformanceCounter：.NET 8 冷启动首次构造 ~5s，GetStatus() 在 UI 线程执行，提前启动避免界面卡顿。
             try { PowerAudioManager.MemoryCleaner.WarmupCounters(); } catch { }
 

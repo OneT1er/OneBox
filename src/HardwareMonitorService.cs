@@ -1,7 +1,10 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
+using System.IO.Pipes;
 using System.Linq;
 using System.Text;
+using System.Text.Json;
 using LibreHardwareMonitor.Hardware;
 
 namespace PowerAudioManager
@@ -46,12 +49,26 @@ namespace PowerAudioManager
         // 轮询后产生的值
         public List<MetricValue> ActiveMetrics { get; } = new();
 
+        // 上次成功读到的值（按 ConfigKey 缓存）：传感器偶发失配/SMBus 抖动时保留，避免 UI 闪烁或消失
+        private readonly Dictionary<string, MetricValue> _lastMetrics = new();
+        // 已记录过的传感器重映射，避免每秒轮询刷日志
+        private readonly HashSet<string> _loggedRemaps = new();
+        private List<MetricValue> _allPipeMetrics = new List<MetricValue>();
+
         private HardwareMonitorService() { }
 
         public void Start()
         {
             if (_started) return;
             lock (_lock) { if (_started) return; _started = true; }
+
+            // 非管理员：温度由服务（OneBoxSvc）的 --temp-monitor helper 经 Global 管道推送，无 UAC
+            if (!AdminUtils.IsAdmin())
+            {
+                LoadEnabledMetrics();  // 加载用户配的指标（UpdateFromPipe 过滤用），否则重启后指标为空
+                StartPipeClient();
+                return;
+            }
 
             System.Threading.ThreadPool.QueueUserWorkItem(_ =>
             {
@@ -77,6 +94,87 @@ namespace PowerAudioManager
             });
         }
 
+        // ---- 非管理员：通过 admin helper（OneBox.exe --temp-monitor）命名管道读温度 ----
+        void StartPipeClient()
+        {
+            System.Threading.ThreadPool.QueueUserWorkItem(_ =>
+            {
+                // 重试连 Global 管道，等服务（OneBoxSvc）的 --temp-monitor 就绪（最多 ~25s）
+                NamedPipeClientStream client = null;
+                for (int i = 0; i < 25; i++)
+                {
+                    try
+                    {
+                        client = new NamedPipeClientStream(".", "Global\\OneBox\\TempMonitor", PipeDirection.In);
+                        client.Connect(1000);
+                        break;
+                    }
+                    catch { try { client?.Dispose(); } catch { } client = null; System.Threading.Thread.Sleep(1000); }
+                }
+                if (client == null || !client.IsConnected)
+                {
+                    AppLog.Log("Temp", "pipe connect fail (service not running?)");
+                    try { client?.Dispose(); } catch { }
+                    return;
+                }
+                AppLog.Log("Temp", "pipe connected");
+                ReadPipeLoop(client);
+            });
+        }
+
+        void ReadPipeLoop(NamedPipeClientStream client)
+        {
+            if (client == null) return;
+            try
+            {
+                using (var sr = new StreamReader(client, System.Text.Encoding.UTF8))
+                {
+                    while (client.IsConnected)
+                    {
+                        string line = sr.ReadLine();
+                        if (line == null) break;
+                        try { ParseAndFill(line); } catch { }
+                    }
+                }
+            }
+            catch (Exception ex) { AppLog.Log("Temp", "pipe read err: " + ex.Message); }
+            AppLog.Log("Temp", "pipe disconnected");
+        }
+
+        void ParseAndFill(string json)
+        {
+            try
+            {
+                var p = JsonSerializer.Deserialize<TempPayload>(json);
+                if (p == null) return;
+                lock (_lock)
+                {
+                    CpuTemperature = p.cpu;
+                    GpuTemperature = p.gpu;
+                    IsAvailable = p.ready;
+                    // 所有传感器值（helper 推送，OneBox 用用户 EnabledMetrics 过滤）
+                    _allPipeMetrics.Clear();
+                    if (p.allMetrics != null)
+                        foreach (var m in p.allMetrics)
+                            _allPipeMetrics.Add(new MetricValue { DisplayName = m.name, IconKey = m.icon, Value = m.value, Unit = m.unit, ConfigKey = m.key });
+                    AllTempSensors.Clear();
+                    if (p.sensors != null) foreach (var s in p.sensors) AllTempSensors.Add(new SensorInfo { HardwareName = s.hw, SensorName = s.name, HwType = ParseHw(s.hwtype), SensorType = ParseSt(s.stype) });
+                    AllFanSensors.Clear();
+                    if (p.fans != null) foreach (var s in p.fans) AllFanSensors.Add(new SensorInfo { HardwareName = s.hw, SensorName = s.name, HwType = ParseHw(s.hwtype), SensorType = ParseSt(s.stype) });
+                    AllControlSensors.Clear();
+                    if (p.controls != null) foreach (var s in p.controls) AllControlSensors.Add(new SensorInfo { HardwareName = s.hw, SensorName = s.name, HwType = ParseHw(s.hwtype), SensorType = ParseSt(s.stype) });
+                }
+            }
+            catch { }
+        }
+
+        static HardwareType ParseHw(string s) => Enum.TryParse<HardwareType>(s, out var v) ? v : default;
+        static SensorType ParseSt(string s) => Enum.TryParse<SensorType>(s, out var v) ? v : SensorType.Temperature;
+
+        class TempPayload { public float? cpu { get; set; } public float? gpu { get; set; } public bool ready { get; set; } public List<TempMetric> metrics { get; set; } public List<TempMetric> allMetrics { get; set; } public List<TempSensor> sensors { get; set; } public List<TempSensor> fans { get; set; } public List<TempSensor> controls { get; set; } }
+        class TempMetric { public string name { get; set; } public string icon { get; set; } public float? value { get; set; } public string unit { get; set; } public string key { get; set; } }
+        class TempSensor { public string hw { get; set; } public string name { get; set; } public string hwtype { get; set; } public string stype { get; set; } }
+
         void DiscoverSensors()
         {
             AllTempSensors.Clear(); AllFanSensors.Clear();
@@ -92,6 +190,12 @@ namespace PowerAudioManager
                     var info = new SensorInfo { HardwareName = hw.Name, SensorName = s.Name, HwType = hw.HardwareType, SensorType = s.SensorType };
                     if (s.SensorType == SensorType.Temperature)
                     {
+                        // 过滤阈值/元数据传感器（值恒为 0 或固定阈值，非实时温度）：内存 SPD 的
+                        // Thermal Sensor Low/High/Critical Limit、Temperature Sensor Resolution，
+                        // 以及 SSD 的 Warning/Critical Temperature。避免污染选择列表与误选。
+                        string sn = (s.Name ?? "").ToLower();
+                        if (sn.Contains("resolution") || sn.Contains("limit") || sn.Contains("warning") || sn.Contains("critical"))
+                            continue;
                         AllTempSensors.Add(info);
                         AppLog.Log("Temp", $"  [T] {info} ({s.Value?.ToString("0") ?? "null"})");
                     }
@@ -219,7 +323,9 @@ namespace PowerAudioManager
 
         public void Update()
         {
-            if (!IsAvailable || _computer == null || !_hwReady) return;
+            if (!IsAvailable) return;
+            // 非管理员：数据由服务 helper 经管道推送，用用户 EnabledMetrics 过滤 _allPipeMetrics
+            if (_computer == null || !_hwReady) { UpdateFromPipe(); return; }
             try
             {
                 _computer.Accept(new UpdateVisitor());
@@ -234,15 +340,21 @@ namespace PowerAudioManager
                     string displayName, iconKey;
                     var cfg = DecodeConfig(key, out displayName, out iconKey);
                     if (cfg == null) continue;
-                    var sensor = FindSensor(cfg);
-                    if (sensor == null) continue;
 
-                    float? val = ReadSensorValue(sensor);
+                    var sensor = FindSensor(cfg);
+                    float? val = sensor != null ? ReadSensorValue(sensor) : null;
+
                     if (val.HasValue)
                     {
                         string unit = cfg.SensorType == SensorType.Temperature ? "°C" :
                                       cfg.SensorType == SensorType.Control ? "%" : "RPM";
-                        values.Add(new MetricValue { DisplayName = displayName, IconKey = iconKey, Value = val, Unit = unit, ConfigKey = key });
+                        var mv = new MetricValue { DisplayName = displayName, IconKey = iconKey, Value = val, Unit = unit, ConfigKey = key };
+                        lock (_lock) { _lastMetrics[key] = mv; }
+                        values.Add(mv);
+                    }
+                    else
+                    {
+                        lock (_lock) { if (_lastMetrics.TryGetValue(key, out var last)) values.Add(last); }
                     }
                 }
 
@@ -251,12 +363,62 @@ namespace PowerAudioManager
             catch { }
         }
 
+        // 非管理员：用用户 EnabledMetrics 过滤服务 helper 推送的所有传感器值
+        void UpdateFromPipe()
+        {
+            var values = new List<MetricValue>();
+            List<MetricValue> all;
+            lock (_lock) all = new List<MetricValue>(_allPipeMetrics);
+            foreach (var key in EnabledMetrics)
+            {
+                string displayName, iconKey;
+                var cfg = DecodeConfig(key, out displayName, out iconKey);
+                if (cfg == null) continue;
+                var m = all.FirstOrDefault(x => x.ConfigKey == key);
+                if (m == null)
+                {
+                    // fallback：按 SensorName+SensorType 匹配（DDR5 名字漂移），仅当唯一避免串台
+                    var nm = all.Where(x => { var p = x.ConfigKey.Split('|'); return p.Length >= 3 && p[2] == cfg.SensorName && p[0] == cfg.SensorType.ToString(); }).ToList();
+                    if (nm.Count == 1) m = nm[0];
+                }
+                if (m != null && m.Value.HasValue)
+                {
+                    var mv = new MetricValue { DisplayName = displayName, IconKey = iconKey, Value = m.Value, Unit = m.Unit, ConfigKey = key };
+                    lock (_lock) { _lastMetrics[key] = mv; }
+                    values.Add(mv);
+                }
+                else { lock (_lock) { if (_lastMetrics.TryGetValue(key, out var last)) values.Add(last); } }
+            }
+            lock (_lock) { ActiveMetrics.Clear(); ActiveMetrics.AddRange(values); }
+        }
+
         // 设置中预览传感器实时值（读取缓存值，不触发硬件刷新）
         public float? ReadSensorPreview(SensorInfo cfg)
         {
-            if (_computer == null || !_hwReady) return null;
-            try { return ReadSensorValue(cfg); }
-            catch { return null; }
+            if (_computer != null && _hwReady)
+            {
+                try
+                {
+                    var sensor = FindSensor(cfg) ?? cfg;
+                    return ReadSensorValue(sensor);
+                }
+                catch { return null; }
+            }
+            // 非管理员：从管道推送的所有传感器值找匹配
+            if (cfg == null) return null;
+            try
+            {
+                lock (_lock)
+                {
+                    foreach (var m in _allPipeMetrics)
+                    {
+                        var p = m.ConfigKey.Split('|');
+                        if (p.Length >= 3 && p[0] == cfg.SensorType.ToString() && p[1] == cfg.HardwareName && p[2] == cfg.SensorName) return m.Value;
+                    }
+                }
+            }
+            catch { }
+            return null;
         }
 
         float? ReadCpuTemp()
@@ -276,6 +438,38 @@ namespace PowerAudioManager
             return ReadSensorValue(coreSensor ?? sensor);
         }
 
+        // 读取所有温度/风扇/控制传感器的 MetricValue（admin 模式，供 helper 推送给普通 OneBox 过滤）
+        public List<MetricValue> ReadAllMetrics()
+        {
+            var list = new List<MetricValue>();
+            if (_computer == null || !_hwReady) return list;
+            try
+            {
+                void Scan(IList<IHardware> hws)
+                {
+                    foreach (var hw in hws)
+                    {
+                        foreach (var s in hw.Sensors)
+                        {
+                            if (s.SensorType != SensorType.Temperature && s.SensorType != SensorType.Fan && s.SensorType != SensorType.Control) continue;
+                            if (!s.Value.HasValue) continue;
+                            float v = s.Value.Value;
+                            if (s.SensorType == SensorType.Temperature && (v <= 0 || v > 150)) continue;
+                            var info = new SensorInfo { HardwareName = hw.Name, SensorName = s.Name, HwType = hw.HardwareType, SensorType = s.SensorType };
+                            string dn = DefaultDisplayName(hw.Name, s.Name, s.SensorType);
+                            string ik = AutoIconKey(dn, info);
+                            string unit = s.SensorType == SensorType.Temperature ? "°C" : s.SensorType == SensorType.Control ? "%" : "RPM";
+                            list.Add(new MetricValue { DisplayName = dn, IconKey = ik, Value = v, Unit = unit, ConfigKey = EncodeConfig(info, dn, ik) });
+                        }
+                        if (hw.SubHardware != null && hw.SubHardware.Length > 0) Scan(hw.SubHardware);
+                    }
+                }
+                Scan(_computer.Hardware);
+            }
+            catch { }
+            return list;
+        }
+
         SensorInfo FindSensor(SensorInfo cfg)
         {
             List<SensorInfo> pool = cfg.SensorType switch
@@ -284,7 +478,45 @@ namespace PowerAudioManager
                 SensorType.Control => AllControlSensors,
                 _ => AllTempSensors
             };
-            return pool.FirstOrDefault(s => s.HardwareName == cfg.HardwareName && s.SensorName == cfg.SensorName);
+            if (pool.Count == 0) return null;
+
+            // L1: 精确匹配 HardwareName + SensorName（CPU/GPU/SSD 名字稳定，走这条）
+            var exact = pool.FirstOrDefault(s => s.HardwareName == cfg.HardwareName && s.SensorName == cfg.SensorName);
+            if (exact != null) return exact;
+
+            // L2: DDR5 内存走 SMBus 解析 SPD 型号字符串，硬件名带乱码且每次启动漂移，L1 必然失配。
+            //     若该 SensorName 在当前 pool 里唯一，则忽略 HardwareName 按 SensorName 匹配；
+            //     SensorName 不唯一（如多盘 Temperature #1）则跳过，避免串台。
+            var nameMatches = pool.Where(s => s.SensorName == cfg.SensorName).ToList();
+            if (nameMatches.Count == 1)
+            {
+                LogRemap(cfg, nameMatches[0]);
+                return nameMatches[0];
+            }
+
+            // L3: 内存 DIMM 编号也会漂移（#1<->#3，且有时只枚举到一条），兜底取任意一条内存温度。
+            string sn = (cfg.SensorName ?? "").ToLower();
+            if (sn.Contains("dimm") || sn.Contains("memory"))
+            {
+                var anyMem = pool.FirstOrDefault(s => s.HwType == HardwareType.Memory);
+                if (anyMem != null)
+                {
+                    LogRemap(cfg, anyMem);
+                    return anyMem;
+                }
+            }
+
+            return null;
+        }
+
+        // 记录传感器重映射（每条配置只记一次，避免每秒轮询刷日志）
+        void LogRemap(SensorInfo cfg, SensorInfo actual)
+        {
+            lock (_lock)
+            {
+                if (_loggedRemaps.Add(cfg.SensorName + "|" + cfg.HardwareName))
+                    AppLog.Log("Temp", $"sensor remap: '{cfg.HardwareName} | {cfg.SensorName}' -> '{actual.HardwareName} | {actual.SensorName}'");
+            }
         }
 
         float? ReadSensorValue(SensorInfo cfg)
@@ -348,7 +580,7 @@ namespace PowerAudioManager
             try { _computer?.Close(); } catch { }
             _computer = null; _started = false; _hwReady = false; IsAvailable = false;
             AllTempSensors.Clear(); AllFanSensors.Clear(); AllControlSensors.Clear();
-            ActiveMetrics.Clear();
+            lock (_lock) { ActiveMetrics.Clear(); _lastMetrics.Clear(); _loggedRemaps.Clear(); }
         }
 
         public void Dispose() => Stop();

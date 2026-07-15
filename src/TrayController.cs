@@ -76,12 +76,10 @@ namespace PowerAudioManager
                     }
                     else
                     {
-                        string err = AutoStartService.Disable();
-                        if (err != null)
-                        {
-                            System.Windows.MessageBox.Show(err, "开机自启", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Warning);
-                            autoItem.Checked = true; // 回滚勾选：禁用失败，自启实际仍在生效
-                        }
+                        // 取消开机自启：删除服务需管理员，请求 UAC（--disable-autostart helper）
+                        try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(System.Environment.ProcessPath, "--disable-autostart") { Verb = "runas", UseShellExecute = true }); }
+                        catch (System.ComponentModel.Win32Exception ex) when (ex.NativeErrorCode == 1223) { autoItem.Checked = true; }
+                        catch { autoItem.Checked = true; }
                     }
                 };
                 _menu.Items.Add(autoItem);

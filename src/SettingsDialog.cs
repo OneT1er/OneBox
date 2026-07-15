@@ -67,6 +67,7 @@ namespace PowerAudioManager
                 BuildScreenshotTab(owner, dlg, fg, lightText),
                 BuildClipboardTab(owner, dlg, fg, lightText),
                 BuildTempTab(owner, dlg, fg, lightText),
+                BuildLearnTab(owner, dlg, fg, lightText),
             };
 
             sideBar.Items.Add(SidebarItem("⚙", "常规"));
@@ -76,6 +77,7 @@ namespace PowerAudioManager
             sideBar.Items.Add(SidebarItem("◻", "截图"));
             sideBar.Items.Add(SidebarItem("▤", "剪贴板"));
             sideBar.Items.Add(SidebarItem("◉", "性能 "));
+            sideBar.Items.Add(SidebarItem("🎓", "自学习"));
 
             if (openTab >= 0 && openTab < sideBar.Items.Count)
             {
@@ -238,24 +240,14 @@ namespace PowerAudioManager
 
             stack.Children.Add(new Border { Height = 1, Background = new SolidColorBrush(Color.FromRgb(80, 75, 120)), Margin = new Thickness(0, 4, 0, 12) });
 
-            var autoStartCb = new ComboBox
+            // 开机自启由 OneBoxSvc 服务实现；提供关闭按钮（删除服务需管理员，请求 UAC）
+            var disableAutoStartBtn = new Button { Content = "关闭开机自启（删除服务）", Padding = new Thickness(10, 6, 10, 6), FontSize = 12, Margin = new Thickness(0, 0, 0, 16) };
+            AppResources.StyleDialogButton(disableAutoStartBtn, false);
+            disableAutoStartBtn.Click += (s, e) =>
             {
-                Foreground = Brushes.White,
-                FontSize = 12,
-                Margin = new Thickness(0, 0, 0, 16),
-                MinWidth = 180
+                try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(Environment.ProcessPath, "--disable-autostart") { Verb = "runas", UseShellExecute = true }); } catch { }
             };
-            autoStartCb.Items.Add("关闭");
-            autoStartCb.Items.Add("注册表 (普通权限)");
-            autoStartCb.Items.Add("计划任务 (管理员权限)");
-            autoStartCb.Items.Add("服务 (SYSTEM 权限)");
-            int curMethod = (int)AutoStartService.GetCurrent();
-            autoStartCb.SelectedIndex = Math.Clamp(curMethod, 0, 3);
-            var autoLbl = new TextBlock { Text = "开机自启方式", Foreground = Brushes.White, FontSize = 12, Margin = new Thickness(0, 0, 0, 4) };
-            stack.Children.Add(autoLbl);
-            stack.Children.Add(autoStartCb);
-
-            stack.Children.Add(new TextBlock { Text = "注册表：最简单，无额外权限。计划任务：以最高权限运行，无 UAC 弹窗。服务：SYSTEM 账户运行，开机即启。", Foreground = fg, FontSize = 10, Margin = new Thickness(0, 0, 0, 16), TextWrapping = TextWrapping.Wrap });
+            stack.Children.Add(disableAutoStartBtn);
 
             var btns = MakeButtons();
             var ok = (Button)btns.Children[0];
@@ -273,28 +265,6 @@ namespace PowerAudioManager
                 else
                 { try { mw?._scaling?.ApplyManualScale(scaleSlider.Value / 100.0); } catch { } }
 
-                var newMethod = (AutoStartMethod)(Math.Clamp(autoStartCb.SelectedIndex, 0, 3));
-                if (newMethod != AutoStartService.GetCurrent())
-                {
-                    string err = AutoStartService.Enable(newMethod);
-                    if (err != null)
-                    {
-                        System.Windows.MessageBox.Show(err, "开机自启", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Warning);
-                        // 恢复到实际当前状态
-                        autoStartCb.SelectedIndex = (int)AutoStartService.GetCurrent();
-                    }
-                    else if (mw != null && mw._tray != null)
-                    {
-                        mw._tray.UpdateAutoStart();
-                        // 服务/计划任务方式需要管理员权限;若非管理员则立即提权重启
-                        if ((newMethod == AutoStartMethod.Service || newMethod == AutoStartMethod.ScheduledTask)
-                            && !AdminUtils.IsAdmin())
-                        {
-                            AdminUtils.RestartAsAdmin();
-                            return;
-                        }
-                    }
-                }
                 if (mw != null)
                 {
                     mw.Topmost = topmostCb.IsChecked == true;
@@ -364,31 +334,15 @@ namespace PowerAudioManager
         static ScrollViewer BuildMemoryTab(Window owner, Window dlg, SolidColorBrush fg, SolidColorBrush lightText)
         {
             var stack = new StackPanel { Margin = new Thickness(20) };
-            bool isAdmin = AdminUtils.IsAdmin();
 
-            var adminBanner = new Border
+            stack.Children.Add(new Border
             {
-                Background = new SolidColorBrush(isAdmin ? Color.FromRgb(40, 60, 50) : Color.FromRgb(70, 50, 50)),
+                Background = new SolidColorBrush(Color.FromRgb(40, 60, 50)),
                 CornerRadius = new CornerRadius(4),
                 Padding = new Thickness(10, 6, 10, 6),
-                Margin = new Thickness(0, 0, 0, 12)
-            };
-            var adminRow = new DockPanel { LastChildFill = true };
-            adminRow.Children.Add(new TextBlock
-            {
-                Text = isAdmin ? "已以管理员身份运行：所有清理项可用" : "当前未以管理员身份运行：部分项需要管理员权限",
-                Foreground = Brushes.White, FontSize = 11, VerticalAlignment = VerticalAlignment.Center
+                Margin = new Thickness(0, 0, 0, 12),
+                Child = new TextBlock { Text = "内存清理由 OneBoxSvc 服务执行（SYSTEM 权限），所有清理项可用，无需管理员重启", Foreground = Brushes.White, FontSize = 11, TextWrapping = TextWrapping.Wrap }
             });
-            if (!isAdmin)
-            {
-                var elevateBtn = new Button { Content = "以管理员重启", Padding = new Thickness(10, 4, 10, 4), FontSize = 11 };
-                AppResources.StyleDialogButton(elevateBtn, true);
-                DockPanel.SetDock(elevateBtn, Dock.Right);
-                elevateBtn.Click += (s, e) => AdminUtils.RestartAsAdmin();
-                adminRow.Children.Add(elevateBtn);
-            }
-            adminBanner.Child = adminRow;
-            stack.Children.Add(adminBanner);
 
             stack.Children.Add(new TextBlock { Text = "自动清理", Foreground = Brushes.White, FontWeight = FontWeights.SemiBold, FontSize = 13, Margin = new Thickness(0, 0, 0, 6) });
             var enableCb = new CheckBox { Content = "启用自动清理", Foreground = Brushes.White, FontSize = 13, Margin = new Thickness(0, 0, 0, 14) };
@@ -422,8 +376,8 @@ namespace PowerAudioManager
             stack.Children.Add(new TextBlock { Text = "要清理的内存区域", Foreground = Brushes.White, FontWeight = FontWeights.SemiBold, FontSize = 13, Margin = new Thickness(0, 8, 0, 4) });
             var cbWS = MakeAreaCb("Working set", "释放各进程的工作集（已加载到物理内存的代码与数据），把未使用的页面交还系统。", "Clean.WorkingSet", true, fg, true);
             var cbSFC = MakeAreaCb("System file cache", "归还系统文件缓存：Windows 用来加速文件读取的内存被释放回可用池。", "Clean.SystemFileCache", true, fg, true);
-            var cbMPL = MakeAreaCb("Modified page list*", "把已修改但尚未写回磁盘的脏页刷盘后转入可用列表。* 需要管理员权限。", "Clean.ModifiedPageList", false, fg, isAdmin);
-            var cbSL = MakeAreaCb("Standby list*", "清空整个 standby（备用）列表，包括所有优先级缓存的页面。* 需要管理员权限。", "Clean.StandbyList", false, fg, isAdmin);
+            var cbMPL = MakeAreaCb("Modified page list", "把已修改但尚未写回磁盘的脏页刷盘后转入可用列表。", "Clean.ModifiedPageList", false, fg, true);
+            var cbSL = MakeAreaCb("Standby list", "清空整个 standby（备用）列表，包括所有优先级缓存的页面。", "Clean.StandbyList", false, fg, true);
             var cbSLNP = MakeAreaCb("Standby list (without priority)", "只清理低优先级的 standby 页（影响小、释放慢但稳定）。", "Clean.StandbyListNoPrio", true, fg, true);
             var cbMFC = MakeAreaCb("Modified file cache", "刷新已修改的文件缓存页（与 Modified page list 的非分页部分对应）。", "Clean.ModifiedFileCache", true, fg, true);
             var cbReg = MakeAreaCb("Registry cache (win8.1+)", "Windows 8.1 及以上：归还注册表配置单元的缓存内存。", "Clean.RegistryCache", true, fg, AdminUtils.RealOsVersion() >= new Version(6, 3));
@@ -861,7 +815,148 @@ namespace PowerAudioManager
                 int iv; if (int.TryParse(ivBox.Text, out iv) && iv >= 500 && iv <= 60000) AppPrefs.SetInt("Temp.IntervalMs", iv);
                 int w;  if (int.TryParse(warnBox.Text, out w) && w > 0) AppPrefs.SetInt("Temp.WarnC", w);
                 int c;  if (int.TryParse(critBox.Text, out c) && c > 0) AppPrefs.SetInt("Temp.CriticalC", c);
-                if (owner is MainWindow mw) mw.RestartTempTimer();
+                if (owner is MainWindow mw)
+                {
+                    mw.RestartTempTimer();
+                }
+                dlg.DialogResult = true; dlg.Close();
+            };
+            ((Button)btns.Children[1]).Click += (_, _) => { dlg.DialogResult = false; dlg.Close(); };
+            stack.Children.Add(btns);
+
+            return Scroll(stack);
+        }
+
+        // 自学习规则列表（BuildLearnTab 内）：每行 exe -> 电源(票数) · 音频(票数)，带编辑/禁用/删除/锁定
+        static void RefreshProfileList(StackPanel panel, SolidColorBrush fg, Window dlg)
+        {
+            panel.Children.Clear();
+            var rules = AppProfileService.GetAllRules();
+            if (rules.Count == 0)
+            {
+                panel.Children.Add(new TextBlock { Text = "尚无记录。启用后，切到某应用并手动切换电源/音频，即自动学习（投票统计）该应用的配置。", Foreground = fg, FontSize = 10, Margin = new Thickness(2, 2, 2, 0), TextWrapping = TextWrapping.Wrap });
+                return;
+            }
+            foreach (var r in rules)
+            {
+                var row = new DockPanel { Margin = new Thickness(0, 3, 0, 3), LastChildFill = true };
+                var info = new TextBlock { FontSize = 11, Foreground = Brushes.White, VerticalAlignment = VerticalAlignment.Center, TextWrapping = TextWrapping.Wrap };
+                info.Inlines.Add(new Run(r.ExeName) { FontWeight = FontWeights.SemiBold });
+                string power = AppProfileService.FriendlyPowerName(r.PowerPlanGuid);
+                string audio = AppProfileService.FriendlyAudioName(r.AudioDeviceId);
+                info.Inlines.Add("  ->  " + power + (r.TopPowerVotes > 0 ? $"({r.TopPowerVotes})" : "") + " · " + audio + (r.TopAudioVotes > 0 ? $"({r.TopAudioVotes})" : ""));
+                if (r.Locked) info.Inlines.Add(new Run("  🔒锁定") { Foreground = new SolidColorBrush(Color.FromRgb(255, 180, 80)) });
+                if (r.Disabled) info.Inlines.Add(new Run("  (已禁用)") { Foreground = fg });
+
+                var delBtn = new Button { Content = "✕", Width = 26, Height = 22, FontSize = 11, Padding = new Thickness(0), Margin = new Thickness(4, 0, 0, 0) };
+                MainWindow.ApplyFlatStyle(delBtn); delBtn.MinWidth = 0; delBtn.MinHeight = 0;
+                delBtn.Click += (_, _) => { AppProfileService.DeleteRule(r.ExeName); RefreshProfileList(panel, fg, dlg); };
+                var disBtn = new Button { Content = r.Disabled ? "启用" : "禁用", Height = 22, FontSize = 11, Padding = new Thickness(6, 0, 6, 0), Margin = new Thickness(4, 0, 0, 0) };
+                MainWindow.ApplyFlatStyle(disBtn); disBtn.MinWidth = 0; disBtn.MinHeight = 0;
+                disBtn.Click += (_, _) => { AppProfileService.SetDisabled(r.ExeName, !r.Disabled); RefreshProfileList(panel, fg, dlg); };
+                var editBtn = new Button { Content = "✎", Width = 26, Height = 22, FontSize = 11, Padding = new Thickness(0), Margin = new Thickness(4, 0, 0, 0) };
+                MainWindow.ApplyFlatStyle(editBtn); editBtn.MinWidth = 0; editBtn.MinHeight = 0;
+                editBtn.Click += (_, _) => EditRule(dlg, panel, fg, r);
+
+                DockPanel.SetDock(delBtn, Dock.Right);
+                DockPanel.SetDock(disBtn, Dock.Right);
+                DockPanel.SetDock(editBtn, Dock.Right);
+                row.Children.Add(delBtn);
+                row.Children.Add(disBtn);
+                row.Children.Add(editBtn);
+                row.Children.Add(info);
+                panel.Children.Add(row);
+            }
+        }
+
+        // 编辑规则：弹小窗选电源计划 + 音频设备，确定后 SetRule（锁定，不再被自动学习覆盖）
+        static void EditRule(Window owner, StackPanel panel, SolidColorBrush fg, AppProfileService.Rule r)
+        {
+            var edlg = new Window
+            {
+                Title = "编辑规则 - " + r.ExeName,
+                Width = 360, SizeToContent = SizeToContent.Height,
+                WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                Owner = owner,
+                Background = new SolidColorBrush(Color.FromRgb(28, 26, 40)),
+                ResizeMode = ResizeMode.NoResize
+            };
+            var stack = new StackPanel { Margin = new Thickness(20) };
+            stack.Children.Add(new TextBlock { Text = "应用：" + r.ExeName, Foreground = Brushes.White, FontSize = 13, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 0, 0, 12) });
+
+            stack.Children.Add(new TextBlock { Text = "电源计划", Foreground = fg, FontSize = 11, Margin = new Thickness(0, 0, 0, 4) });
+            var powerCb = new ComboBox { Height = 26, FontSize = 12, Margin = new Thickness(0, 0, 0, 12), HorizontalAlignment = HorizontalAlignment.Stretch };
+            AppResources.StyleDarkComboBox(powerCb);
+            foreach (var p in PowerPlanService.GetPowerPlans())
+            {
+                var item = new ComboBoxItem { Content = p.Name, Tag = p.Guid };
+                if (p.Guid.Equals(r.PowerPlanGuid, StringComparison.OrdinalIgnoreCase)) powerCb.SelectedItem = item;
+                powerCb.Items.Add(item);
+            }
+            stack.Children.Add(powerCb);
+
+            stack.Children.Add(new TextBlock { Text = "音频输出", Foreground = fg, FontSize = 11, Margin = new Thickness(0, 0, 0, 4) });
+            var audioCb = new ComboBox { Height = 26, FontSize = 12, Margin = new Thickness(0, 0, 0, 16), HorizontalAlignment = HorizontalAlignment.Stretch };
+            AppResources.StyleDarkComboBox(audioCb);
+            foreach (var d in AudioDevices.GetOutputDevices())
+            {
+                var item = new ComboBoxItem { Content = d.Name, Tag = d.Id };
+                if (d.Id.Equals(r.AudioDeviceId, StringComparison.OrdinalIgnoreCase)) audioCb.SelectedItem = item;
+                audioCb.Items.Add(item);
+            }
+            stack.Children.Add(audioCb);
+
+            stack.Children.Add(new TextBlock { Text = "保存后规则锁定，不再被自动学习覆盖；删除后可重新学习。", Foreground = fg, FontSize = 10, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 12) });
+
+            var okBtn = new Button { Content = "保存", Height = 28, FontSize = 12, HorizontalAlignment = HorizontalAlignment.Right, Padding = new Thickness(20, 0, 20, 0) };
+            AppResources.StyleDialogButton(okBtn, true);
+            okBtn.Click += (_, _) =>
+            {
+                string pg = (powerCb.SelectedItem as ComboBoxItem)?.Tag as string ?? "";
+                string ai = (audioCb.SelectedItem as ComboBoxItem)?.Tag as string ?? "";
+                AppProfileService.SetRule(r.ExeName, pg, ai);
+                RefreshProfileList(panel, fg, owner);
+                edlg.Close();
+            };
+            stack.Children.Add(okBtn);
+            edlg.Content = stack;
+            edlg.ShowDialog();
+        }
+
+        // 自学习独立 tab：总开关 + 切换通知开关 + 规则列表（编辑/禁用/删除/投票数/锁定）
+        static ScrollViewer BuildLearnTab(Window owner, Window dlg, SolidColorBrush fg, SolidColorBrush lightText)
+        {
+            var stack = new StackPanel { Margin = new Thickness(20) };
+
+            var title = new TextBlock { FontSize = 14, FontWeight = FontWeights.SemiBold, Foreground = Brushes.White, Margin = new Thickness(0, 0, 0, 12) };
+            title.Inlines.Add(new Run("🎓 ") { Foreground = new SolidColorBrush(Color.FromRgb(142, 140, 216)) });
+            title.Inlines.Add(new Run("自学习"));
+            stack.Children.Add(title);
+
+            var enableCb = new CheckBox { Content = "启用自学习：切到某应用时自动套用其电源计划与音频输出", IsChecked = AppPrefs.GetBool("Learn.Enabled", false), Foreground = Brushes.White, FontSize = 12, Margin = new Thickness(0, 0, 0, 8) };
+            stack.Children.Add(enableCb);
+            var notifyCb = new CheckBox { Content = "自动切换时右下角弹窗提示（可单独关闭）", IsChecked = AppPrefs.GetBool("Learn.Notify", true), Foreground = Brushes.White, FontSize = 12, Margin = new Thickness(0, 0, 0, 12) };
+            stack.Children.Add(notifyCb);
+
+            var ruleCard = new Border { Background = new SolidColorBrush(Color.FromRgb(34, 32, 50)), CornerRadius = new CornerRadius(6), Padding = new Thickness(10), Margin = new Thickness(0, 0, 0, 10) };
+            var ruleInner = new StackPanel();
+            ruleInner.Children.Add(new TextBlock { Text = "已学习的规则（投票统计，可编辑/禁用/删除）", Foreground = fg, FontSize = 10, Margin = new Thickness(2, 0, 0, 6) });
+            var rulePanel = new StackPanel { Margin = new Thickness(2, 2, 2, 0) };
+            ruleInner.Children.Add(rulePanel);
+            RefreshProfileList(rulePanel, fg, dlg);
+            ruleCard.Child = ruleInner;
+            stack.Children.Add(ruleCard);
+
+            var tip = new TextBlock { Foreground = fg, FontSize = 10, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 12) };
+            tip.Inlines.Add("说明：投票统计——你在某应用时用得最多的电源/音频组合胜出，偶发手动改只投一票不会立即覆盖。编辑规则后会锁定（不再自动学习），删除可重新学习。");
+            stack.Children.Add(tip);
+
+            var btns = MakeButtons();
+            ((Button)btns.Children[0]).Click += (_, _) =>
+            {
+                AppPrefs.SetBool("Learn.Enabled", enableCb.IsChecked == true);
+                AppPrefs.SetBool("Learn.Notify", notifyCb.IsChecked == true);
+                if (owner is MainWindow mw) mw.RestartAppProfile();
                 dlg.DialogResult = true; dlg.Close();
             };
             ((Button)btns.Children[1]).Click += (_, _) => { dlg.DialogResult = false; dlg.Close(); };

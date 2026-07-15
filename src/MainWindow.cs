@@ -32,6 +32,7 @@ namespace PowerAudioManager
         private StackPanel _powerSection;
         private StackPanel _audioSection;
         private bool _isExpanded = true;
+        private bool _dragDropWired;
         private bool _collapsedManually; // 通过按钮收起时为 true（非自动收起）
         internal bool _topmost = false;
         internal Button _pinBtn;
@@ -51,6 +52,8 @@ namespace PowerAudioManager
         private TextBlock _collapsedTempLabel;
         private Panel _metricRow;                // 展开视图的指标行 (WrapPanel)
         private System.Threading.Timer _tempTimer;
+        private PerfChart _perfChart;             // 性能趋势折线图（可选项）
+        private Panel _perfChartPanel;
 
         // 共享调色板，内部可见供 LauncherBar / TrayController 等复用。
         // 按 Material 层级排列：越底层表面越浅，叠层卡片有视觉深度。
@@ -221,8 +224,11 @@ namespace PowerAudioManager
                 {
                     Dispatcher.BeginInvoke(new Action(() => { try { LoadData(); } catch (Exception ex) { AppLog.Log("Startup LoadData", ex); } }));
                 }, null, 50, System.Threading.Timeout.Infinite);
+                // 确保服务运行（温度/内存 helper），未运行则提权启动一次（UAC 一次，之后服务常驻无 UAC）
+                try { EnsureServiceRunning(); } catch { }
                 // 温度监控启动（后台初始化硬件传感器）
                 try { StartTempMonitor(); } catch { }
+                try { StartAppProfile(); } catch { }
                 AppLog.Log("Startup", "OnLoaded done " + sw.ElapsedMilliseconds + "ms");
             }
             catch (Exception ex) { AppLog.Log("OnLoaded", ex); }
@@ -231,6 +237,15 @@ namespace PowerAudioManager
 
         void BuildUI()
         {
+            // admin 运行时 UIPI 默认阻止普通进程（资源管理器/浏览器）拖放进来，放宽消息过滤
+            try
+            {
+                var hwnd = new System.Windows.Interop.WindowInteropHelper(this).EnsureHandle();
+                ChangeWindowMessageFilterEx(hwnd, WM_DROPFILES, MSGFLT_ALLOW, IntPtr.Zero);
+                ChangeWindowMessageFilterEx(hwnd, WM_COPYGLOBALDATA, MSGFLT_ALLOW, IntPtr.Zero);
+            }
+            catch { }
+
             _mainBorder = new Border
             {
                 CornerRadius = new CornerRadius(10),
@@ -245,6 +260,11 @@ namespace PowerAudioManager
                     Color = Colors.Black
                 }
             };
+            // _mainBorder 挂拖放：折叠态拖入自动展开 + 非按钮区也能 Drop（加到快捷启动）。按钮 AllowDrop 优先（子元素 hit-test）
+            _mainBorder.AllowDrop = true;
+            _mainBorder.DragEnter += (s, e) => OnWindowDragEnter(e);
+            _mainBorder.DragOver += (s, e) => { e.Effects = LauncherBar.HasDropData(e.Data) ? DragDropEffects.Copy : DragDropEffects.None; e.Handled = true; };
+            _mainBorder.Drop += (s, e) => { string d = LauncherBar.ExtractDropped(e); if (!string.IsNullOrEmpty(d)) LauncherBar.AddDropped(d, RebuildUI); e.Handled = true; };
             _root = new StackPanel();
             var titleBar = new DockPanel
             {
@@ -380,6 +400,25 @@ namespace PowerAudioManager
                 _metricRow = new WrapPanel { Margin = new Thickness(0, 0, 0, 4) };
                 contentPanel.Children.Add(_metricRow);
                 contentPanel.Children.Add(MakeDivider());
+
+                // 性能趋势入口（按钮样式同剪贴板历史，点击打开大图）
+                if (AppPrefs.GetBool("Perf.ShowChart", true))
+                {
+                    var cContent = new TextBlock { FontSize = 12, FontFamily = CompFont, Foreground = new SolidColorBrush(TextSecondary) };
+                    cContent.Inlines.Add(new Run("📈 "));
+                    cContent.Inlines.Add(new Run(" 性能趋势"));
+                    var cBtn = new Button {
+                        Content = cContent,
+                        Padding = new Thickness(10, 6, 10, 6),
+                        Cursor = Cursors.Hand,
+                        Margin = new Thickness(0, 6, 0, 0),
+                        ToolTip = "查看温度/风扇历史趋势"
+                    };
+                    StyleButton(cBtn, false);
+                    cBtn.Click += (s, e) => { try { new PerfChartWindow().Show(); } catch { } };
+                    contentPanel.Children.Add(cBtn);
+                    contentPanel.Children.Add(MakeDivider());
+                }
             }
 
             // 板块可见性（用户可在设置中隐藏）。每个板块自带头部分割线（第一个除外），隐藏不会遗留孤立分割线。
@@ -474,21 +513,6 @@ namespace PowerAudioManager
             StyleButton(memBtn, false, true);
             memBtn.Click += (s, e) => CleanMemory();
             contentPanel.Children.Add(memBtn);
-
-            if (!AdminUtils.IsAdmin())
-            {
-                var elevateBtn = new Button {
-                    Content = "以管理员身份重启 (启用全部清理项)",
-                    Padding = new Thickness(10, 6, 10, 6),
-                    FontSize = 11,
-                    Cursor = Cursors.Hand,
-                    Margin = new Thickness(0, 6, 0, 0),
-                    ToolTip = "Standby list / Modified page list / Registry cache 等清理项需要管理员权限"
-                };
-                StyleButton(elevateBtn, false);
-                elevateBtn.Click += (s, e) => AdminUtils.RestartAsAdmin();
-                contentPanel.Children.Add(elevateBtn);
-            }
             }
 
             if (showTr)
@@ -1004,28 +1028,50 @@ namespace PowerAudioManager
             if (_memStatusLabel != null) _memStatusLabel.Text = "正在清理...";
             System.Threading.ThreadPool.QueueUserWorkItem(state =>
             {
+                // 非管理员：命令服务（OneBoxSvc）执行清理，无 UAC
+                if (!AdminUtils.IsAdmin())
+                {
+                    Exception err = null;
+                    ulong freedBytes = 0;
+                    try
+                    {
+                        using (var client = new System.IO.Pipes.NamedPipeClientStream(".", "Global\\OneBox\\MemClean", System.IO.Pipes.PipeDirection.InOut))
+                        {
+                            client.Connect(8000);
+                            using (var bw = new System.IO.BinaryWriter(client, System.Text.Encoding.UTF8, true)) { bw.Write((int)flags); bw.Flush(); }
+                            using (var br = new System.IO.BinaryReader(client, System.Text.Encoding.UTF8, true)) freedBytes = br.ReadUInt64();
+                        }
+                    }
+                    catch (Exception ex) { err = ex; }
+                    Dispatcher.BeginInvoke(new Action(() =>
+                    {
+                        if (err != null) { if (_memStatusLabel != null) _memStatusLabel.Text = "清理失败: " + err.Message; return; }
+                        if (_memStatusLabel != null) _memStatusLabel.Text = string.Format("已释放 {0:0} MB（服务清理）", freedBytes / 1024.0 / 1024.0);
+                        AppLog.Log("MemoryClean", "service freed=" + (int)(freedBytes / 1024 / 1024) + "MB");
+                        Dispatcher.BeginInvoke(new Action(UpdateMemoryUI), System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+                    }));
+                    return;
+                }
+
+                // 管理员：直接清理
                 MemoryCleaner.CleanResult r = null;
-                Exception err = null;
+                Exception err2 = null;
                 try { r = MemoryCleaner.CleanAll(flags); }
-                catch (Exception ex) { err = ex; }
+                catch (Exception ex) { err2 = ex; }
                 Dispatcher.BeginInvoke(new Action(() =>
                 {
-                    if (err != null)
+                    if (err2 != null)
                     {
-                        if (_memStatusLabel != null) _memStatusLabel.Text = "清理失败: " + err.Message;
-                        AppLog.Log("MemoryClean", "error: " + err.Message);
+                        if (_memStatusLabel != null) _memStatusLabel.Text = "清理失败: " + err2.Message;
+                        AppLog.Log("MemoryClean", "error: " + err2.Message);
                         return;
                     }
                     if (r != null && _memStatusLabel != null)
                     {
                         double freedMb = r.FreedBytes / 1024.0 / 1024.0;
-                        if (freedMb < 1.0 && !AdminUtils.IsAdmin())
-                            _memStatusLabel.Text = string.Format("已释放 {0:0} MB · 需管理员权限以启用更多清理项", freedMb);
-                        else
-                            _memStatusLabel.Text = string.Format("已释放 {0:0} MB", freedMb);
+                        _memStatusLabel.Text = string.Format("已释放 {0:0} MB", freedMb);
                         AppLog.Log("MemoryClean", "freed=" + (int)freedMb + "MB flags=" + flags);
-                        Dispatcher.BeginInvoke(new Action(UpdateMemoryUI),
-                            System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+                        Dispatcher.BeginInvoke(new Action(UpdateMemoryUI), System.Windows.Threading.DispatcherPriority.ApplicationIdle);
                     }
                 }));
             });
@@ -1096,11 +1142,63 @@ namespace PowerAudioManager
 
         // ---- 温度监控 ----
 
+        // 确保服务（OneBoxSvc）运行；未运行则提权 sc start（UAC 一次），服务常驻后无 UAC
+        void EnsureServiceRunning()
+        {
+            try
+            {
+                using (var svc = new System.ServiceProcess.ServiceController("OneBoxSvc"))
+                {
+                    if (svc.Status != System.ServiceProcess.ServiceControllerStatus.Running)
+                    {
+                        AppLog.Log("Service", "OneBoxSvc not running, starting (UAC)");
+                        try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("sc.exe", "start OneBoxSvc") { Verb = "runas", UseShellExecute = true }); } catch { }
+                    }
+                }
+            }
+            catch (Exception ex) { AppLog.Log("Service", "EnsureServiceRunning: " + ex.Message); }
+        }
+
         void StartTempMonitor()
         {
             if (!ModuleVisible("Temp")) return;
+            System.Threading.ThreadPool.QueueUserWorkItem(_ => { try { PerfHistory.Load(); } catch (Exception ex) { AppLog.Log("PerfHistory", ex); } try { ForegroundHistory.Load(); } catch (Exception ex) { AppLog.Log("FGHistory", ex); } });
             HardwareMonitorService.Instance.Start();
             StartTempTimer();
+            try { ForegroundHistory.Start(); } catch { }
+        }
+
+        // 自学习：前台应用自动切换电源计划 + 音频输出（独立于温度模块，按 Learn.Enabled 开关）
+        void StartAppProfile()
+        {
+            try
+            {
+                if (AppPrefs.GetBool("Learn.Enabled", false))
+                {
+                    AppProfileService.Start();
+                    ForegroundWatcher.Start();
+                }
+            }
+            catch (Exception ex) { AppLog.Log("Profile", "start fail: " + ex.Message); }
+        }
+
+        // 设置面板切换 Learn.Enabled 后调用，热启停自学习
+        internal void RestartAppProfile()
+        {
+            try
+            {
+                if (AppPrefs.GetBool("Learn.Enabled", false))
+                {
+                    if (!AppProfileService.IsStarted) AppProfileService.Start();
+                    if (!ForegroundWatcher.IsRunning) ForegroundWatcher.Start();
+                }
+                else
+                {
+                    if (AppProfileService.IsStarted) AppProfileService.Stop();
+                    if (ForegroundWatcher.IsRunning) ForegroundWatcher.Stop();
+                }
+            }
+            catch (Exception ex) { AppLog.Log("Profile", "restart fail: " + ex.Message); }
         }
 
         void StartTempTimer()
@@ -1112,7 +1210,16 @@ namespace PowerAudioManager
             _tempTimer = new System.Threading.Timer(_ =>
             {
                 HardwareMonitorService.Instance.Update();
-                Dispatcher.BeginInvoke(new Action(UpdateTempUI));
+                Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    UpdateTempUI();
+                    PerfHistory.Add(HardwareMonitorService.Instance.ActiveMetrics);
+                    if (_perfChart != null)
+                    {
+                        _perfChart.Series = PerfHistory.GetSeries(_perfChart.MaxPoints);
+                        _perfChart.Refresh();
+                    }
+                }));
             }, null, 2000, intervalMs);
         }
 
@@ -1299,7 +1406,7 @@ namespace PowerAudioManager
 
         internal void ExitApp()
         {
-            try { _tempTimer?.Dispose(); HardwareMonitorService.Instance.Stop(); } catch { }
+            try { _tempTimer?.Dispose(); HardwareMonitorService.Instance.Stop(); ForegroundWatcher.Stop(); AppProfileService.Stop(); ForegroundHistory.Stop(); PerfHistory.Save(); ForegroundHistory.Save(); } catch { }
             if (_deviceWatcher != null) _deviceWatcher.Stop();
             try { Microsoft.Win32.SystemEvents.DisplaySettingsChanged -= _scaling.OnDisplaySettingsChanged; } catch { }
             try { Microsoft.Win32.SystemEvents.UserPreferenceChanged -= _scaling.OnUserPreferenceChanged; } catch { }
@@ -1477,6 +1584,20 @@ namespace PowerAudioManager
         }
 
         // 展开/折叠核心逻辑。manual=true 表示用户点击按钮触发，auto 计时器传 false。
+        [System.Runtime.InteropServices.DllImport("user32.dll")] static extern bool ChangeWindowMessageFilterEx(IntPtr hwnd, uint msg, uint flag, IntPtr pChangeFilterStruct);
+        const uint WM_DROPFILES = 0x0233;
+        const uint WM_COPYGLOBALDATA = 0x0049;
+        const uint MSGFLT_ALLOW = 1;
+
+        // 拖入时若悬浮窗折叠，自动展开（拖文件/URL/文件夹到标题栏即触发）
+        void OnWindowDragEnter(DragEventArgs e)
+        {
+            bool ok = LauncherBar.HasDropData(e.Data);
+            if (ok && !_isExpanded) SetExpanded(true, false);
+            e.Effects = ok ? DragDropEffects.Copy : DragDropEffects.None;
+            e.Handled = true;
+        }
+
         // 手动折叠后悬停不展开，除非开启"AutoExpandAfterManual"。
         void SetExpanded(bool expanded) { SetExpanded(expanded, false); }
         void SetExpanded(bool expanded, bool manual)
