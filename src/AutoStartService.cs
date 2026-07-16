@@ -66,7 +66,7 @@ namespace PowerAudioManager
             catch { return false; }
         }
 
-        static bool IsServiceInstalled()
+        public static bool IsServiceInstalled()
         {
             try
             {

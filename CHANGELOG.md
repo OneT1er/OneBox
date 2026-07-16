@@ -1,5 +1,19 @@
 # 更新日志
 
+## v1.6.1 (2026-07-16)
+
+### 重构
+- **自学习改为情境决策树（ML.NET）**：替代旧「按应用投票」。`FeatureCollector` 每 1s 采集 CPU/GPU 占用、全屏、电池、时间、进程类别（game/creative/videoconf/other 白名单 + 自定义）等情境特征；手动切换电源/音频时记样本到 `OneBox.samples.csv`；样本达 200 条自动训练（ML.NET FastTree `OneVersusAll` 多分类，电源/音频各一 .zip 模型，80/20 验证准确率）；推理连续 5s 稳定才套用，切后冷却 30s，手动切换暂停 10min 并记新样本。设置->自学习 tab 显示样本数/准确率/手动训练/重置/清空 + 自定义游戏进程。CPU 走原生 `GetSystemTimes` 差分，GPU 走性能计数器求和
+
+### 改进
+- **开机自启**：改为勾选框，写用户 flag（`AutoStart.Enabled`）无需 UAC；服务启动 GUI 前 impersonate 读用户 HKCU，取消勾选即不再自动启动
+- **温度 helper 守护**：服务守护 helper 进程，崩溃 3s 自动重启、OnStop 清理；helper 不再因 60s 无客户端退出
+
+### 修复
+- **重启后性能监控无数据**：温度 helper 旧版 60s 无客户端退出，GUI 关闭后死亡，重启时 `[Temp] pipe connect fail` 无数据。改为无限等待 + 服务守护
+- **自学习设置文本显示不全**：精简勾选框文案，详情（5s 稳定/30s 冷却/10min 暂停）移入换行说明
+- **退出时历史保存被跳过**：`ExitApp` 拆分独立 try/catch，避免 `LearningEngine.Stop()` 抛异常时 `PerfHistory.Save()` 被跳过
+
 ## v1.6.0 (2026-07-15)
 
 ### 新功能

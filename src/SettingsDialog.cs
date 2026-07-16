@@ -240,14 +240,19 @@ namespace PowerAudioManager
 
             stack.Children.Add(new Border { Height = 1, Background = new SolidColorBrush(Color.FromRgb(80, 75, 120)), Margin = new Thickness(0, 4, 0, 12) });
 
-            // 开机自启由 OneBoxSvc 服务实现；提供关闭按钮（删除服务需管理员，请求 UAC）
-            var disableAutoStartBtn = new Button { Content = "关闭开机自启（删除服务）", Padding = new Thickness(10, 6, 10, 6), FontSize = 12, Margin = new Thickness(0, 0, 0, 16) };
-            AppResources.StyleDialogButton(disableAutoStartBtn, false);
-            disableAutoStartBtn.Click += (s, e) =>
-            {
-                try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(Environment.ProcessPath, "--disable-autostart") { Verb = "runas", UseShellExecute = true }); } catch { }
-            };
-            stack.Children.Add(disableAutoStartBtn);
+            // 开机自启：经 OneBoxSvc 服务实现，勾选/取消写用户注册表 flag，服务启动 GUI 前读取，无需 UAC。
+            stack.Children.Add(new TextBlock { Text = "开机自启", Foreground = Brushes.White, FontWeight = FontWeights.SemiBold, FontSize = 13, Margin = new Thickness(0, 0, 0, 6) });
+
+            var autoStartCb = new CheckBox { Content = "开机自启（开机时自动启动）", Foreground = Brushes.White, FontSize = 12, Margin = new Thickness(0, 0, 0, 8) };
+            bool svcInstalled = AutoStartService.IsServiceInstalled();
+            autoStartCb.IsChecked = svcInstalled && AppPrefs.GetBool("AutoStart.Enabled", true);
+            stack.Children.Add(autoStartCb);
+
+            var autoStartStatus = new TextBlock { Foreground = fg, FontSize = 10, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 16) };
+            autoStartStatus.Text = svcInstalled
+                ? "经 OneBoxSvc 服务实现，勾选/取消无需 UAC（下次开机生效）。取消勾选后服务仍驻留但不再自动启动主程序。"
+                : "OneBoxSvc 服务未安装，需一次管理员授权安装服务后才能开机自启（勾选仅记录意图）。";
+            stack.Children.Add(autoStartStatus);
 
             var btns = MakeButtons();
             var ok = (Button)btns.Children[0];
@@ -258,6 +263,7 @@ namespace PowerAudioManager
                 AppPrefs.SetBool("LockPosition", lockCb.IsChecked == true);
                 AppPrefs.SetBool("AutoCollapse", autoCb.IsChecked == true);
                 AppPrefs.SetBool("AutoExpandAfterManual", expandAfterManualCb.IsChecked == true);
+                AppPrefs.SetBool("AutoStart.Enabled", autoStartCb.IsChecked == true);
                 int d; if (int.TryParse(delayBox.Text, out d) && d >= 0) AppPrefs.SetInt("AutoCollapseDelay", d);
                 var mw = owner as MainWindow;
                 if (scaleAutoCb.IsChecked == true)
@@ -827,135 +833,94 @@ namespace PowerAudioManager
             return Scroll(stack);
         }
 
-        // 自学习规则列表（BuildLearnTab 内）：每行 exe -> 电源(票数) · 音频(票数)，带编辑/禁用/删除/锁定
-        static void RefreshProfileList(StackPanel panel, SolidColorBrush fg, Window dlg)
+        // 自学习状态文本 + 训练按钮可用性刷新
+        static void UpdateLearnStatus(TextBlock statusText, Button trainBtn)
         {
-            panel.Children.Clear();
-            var rules = AppProfileService.GetAllRules();
-            if (rules.Count == 0)
+            try
             {
-                panel.Children.Add(new TextBlock { Text = "尚无记录。启用后，切到某应用并手动切换电源/音频，即自动学习（投票统计）该应用的配置。", Foreground = fg, FontSize = 10, Margin = new Thickness(2, 2, 2, 0), TextWrapping = TextWrapping.Wrap });
-                return;
+                int n = SampleStore.Count;
+                var meta = DecisionTreeLearner.LoadMeta();
+                if (meta != null && (meta.PowerAccuracy >= 0 || meta.AudioAccuracy >= 0))
+                {
+                    string pp = meta.PowerAccuracy >= 0 ? $"{meta.PowerAccuracy * 100:0}%" : "未训练(单类)";
+                    string ap = meta.AudioAccuracy >= 0 ? $"{meta.AudioAccuracy * 100:0}%" : "未训练(单类)";
+                    statusText.Text = $"✅ 已训练：{meta.SampleCount} 条样本 | 电源 {pp} · 音频 {ap} | 训练于 {meta.TrainedAt:MM-dd HH:mm} | 当前 {n} 条";
+                }
+                else
+                    statusText.Text = $"⏳ 未训练模型。已采集 {n} 条样本（满 {DecisionTreeLearner.AutoTrainThreshold} 条自动训练；达 {DecisionTreeLearner.MinSamplesToTrain} 条可点下方手动训练）。";
+                trainBtn.IsEnabled = n >= DecisionTreeLearner.MinSamplesToTrain && !LearningEngine.IsTraining;
             }
-            foreach (var r in rules)
-            {
-                var row = new DockPanel { Margin = new Thickness(0, 3, 0, 3), LastChildFill = true };
-                var info = new TextBlock { FontSize = 11, Foreground = Brushes.White, VerticalAlignment = VerticalAlignment.Center, TextWrapping = TextWrapping.Wrap };
-                info.Inlines.Add(new Run(r.ExeName) { FontWeight = FontWeights.SemiBold });
-                string power = AppProfileService.FriendlyPowerName(r.PowerPlanGuid);
-                string audio = AppProfileService.FriendlyAudioName(r.AudioDeviceId);
-                info.Inlines.Add("  ->  " + power + (r.TopPowerVotes > 0 ? $"({r.TopPowerVotes})" : "") + " · " + audio + (r.TopAudioVotes > 0 ? $"({r.TopAudioVotes})" : ""));
-                if (r.Locked) info.Inlines.Add(new Run("  🔒锁定") { Foreground = new SolidColorBrush(Color.FromRgb(255, 180, 80)) });
-                if (r.Disabled) info.Inlines.Add(new Run("  (已禁用)") { Foreground = fg });
-
-                var delBtn = new Button { Content = "✕", Width = 26, Height = 22, FontSize = 11, Padding = new Thickness(0), Margin = new Thickness(4, 0, 0, 0) };
-                MainWindow.ApplyFlatStyle(delBtn); delBtn.MinWidth = 0; delBtn.MinHeight = 0;
-                delBtn.Click += (_, _) => { AppProfileService.DeleteRule(r.ExeName); RefreshProfileList(panel, fg, dlg); };
-                var disBtn = new Button { Content = r.Disabled ? "启用" : "禁用", Height = 22, FontSize = 11, Padding = new Thickness(6, 0, 6, 0), Margin = new Thickness(4, 0, 0, 0) };
-                MainWindow.ApplyFlatStyle(disBtn); disBtn.MinWidth = 0; disBtn.MinHeight = 0;
-                disBtn.Click += (_, _) => { AppProfileService.SetDisabled(r.ExeName, !r.Disabled); RefreshProfileList(panel, fg, dlg); };
-                var editBtn = new Button { Content = "✎", Width = 26, Height = 22, FontSize = 11, Padding = new Thickness(0), Margin = new Thickness(4, 0, 0, 0) };
-                MainWindow.ApplyFlatStyle(editBtn); editBtn.MinWidth = 0; editBtn.MinHeight = 0;
-                editBtn.Click += (_, _) => EditRule(dlg, panel, fg, r);
-
-                DockPanel.SetDock(delBtn, Dock.Right);
-                DockPanel.SetDock(disBtn, Dock.Right);
-                DockPanel.SetDock(editBtn, Dock.Right);
-                row.Children.Add(delBtn);
-                row.Children.Add(disBtn);
-                row.Children.Add(editBtn);
-                row.Children.Add(info);
-                panel.Children.Add(row);
-            }
+            catch (Exception ex) { statusText.Text = "状态读取失败：" + ex.Message; }
         }
 
-        // 编辑规则：弹小窗选电源计划 + 音频设备，确定后 SetRule（锁定，不再被自动学习覆盖）
-        static void EditRule(Window owner, StackPanel panel, SolidColorBrush fg, AppProfileService.Rule r)
-        {
-            var edlg = new Window
-            {
-                Title = "编辑规则 - " + r.ExeName,
-                Width = 360, SizeToContent = SizeToContent.Height,
-                WindowStartupLocation = WindowStartupLocation.CenterOwner,
-                Owner = owner,
-                Background = new SolidColorBrush(Color.FromRgb(28, 26, 40)),
-                ResizeMode = ResizeMode.NoResize
-            };
-            var stack = new StackPanel { Margin = new Thickness(20) };
-            stack.Children.Add(new TextBlock { Text = "应用：" + r.ExeName, Foreground = Brushes.White, FontSize = 13, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 0, 0, 12) });
-
-            stack.Children.Add(new TextBlock { Text = "电源计划", Foreground = fg, FontSize = 11, Margin = new Thickness(0, 0, 0, 4) });
-            var powerCb = new ComboBox { Height = 26, FontSize = 12, Margin = new Thickness(0, 0, 0, 12), HorizontalAlignment = HorizontalAlignment.Stretch };
-            AppResources.StyleDarkComboBox(powerCb);
-            foreach (var p in PowerPlanService.GetPowerPlans())
-            {
-                var item = new ComboBoxItem { Content = p.Name, Tag = p.Guid };
-                if (p.Guid.Equals(r.PowerPlanGuid, StringComparison.OrdinalIgnoreCase)) powerCb.SelectedItem = item;
-                powerCb.Items.Add(item);
-            }
-            stack.Children.Add(powerCb);
-
-            stack.Children.Add(new TextBlock { Text = "音频输出", Foreground = fg, FontSize = 11, Margin = new Thickness(0, 0, 0, 4) });
-            var audioCb = new ComboBox { Height = 26, FontSize = 12, Margin = new Thickness(0, 0, 0, 16), HorizontalAlignment = HorizontalAlignment.Stretch };
-            AppResources.StyleDarkComboBox(audioCb);
-            foreach (var d in AudioDevices.GetOutputDevices())
-            {
-                var item = new ComboBoxItem { Content = d.Name, Tag = d.Id };
-                if (d.Id.Equals(r.AudioDeviceId, StringComparison.OrdinalIgnoreCase)) audioCb.SelectedItem = item;
-                audioCb.Items.Add(item);
-            }
-            stack.Children.Add(audioCb);
-
-            stack.Children.Add(new TextBlock { Text = "保存后规则锁定，不再被自动学习覆盖；删除后可重新学习。", Foreground = fg, FontSize = 10, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 12) });
-
-            var okBtn = new Button { Content = "保存", Height = 28, FontSize = 12, HorizontalAlignment = HorizontalAlignment.Right, Padding = new Thickness(20, 0, 20, 0) };
-            AppResources.StyleDialogButton(okBtn, true);
-            okBtn.Click += (_, _) =>
-            {
-                string pg = (powerCb.SelectedItem as ComboBoxItem)?.Tag as string ?? "";
-                string ai = (audioCb.SelectedItem as ComboBoxItem)?.Tag as string ?? "";
-                AppProfileService.SetRule(r.ExeName, pg, ai);
-                RefreshProfileList(panel, fg, owner);
-                edlg.Close();
-            };
-            stack.Children.Add(okBtn);
-            edlg.Content = stack;
-            edlg.ShowDialog();
-        }
-
-        // 自学习独立 tab：总开关 + 切换通知开关 + 规则列表（编辑/禁用/删除/投票数/锁定）
+        // 自学习独立 tab：总开关 + 自动套用 + 通知 + 样本/模型状态(训练/重置/清空) + 自定义游戏进程
         static ScrollViewer BuildLearnTab(Window owner, Window dlg, SolidColorBrush fg, SolidColorBrush lightText)
         {
             var stack = new StackPanel { Margin = new Thickness(20) };
 
             var title = new TextBlock { FontSize = 14, FontWeight = FontWeights.SemiBold, Foreground = Brushes.White, Margin = new Thickness(0, 0, 0, 12) };
             title.Inlines.Add(new Run("🎓 ") { Foreground = new SolidColorBrush(Color.FromRgb(142, 140, 216)) });
-            title.Inlines.Add(new Run("自学习"));
+            title.Inlines.Add(new Run("自学习（情境决策树）"));
             stack.Children.Add(title);
 
-            var enableCb = new CheckBox { Content = "启用自学习：切到某应用时自动套用其电源计划与音频输出", IsChecked = AppPrefs.GetBool("Learn.Enabled", false), Foreground = Brushes.White, FontSize = 12, Margin = new Thickness(0, 0, 0, 8) };
+            var enableCb = new CheckBox { Content = "启用自学习", IsChecked = AppPrefs.GetBool("Learn.Enabled", false), Foreground = Brushes.White, FontSize = 12, Margin = new Thickness(0, 0, 0, 8) };
             stack.Children.Add(enableCb);
-            var notifyCb = new CheckBox { Content = "自动切换时右下角弹窗提示（可单独关闭）", IsChecked = AppPrefs.GetBool("Learn.Notify", true), Foreground = Brushes.White, FontSize = 12, Margin = new Thickness(0, 0, 0, 12) };
+            var autoCb = new CheckBox { Content = "自动套用（模型就绪后按情境切换）", IsChecked = AppPrefs.GetBool("Learn.AutoApply", true), Foreground = Brushes.White, FontSize = 12, Margin = new Thickness(0, 0, 0, 8) };
+            stack.Children.Add(autoCb);
+            var notifyCb = new CheckBox { Content = "自动切换时右下角弹窗提示", IsChecked = AppPrefs.GetBool("Learn.Notify", true), Foreground = Brushes.White, FontSize = 12, Margin = new Thickness(0, 0, 0, 12) };
             stack.Children.Add(notifyCb);
 
-            var ruleCard = new Border { Background = new SolidColorBrush(Color.FromRgb(34, 32, 50)), CornerRadius = new CornerRadius(6), Padding = new Thickness(10), Margin = new Thickness(0, 0, 0, 10) };
-            var ruleInner = new StackPanel();
-            ruleInner.Children.Add(new TextBlock { Text = "已学习的规则（投票统计，可编辑/禁用/删除）", Foreground = fg, FontSize = 10, Margin = new Thickness(2, 0, 0, 6) });
-            var rulePanel = new StackPanel { Margin = new Thickness(2, 2, 2, 0) };
-            ruleInner.Children.Add(rulePanel);
-            RefreshProfileList(rulePanel, fg, dlg);
-            ruleCard.Child = ruleInner;
-            stack.Children.Add(ruleCard);
+            // 状态卡片 + 训练/重置/清空
+            var statusCard = new Border { Background = new SolidColorBrush(Color.FromRgb(34, 32, 50)), CornerRadius = new CornerRadius(6), Padding = new Thickness(10), Margin = new Thickness(0, 0, 0, 10) };
+            var statusInner = new StackPanel();
+            var statusText = new TextBlock { Foreground = Brushes.White, FontSize = 11, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(2, 0, 0, 8) };
+            statusInner.Children.Add(statusText);
+            var btnRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(2, 0, 0, 0) };
+            var trainBtn = new Button { Content = "🧠 立即训练", Height = 28, FontSize = 12, Padding = new Thickness(14, 0, 14, 0), Margin = new Thickness(0, 0, 8, 0) };
+            AppResources.StyleDialogButton(trainBtn, true);
+            var resetBtn = new Button { Content = "重置模型", Height = 28, FontSize = 12, Padding = new Thickness(14, 0, 14, 0), Margin = new Thickness(0, 0, 8, 0) };
+            MainWindow.ApplyFlatStyle(resetBtn);
+            var clearBtn = new Button { Content = "清空样本", Height = 28, FontSize = 12, Padding = new Thickness(14, 0, 14, 0) };
+            MainWindow.ApplyFlatStyle(clearBtn);
+            btnRow.Children.Add(trainBtn); btnRow.Children.Add(resetBtn); btnRow.Children.Add(clearBtn);
+            statusInner.Children.Add(btnRow);
+            statusCard.Child = statusInner;
+            stack.Children.Add(statusCard);
+            UpdateLearnStatus(statusText, trainBtn);
 
-            var tip = new TextBlock { Foreground = fg, FontSize = 10, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 12) };
-            tip.Inlines.Add("说明：投票统计——你在某应用时用得最多的电源/音频组合胜出，偶发手动改只投一票不会立即覆盖。编辑规则后会锁定（不再自动学习），删除可重新学习。");
+            trainBtn.Click += (_, _) =>
+            {
+                if (SampleStore.Count < DecisionTreeLearner.MinSamplesToTrain) { statusText.Text = $"样本不足，至少 {DecisionTreeLearner.MinSamplesToTrain} 条（当前 {SampleStore.Count}）。"; return; }
+                LearningEngine.TrainNow();
+                statusText.Text = "⏳ 训练中…（FastTree，数百样本秒级完成）";
+                trainBtn.IsEnabled = false;
+            };
+            resetBtn.Click += (_, _) => { LearningEngine.ResetModel(); UpdateLearnStatus(statusText, trainBtn); };
+            clearBtn.Click += (_, _) =>
+            {
+                if (System.Windows.MessageBox.Show("清空全部学习样本并删除已训练模型？此操作不可撤销。", "OneBox 自学习", System.Windows.MessageBoxButton.YesNo, System.Windows.MessageBoxImage.Warning) == System.Windows.MessageBoxResult.Yes)
+                { LearningEngine.ClearSamplesAndModel(); UpdateLearnStatus(statusText, trainBtn); }
+            };
+
+            // 训练在后台线程完成，回调时回到 UI 线程刷新状态
+            Action<DecisionTreeLearner.ModelMeta> onTrained = _ => dlg.Dispatcher.BeginInvoke(new Action(() => UpdateLearnStatus(statusText, trainBtn)));
+            DecisionTreeLearner.Trained += onTrained;
+            dlg.Closed += (_, _) => { try { DecisionTreeLearner.Trained -= onTrained; } catch { } };
+
+            // 自定义游戏进程（补全白名单未覆盖的游戏，按 exe 无扩展名匹配）
+            var customBox = AddSetRow(stack, "自定义游戏进程", AppPrefs.GetString("Learn.CustomGames", ""), "(分号分隔)", 340);
+
+            var tip = new TextBlock { Foreground = fg, FontSize = 10, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 8, 0, 12) };
+            tip.Inlines.Add("说明：每秒采集 CPU/GPU 占用、是否全屏、是否用电池、时间、进程类别等情境特征；手动切换电源或音频时记一条样本。样本累积后训练决策树（ML.NET FastTree），按当前情境预测你最可能的选择并自动套用：预测需连续 5 秒稳定才切换，切换后冷却 30 秒防止来回跳；手动切换后暂停自动模式 10 分钟，并把该次操作记为新样本。");
             stack.Children.Add(tip);
 
             var btns = MakeButtons();
             ((Button)btns.Children[0]).Click += (_, _) =>
             {
                 AppPrefs.SetBool("Learn.Enabled", enableCb.IsChecked == true);
+                AppPrefs.SetBool("Learn.AutoApply", autoCb.IsChecked == true);
                 AppPrefs.SetBool("Learn.Notify", notifyCb.IsChecked == true);
+                AppPrefs.SetString("Learn.CustomGames", customBox.Text ?? "");
                 if (owner is MainWindow mw) mw.RestartAppProfile();
                 dlg.DialogResult = true; dlg.Close();
             };

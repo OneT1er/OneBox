@@ -7,7 +7,7 @@ namespace PowerAudioManager
 {
     /// <summary>
     /// 轮询前台应用 + 当前电源计划 + 默认音频输出设备，变化时触发事件。
-    /// 供 AppProfileService 做被动学习与自动套用。前台 exe 名复用截图模块的
+    /// 供 LearningEngine 做被动学习与自动套用（检测电源/音频变化触发样本记录）。前台 exe 名复用截图模块的
     /// QueryFullProcessImageName 方案（PROCESS_QUERY_LIMITED_INFORMATION，可读提权/UWP 进程，
     /// Process.MainModule 对这些进程抛访问拒绝）。
     /// 回调在 ThreadPool 线程触发，订阅者自行 Dispatcher 切换到 UI 线程。

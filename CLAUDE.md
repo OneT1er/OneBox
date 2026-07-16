@@ -38,8 +38,12 @@ Windows 桌面悬浮工具箱（C# WPF + WinForms，.NET 8），集成电源计�
 - **图片翻译**：`Screenshot.ImageTranslateHotkey` 触发 `RegionCaptureService`（全屏透明遮罩拖框，AllowsTransparency 必须开否则截全黑）→ `ImageTranslateService`（百度图片翻译 paste=1，复用文本翻译 AppId/Key Bearer 鉴权）→ `ImageTranslateWindow`（贴合图 + 复制译文）。
 - **热键 ID**：TRANSLATE=0xBFFF(固定Ctrl+Shift+T)、SCREENSHOT=0xBFFE、CLIPBOARD=0xBFD0、IMAGE_TRANSLATE=0xBFD1、设备 BASE=0xB000、测试 0xBE00。设置时 TestHotkey 试注册检测占用。
 - **启动**（v1.3.0）：PerformanceCounter 后台预热（`WarmupCounters`，.NET 8 首次创建 ~5s）；LoadData 延迟用 `System.Threading.Timer`（ApplicationIdle 在 .NET 8 冷启动被推迟 ~6s）；`Encoding.RegisterProvider(CodePagesEncodingProvider)` 在 Main 最前（GBK 936，电源计划/升级脚本必需）。
+- **自学习**（情境决策树，已替代旧「按应用投票」`AppProfileService`）：`FeatureCollector` 每 1s 采特征快照（CPU=GetSystemTimes 原生差分；GPU=性能计数器 `\GPU Engine(*engtype_3D)\Utilization Percentage` 求和；全屏=前台窗口 rect 覆盖显示器；电池=`SystemInformation.PowerStatus`；时间；进程类别白名单 game/creative/videoconf/other + `Learn.CustomGames`）；手动切电源/音频时 `LearningEngine` 用当前快照+新选择追加一条到 `OneBox.samples.csv`；样本达 200（每+50 重训）`DecisionTreeLearner` 用 ML.NET FastTree `OneVersusAll` 多分类训练电源/音频两个 .zip（80/20 验证准确率）；推理每秒一次，连续 5s 稳定才套用，切后冷却 30s，手动切换暂停 10min 并记新样本。开关 `Learn.Enabled`/`Learn.AutoApply`(默认开)/`Learn.Notify`。**无模型=不自动切**（用户选「完全替换」，故数据收集期 1-2 周无自动切换）。模型文件 `OneBox.learn.{power,audio}.zip` + `OneBox.learn.meta.json`。
 
 ## 已知坑（详见 .claude/memory/onebox-*.md）
+
+- **温度 helper 退出导致重启无数据**（已修复）：旧 `TempMonitorHelper` 60s 无客户端就退出，GUI 关闭后 helper 死亡，重启时管道连接失败、无温度/性能数据。修复：helper 改 `WaitForConnection()` 无限等待不退出；`OneBoxService` 守护 helper（崩溃 3s 自动重启、OnStop kill）。**服务端改动需重启 OneBoxSvc 才生效**（`sc stop OneBoxSvc && sc start OneBoxSvc`，需管理员）。
+- **开机自启 = 服务读 flag（无 UAC）**：设置里「开机自启」勾选框写用户注册表 `AutoStart.Enabled`（默认 1）；`OneBoxService.LaunchInSession` 用 `ImpersonateLoggedOnUser` 模拟用户令牌读其 HKCU，为 "0" 则不启动 GUI。全程无 UAC。服务须已安装（`sc qc OneBoxSvc` 查 binPath）；未安装时勾选仅记意图。
 
 - **.NET 8 迁移回归**（详见 onebox-migration-gotchas）：GBK 编码 936 抛异常（RegisterProvider 修复）；PerformanceCounter 首次创建 ~5s（后台预热）；ApplicationIdle 冷启动推迟 ~6s（改 threading timer）；csproj 设 RID 后 debug 输出在 win-x64 子目录（跑错路径跑旧二进制）；手写 DXGI vtable 索引错 → AccessViolation 闪退（改 Vortice 投影，绝不手写 COM vtable）。
 - **游戏前台吞 Win 键**：注入的 Win 键被系统/Game Mode 吞（GetAsyncKeyState 读 0x0000），Game Bar Win+Alt+PrtScn 触发不了。解决：Game Bar 快捷键改不含 Win 的组合（Alt+F12），OneBox 注入同款。被 Game Bar 注册的 Alt+ 组合在 OneBox UI 捕获不到，用 Ctrl+ 组合。
@@ -50,6 +54,7 @@ Windows 桌面悬浮工具箱（C# WPF + WinForms，.NET 8），集成电源计�
 - **`Process.MainModule` 对提权/UWP 进程访问拒绝** → 截图存 Unknown 文件夹。**用 `QueryFullProcessImageName(PROCESS_QUERY_LIMITED_INFORMATION)`**。
 - **powercfg ReadToEnd 死锁** → 用 `BeginOutputReadLine`；编码用系统 OEM(`GetOEMCP`)，.NET 8 需 RegisterProvider。
 - **COM 对象**（WScript.Shell）必须 finally `Marshal.ReleaseComObject`。
+- **自学习 GPU 性能计数器**：`\GPU Engine(*)` 每进程每引擎一个实例，活跃系统 engtype_3D 可达数百个；缓存 `List<PerformanceCounter>` 15s 刷新实例列表，逐个 `NextValue` 容错（实例随时销毁），求和后 clamp 0-100。无 GPU/读失败返回 -1，模型视作 0 优雅降级。CPU 占用走原生 `GetSystemTimes` 差分（避开 PerformanceCounter 5s 预热）。ML.NET 3.x：`CategoricalOneHotEncoding` 不是 `ml.Transforms.` 直挂方法（类别改用 float 序数 0-3 入特征）；`MLContext` 非线程安全，训练/推理在后台线程；`OneVersusAll(FastTree)` 做多分类。
 
 ## 详细记忆
 

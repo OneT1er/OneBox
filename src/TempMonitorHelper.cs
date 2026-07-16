@@ -10,7 +10,7 @@ namespace PowerAudioManager
     /// <summary>
     /// admin 温度 helper 进程（OneBox.exe --temp-monitor）：运行 LibreHardwareMonitor 读温度，
     /// 通过命名管道 OneBox\TempMonitor 每秒推送 JSON 给普通权限的主 OneBox。
-    /// 60s 无客户端连接则退出（主 OneBox 退出后自动清理）。
+    /// 不再因无客户端退出：GUI 关闭/重启期间保持驻留，主 OneBox 重连即恢复数据（由服务守护、崩溃自动重启）。
     /// </summary>
     public static class TempMonitorHelper
     {
@@ -29,12 +29,12 @@ namespace PowerAudioManager
                     {
                         try
                         {
-                            using var cts = new CancellationTokenSource(60000);
-                            server.WaitForConnectionAsync(cts.Token).GetAwaiter().GetResult();
+                            // 阻塞等待客户端，不超时：GUI 退出后保持驻留，重启即可重连。
+                            server.WaitForConnection();
                         }
-                        catch (OperationCanceledException)
+                        catch (Exception ex)
                         {
-                            AppLog.Log("TempHelper", "no client 60s, exit");
+                            AppLog.Log("TempHelper", "wait err: " + ex.Message);
                             break;
                         }
                         try

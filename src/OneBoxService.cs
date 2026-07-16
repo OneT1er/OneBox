@@ -4,6 +4,7 @@ using System.IO.Pipes;
 using System.Runtime.InteropServices;
 using System.ServiceProcess;
 using System.Threading.Tasks;
+using Microsoft.Win32;
 
 namespace PowerAudioManager
 {
@@ -28,6 +29,8 @@ namespace PowerAudioManager
         [DllImport("userenv.dll", SetLastError = true)] static extern bool DestroyEnvironmentBlock(IntPtr lpEnvironment);
         [DllImport("advapi32.dll", SetLastError = true)] static extern bool DuplicateTokenEx(IntPtr hExistingToken, uint dwDesiredAccess, IntPtr lpTokenAttributes, int ImpersonationLevel, int TokenType, out IntPtr phNewToken);
         [DllImport("advapi32.dll", SetLastError = true)] static extern bool GetTokenInformation(IntPtr TokenHandle, int TokenInformationClass, IntPtr TokenInformation, int TokenInformationLength, out int ReturnLength);
+        [DllImport("advapi32.dll", SetLastError = true)] static extern bool ImpersonateLoggedOnUser(IntPtr hToken);
+        [DllImport("advapi32.dll", SetLastError = true)] static extern bool RevertToSelf();
 
         const uint MAXIMUM_ALLOWED = 0x02000000;
         const uint CREATE_UNICODE_ENVIRONMENT = 0x00000400;
@@ -39,6 +42,9 @@ namespace PowerAudioManager
 
         const string SvcName = "OneBoxSvc";
 
+        volatile bool _stopping;
+        System.Diagnostics.Process _tempHelper;
+
         [StructLayout(LayoutKind.Sequential)] struct STARTUPINFO { public int cb; public IntPtr lpReserved; public IntPtr lpDesktop; public IntPtr lpTitle; public int dwX, dwY, dwXSize, dwYSize, dwXCountChars, dwYCountChars, dwFillAttribute, dwFlags; public short wShowWindow, cbReserved2; public IntPtr lpReserved2, hStdInput, hStdOutput, hStdError; }
         [StructLayout(LayoutKind.Sequential)] struct PROCESS_INFORMATION { public IntPtr hProcess, hThread; public int dwProcessId, dwThreadId; }
         [StructLayout(LayoutKind.Sequential)] struct WTS_SESSION_INFO { public int SessionId; public IntPtr pWinStationName; public int State; }
@@ -48,21 +54,59 @@ namespace PowerAudioManager
         protected override void OnStart(string[] _)
         {
             AppLog.Log("Service", "started");
-            // 启动温度 helper（Session 0 SYSTEM，无 UAC），跑 LibreHardwareMonitor 经 Global 管道推送
-            try
-            {
-                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(Environment.ProcessPath, "--temp-monitor")
-                { UseShellExecute = false, WindowStyle = System.Diagnostics.ProcessWindowStyle.Hidden });
-                AppLog.Log("Service", "started --temp-monitor helper");
-            }
-            catch (Exception ex) { AppLog.Log("Service", "temp helper fail: " + ex.Message); }
+            // 温度 helper（Session 0 SYSTEM，无 UAC）跑 LibreHardwareMonitor 经 Global 管道推送。
+            // 守护：helper 崩溃自动重启；helper 自身不再因无客户端退出，GUI 关闭/重启期间保持驻留，重连即恢复数据。
+            StartTempHelper();
             // 内存清理管道服务器（OneBox 普通进程命令服务执行 CleanAll，无 UAC）
             System.Threading.ThreadPool.QueueUserWorkItem(_ => RunMemCleanPipe());
             // 主动扫描所有已登录的活跃会话并启动 GUI（OnSessionChange 只在会话变化时触发，
             // 服务重启/重新安装时不会收到已有会话的事件）。
             EnumerateAndLaunch();
         }
-        protected override void OnStop() { AppLog.Log("Service", "stopped"); }
+        protected override void OnStop()
+        {
+            _stopping = true;
+            try { if (_tempHelper != null && !_tempHelper.HasExited) _tempHelper.Kill(); } catch { }
+            AppLog.Log("Service", "stopped");
+        }
+
+        System.Diagnostics.Process StartHelperProc() =>
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(Environment.ProcessPath, "--temp-monitor")
+            { UseShellExecute = false, WindowStyle = System.Diagnostics.ProcessWindowStyle.Hidden });
+
+        void StartTempHelper()
+        {
+            try
+            {
+                _tempHelper = StartHelperProc();
+                AppLog.Log("Service", "started --temp-monitor helper pid=" + _tempHelper.Id);
+                // 守护线程：helper 退出（崩溃）则 3s 后重启，保证温度管道长期可用
+                System.Threading.ThreadPool.QueueUserWorkItem(_ =>
+                {
+                    while (!_stopping)
+                    {
+                        var p = _tempHelper;
+                        if (p == null) break;
+                        try { p.WaitForExit(); } catch { break; }
+                        if (_stopping) break;
+                        AppLog.Log("Service", "temp helper exited, restarting in 3s");
+                        System.Threading.Thread.Sleep(3000);
+                        if (_stopping) break;
+                        try
+                        {
+                            _tempHelper = StartHelperProc();
+                            AppLog.Log("Service", "restarted --temp-monitor helper pid=" + _tempHelper.Id);
+                        }
+                        catch (Exception ex)
+                        {
+                            AppLog.Log("Service", "temp helper restart fail: " + ex.Message);
+                            System.Threading.Thread.Sleep(10000);
+                        }
+                    }
+                });
+            }
+            catch (Exception ex) { AppLog.Log("Service", "temp helper fail: " + ex.Message); }
+        }
 
         // 内存清理管道服务器：OneBox 普通进程发 flags，服务（SYSTEM）执行 CleanAll，回写释放量
         void RunMemCleanPipe()
@@ -140,12 +184,38 @@ namespace PowerAudioManager
                     if (!DuplicateTokenEx(userToken, MAXIMUM_ALLOWED, IntPtr.Zero,
                         SecurityImpersonation, TokenPrimary, out var dupToken) || dupToken == IntPtr.Zero)
                     { AppLog.Log("Service", "DuplicateTokenEx failed"); return; }
-                    try { LaunchWithToken(dupToken); }
+                    try
+                    {
+                        // 用户在设置里取消"开机自启"则不启动 GUI（读用户 HKCU，无需 UAC）
+                        if (!IsAutostartEnabled(dupToken))
+                        { AppLog.Log("Service", $"autostart disabled by user, skip session {sessionId}"); return; }
+                        LaunchWithToken(dupToken);
+                    }
                     finally { CloseHandle(dupToken); }
                 }
                 finally { CloseHandle(userToken); }
             }
             catch (Exception ex) { AppLog.Log("Service", ex); }
+        }
+
+        // 模拟用户令牌读其 HKCU\Software\PowerAudioManager\App\AutoStart.Enabled：
+        // 缺失或"1"=启用（默认），"0"=禁用。模拟失败不阻断，保持原启动行为。
+        bool IsAutostartEnabled(IntPtr userToken)
+        {
+            try
+            {
+                if (!ImpersonateLoggedOnUser(userToken)) return true;
+                try
+                {
+                    using (var k = Registry.CurrentUser.OpenSubKey(@"Software\PowerAudioManager\App"))
+                    {
+                        if (k == null) return true;
+                        return (k.GetValue("AutoStart.Enabled") as string) != "0";
+                    }
+                }
+                finally { RevertToSelf(); }
+            }
+            catch { return true; }
         }
 
         void LaunchWithToken(IntPtr token)

@@ -1168,16 +1168,13 @@ namespace PowerAudioManager
             try { ForegroundHistory.Start(); } catch { }
         }
 
-        // 自学习：前台应用自动切换电源计划 + 音频输出（独立于温度模块，按 Learn.Enabled 开关）
+        // 自学习：情境决策树自动切换电源计划 + 音频输出（独立于温度模块，按 Learn.Enabled 开关）
         void StartAppProfile()
         {
             try
             {
                 if (AppPrefs.GetBool("Learn.Enabled", false))
-                {
-                    AppProfileService.Start();
-                    ForegroundWatcher.Start();
-                }
+                    LearningEngine.Start();
             }
             catch (Exception ex) { AppLog.Log("Profile", "start fail: " + ex.Message); }
         }
@@ -1189,13 +1186,11 @@ namespace PowerAudioManager
             {
                 if (AppPrefs.GetBool("Learn.Enabled", false))
                 {
-                    if (!AppProfileService.IsStarted) AppProfileService.Start();
-                    if (!ForegroundWatcher.IsRunning) ForegroundWatcher.Start();
+                    if (!LearningEngine.IsStarted) LearningEngine.Start();
                 }
                 else
                 {
-                    if (AppProfileService.IsStarted) AppProfileService.Stop();
-                    if (ForegroundWatcher.IsRunning) ForegroundWatcher.Stop();
+                    if (LearningEngine.IsStarted) LearningEngine.Stop();
                 }
             }
             catch (Exception ex) { AppLog.Log("Profile", "restart fail: " + ex.Message); }
@@ -1406,7 +1401,10 @@ namespace PowerAudioManager
 
         internal void ExitApp()
         {
-            try { _tempTimer?.Dispose(); HardwareMonitorService.Instance.Stop(); ForegroundWatcher.Stop(); AppProfileService.Stop(); ForegroundHistory.Stop(); PerfHistory.Save(); ForegroundHistory.Save(); } catch { }
+            try { _tempTimer?.Dispose(); } catch { }
+            try { PerfHistory.Save(); } catch { }
+            try { ForegroundHistory.Save(); } catch { }
+            try { HardwareMonitorService.Instance.Stop(); LearningEngine.Stop(); ForegroundHistory.Stop(); } catch { }
             if (_deviceWatcher != null) _deviceWatcher.Stop();
             try { Microsoft.Win32.SystemEvents.DisplaySettingsChanged -= _scaling.OnDisplaySettingsChanged; } catch { }
             try { Microsoft.Win32.SystemEvents.UserPreferenceChanged -= _scaling.OnUserPreferenceChanged; } catch { }
