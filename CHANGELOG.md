@@ -1,5 +1,10 @@
 # 更新日志
 
+## v1.6.2 (2026-07-19)
+
+### 修复
+- **自学习「立即训练」无效**：单文件发布未把 ML.NET 的 native 库（`FastTreeNative.dll` 等）打包进 exe，而自动更新只搬 OneBox.exe 一个文件，导致用户机器上 FastTree 找不到 `FastTreeNative.dll`，训练每次 `train fail: 0x8007007E`、模型建不出来（日志累计 54 次失败）。csproj 改 `IncludeNativeLibrariesForSelfExtract=true`，native 库打进单文件、启动解压到 `%TEMP%`，exe +1.8MB。现有样本（≥30 条）点「立即训练」即可正常生成模型
+
 ## v1.6.1 (2026-07-16)
 
 ### 重构
