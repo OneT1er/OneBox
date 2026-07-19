@@ -23,7 +23,10 @@
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>false</SelfContained>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
-    <IncludeNativeLibrariesForSelfExtract>false</IncludeNativeLibrariesForSelfExtract>
+    <!-- 必须为 true：把 native 依赖（ML.NET 的 FastTreeNative/LdaNative、Vortice、LibreHardwareMonitorLib 等）
+         打包进单文件 exe，启动时解压到 %TEMP%\.net\OneBox\<hash>\。否则只发 OneBox.exe 的自动更新
+         会让 FastTree 找不到 FastTreeNative.dll -> 训练 0x8007007E 失败（自学习"立即训练"无效）。 -->
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <IncludeAllContentForSelfExtract>false</IncludeAllContentForSelfExtract>
     <!-- ReadyToRun precompiles IL to native, cutting cold-start JIT.
          Only costs ~3 MB on a 37 MB exe, worth keeping. -->
