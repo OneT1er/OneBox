@@ -158,9 +158,6 @@ namespace PowerAudioManager
             catch { }
         }
 
-        // 向后兼容别名：仍有调用者传入 0..9 时仍然可用
-        public static void SetHotkey(string deviceName, int digit) { SetHotkeyKey(deviceName, digit); }
-
         public static List<KeyValuePair<string, int>> GetAllHotkeys()
         {
             var list = new List<KeyValuePair<string, int>>();

@@ -32,7 +32,6 @@ namespace PowerAudioManager
         private StackPanel _powerSection;
         private StackPanel _audioSection;
         private bool _isExpanded = true;
-        private bool _dragDropWired;
         private bool _collapsedManually; // 通过按钮收起时为 true（非自动收起）
         internal bool _topmost = false;
         internal Button _pinBtn;
@@ -52,8 +51,6 @@ namespace PowerAudioManager
         private TextBlock _collapsedTempLabel;
         private Panel _metricRow;                // 展开视图的指标行 (WrapPanel)
         private System.Threading.Timer _tempTimer;
-        private PerfChart _perfChart;             // 性能趋势折线图（可选项）
-        private Panel _perfChartPanel;
 
         // 共享调色板，内部可见供 LauncherBar / TrayController 等复用。
         // 按 Material 层级排列：越底层表面越浅，叠层卡片有视觉深度。
@@ -228,7 +225,7 @@ namespace PowerAudioManager
                 try { EnsureServiceRunning(); } catch { }
                 // 温度监控启动（后台初始化硬件传感器）
                 try { StartTempMonitor(); } catch { }
-                try { StartAppProfile(); } catch { }
+                try { StartLearning(); } catch { }
                 AppLog.Log("Startup", "OnLoaded done " + sw.ElapsedMilliseconds + "ms");
             }
             catch (Exception ex) { AppLog.Log("OnLoaded", ex); }
@@ -1169,18 +1166,18 @@ namespace PowerAudioManager
         }
 
         // 自学习：情境决策树自动切换电源计划 + 音频输出（独立于温度模块，按 Learn.Enabled 开关）
-        void StartAppProfile()
+        void StartLearning()
         {
             try
             {
                 if (AppPrefs.GetBool("Learn.Enabled", false))
                     LearningEngine.Start();
             }
-            catch (Exception ex) { AppLog.Log("Profile", "start fail: " + ex.Message); }
+            catch (Exception ex) { AppLog.Log("Learn", "start fail: " + ex.Message); }
         }
 
         // 设置面板切换 Learn.Enabled 后调用，热启停自学习
-        internal void RestartAppProfile()
+        internal void RestartLearning()
         {
             try
             {
@@ -1193,7 +1190,7 @@ namespace PowerAudioManager
                     if (LearningEngine.IsStarted) LearningEngine.Stop();
                 }
             }
-            catch (Exception ex) { AppLog.Log("Profile", "restart fail: " + ex.Message); }
+            catch (Exception ex) { AppLog.Log("Learn", "restart fail: " + ex.Message); }
         }
 
         void StartTempTimer()
@@ -1209,11 +1206,6 @@ namespace PowerAudioManager
                 {
                     UpdateTempUI();
                     PerfHistory.Add(HardwareMonitorService.Instance.ActiveMetrics);
-                    if (_perfChart != null)
-                    {
-                        _perfChart.Series = PerfHistory.GetSeries(_perfChart.MaxPoints);
-                        _perfChart.Refresh();
-                    }
                 }));
             }, null, 2000, intervalMs);
         }

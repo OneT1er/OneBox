@@ -29,6 +29,7 @@ namespace PowerAudioManager
 
         static readonly object _lock = new object();
         static string _path;
+        static int _count = -1;   // 缓存样本数；-1=未初始化（首次访问时读文件）。Append 自增、Clear 清零，避免每秒读整个 CSV。
         static string FilePath
         {
             get
@@ -47,20 +48,31 @@ namespace PowerAudioManager
         {
             get
             {
-                try
+                if (_count >= 0) return _count;
+                lock (_lock)
                 {
-                    if (!File.Exists(FilePath)) return 0;
-                    // 计非空行数（减去表头）
-                    int n = 0; bool first = true;
-                    foreach (var line in File.ReadLines(FilePath))
-                    {
-                        if (first) { first = false; continue; }
-                        if (!string.IsNullOrWhiteSpace(line)) n++;
-                    }
-                    return n;
+                    if (_count >= 0) return _count;
+                    _count = CountFile();
+                    return _count;
                 }
-                catch { return 0; }
             }
+        }
+
+        // 实际读文件计非空行数（减去表头）。仅用于缓存初始化，不在热路径调用。
+        static int CountFile()
+        {
+            try
+            {
+                if (!File.Exists(FilePath)) return 0;
+                int n = 0; bool first = true;
+                foreach (var line in File.ReadLines(FilePath))
+                {
+                    if (first) { first = false; continue; }
+                    if (!string.IsNullOrWhiteSpace(line)) n++;
+                }
+                return n;
+            }
+            catch { return 0; }
         }
 
         public static void Append(FeatureCollector.Snapshot s, string chosenPower, string chosenAudio)
@@ -89,6 +101,7 @@ namespace PowerAudioManager
                             Csv(chosenPower ?? ""),
                             Csv(chosenAudio ?? "")));
                     }
+                    _count = _count < 0 ? CountFile() : _count + 1;   // 写入成功才更新缓存
                 }
                 catch (Exception ex) { AppLog.Log("Sample", "append fail: " + ex.Message); }
             }
@@ -117,6 +130,7 @@ namespace PowerAudioManager
         {
             lock (_lock)
             {
+                _count = 0;
                 try { if (File.Exists(FilePath)) File.Delete(FilePath); } catch (Exception ex) { AppLog.Log("Sample", "clear fail: " + ex.Message); }
             }
             AppLog.Log("Sample", "cleared");

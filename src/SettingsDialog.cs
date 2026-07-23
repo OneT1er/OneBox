@@ -846,8 +846,10 @@ namespace PowerAudioManager
                     string ap = meta.AudioAccuracy >= 0 ? $"{meta.AudioAccuracy * 100:0}%" : "未训练(单类)";
                     statusText.Text = $"✅ 已训练：{meta.SampleCount} 条样本 | 电源 {pp} · 音频 {ap} | 训练于 {meta.TrainedAt:MM-dd HH:mm} | 当前 {n} 条";
                 }
+                else if (n >= DecisionTreeLearner.MinSamplesToInfer)
+                    statusText.Text = $"🧪 k-NN 回退预测中：已采集 {n} 条样本（满 {DecisionTreeLearner.AutoTrainThreshold} 条自动训练决策树；达 {DecisionTreeLearner.MinSamplesToTrain} 条可手动训练）。";
                 else
-                    statusText.Text = $"⏳ 未训练模型。已采集 {n} 条样本（满 {DecisionTreeLearner.AutoTrainThreshold} 条自动训练；达 {DecisionTreeLearner.MinSamplesToTrain} 条可点下方手动训练）。";
+                    statusText.Text = $"⏳ 已采集 {n} 条样本（满 {DecisionTreeLearner.MinSamplesToInfer} 条启用 k-NN 回退预测；满 {DecisionTreeLearner.AutoTrainThreshold} 条自动训练决策树；达 {DecisionTreeLearner.MinSamplesToTrain} 条可手动训练）。";
                 trainBtn.IsEnabled = n >= DecisionTreeLearner.MinSamplesToTrain && !LearningEngine.IsTraining;
             }
             catch (Exception ex) { statusText.Text = "状态读取失败：" + ex.Message; }
@@ -911,7 +913,7 @@ namespace PowerAudioManager
             var customBox = AddSetRow(stack, "自定义游戏进程", AppPrefs.GetString("Learn.CustomGames", ""), "(分号分隔)", 340);
 
             var tip = new TextBlock { Foreground = fg, FontSize = 10, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 8, 0, 12) };
-            tip.Inlines.Add("说明：每秒采集 CPU/GPU 占用、是否全屏、是否用电池、时间、进程类别等情境特征；手动切换电源或音频时记一条样本。样本累积后训练决策树（ML.NET FastTree），按当前情境预测你最可能的选择并自动套用：预测需连续 5 秒稳定才切换，切换后冷却 30 秒防止来回跳；手动切换后暂停自动模式 10 分钟，并把该次操作记为新样本。");
+            tip.Inlines.Add("说明：每秒采集 CPU/GPU 占用、是否全屏、是否用电池、时间、进程类别等情境特征。样本来源有两条：①手动切电源/音频时记一条（强信号）；②情境稳定时每 45 秒自动记一条当前状态（观察式采样，加快积累）。满 20 条即启用 k-NN 回退预测，满 50 条自动训练 ML.NET FastTree 决策树（之后每 +25 条且距上次≥5 分钟重训）。按当前情境预测你最可能的选择并自动套用：预测需连续 5 秒稳定才切换，切换后冷却 30 秒防止来回跳；手动切换后暂停自动模式 10 分钟，并把该次操作记为新样本。");
             stack.Children.Add(tip);
 
             var btns = MakeButtons();
@@ -921,7 +923,7 @@ namespace PowerAudioManager
                 AppPrefs.SetBool("Learn.AutoApply", autoCb.IsChecked == true);
                 AppPrefs.SetBool("Learn.Notify", notifyCb.IsChecked == true);
                 AppPrefs.SetString("Learn.CustomGames", customBox.Text ?? "");
-                if (owner is MainWindow mw) mw.RestartAppProfile();
+                if (owner is MainWindow mw) mw.RestartLearning();
                 dlg.DialogResult = true; dlg.Close();
             };
             ((Button)btns.Children[1]).Click += (_, _) => { dlg.DialogResult = false; dlg.Close(); };

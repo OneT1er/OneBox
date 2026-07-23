@@ -41,13 +41,6 @@ namespace PowerAudioManager
         static bool _running;
         static int _intervalMs = 1000;
 
-        public static bool IsRunning => _running;
-        public static int IntervalMs
-        {
-            get => _intervalMs;
-            set => _intervalMs = Math.Max(500, value);
-        }
-
         /// <summary>每次采集完成触发（ThreadPool 线程）。</summary>
         public static event Action<Snapshot> Sampled;
 

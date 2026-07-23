@@ -1,5 +1,18 @@
 # 更新日志
 
+## v1.6.3 (未发布)
+
+### 优化
+- **自学习样本收集提速**：新增**观察式采样**--情境稳定时每 45 秒把「当前特征 -> 当前电源/音频」自动记一条样本（去重，不依赖手动切换）。旧版仅手动切换时记样本，要手动切 200 次才够训练，数据收集期长达 1-2 周；现在一天正常用机即可积累足够样本
+- **自学习冷启动可用**：样本≥20 条即启用 **k-NN 回退预测**（exe 名命中强负偏置 + 情境距离加权投票），FastTree 模型未就绪时也能自动切换。旧版满 200 条训练前完全不自动切（1-2 周空窗）
+- **训练阈值与质量**：自动训练阈值 200->50，每 +25 且距上次≥5min 重训；FastTree 5 树 10 叶->30 树 24 叶。`Predict` 走 FastTree 优先、某目标无模型时回退 k-NN
+- **性能**：`SampleStore.Count` 加缓存（Append 自增/Clear 清零），避免推理/训练门每秒读整个 CSV
+
+### 重构
+- 移除死代码：`LearningEngine.Enabled`、`DecisionTreeLearner.Unload()`、`FeatureCollector.IsRunning/IntervalMs` 公共成员、`DevicePrefs.SetHotkey` 别名、MainWindow 三个未用字段（`_perfChart`/`_perfChartPanel`/`_dragDropWired`，消除 CS0169/CS0649 警告）
+- 方法改名 `StartAppProfile/RestartAppProfile` -> `StartLearning/RestartLearning`（AppProfile 是已删旧概念）
+- 设置面板状态文案区分「k-NN 回退预测中 / 已训练」，说明文案补充观察式采样与新阈值
+
 ## v1.6.2 (2026-07-19)
 
 ### 修复

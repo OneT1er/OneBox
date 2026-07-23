@@ -50,8 +50,10 @@ namespace PowerAudioManager
         /// <summary>训练完成后触发（后台线程），设置面板可据此刷新。</summary>
         public static event Action<ModelMeta> Trained;
 
-        public const int MinSamplesToTrain = 30;   // 手动训练按钮的最小样本数
-        public const int AutoTrainThreshold = 200; // 自动触发训练的样本数
+        public const int MinSamplesToTrain = 30;    // 手动训练按钮的最小样本数
+        public const int AutoTrainThreshold = 50;   // 自动触发 FastTree 训练的样本数（原 200，观察式采样下数小时即可达）
+        public const int RetrainEvery = 25;         // 首次自动训练后，每累积这么多条重训一次
+        public const int MinSamplesToInfer = 20;    // k-NN 回退预测最低样本数：FastTree 未就绪时即可工作，消除冷启动空窗
 
         static readonly object _lock = new object();
         static MLContext _ml;
@@ -59,6 +61,13 @@ namespace PowerAudioManager
         static PredictionEngine<LearnRow, LearnPred> _audioEngine;
         static bool _powerAvail, _audioAvail;
         static bool _loaded;
+
+        // ---- k-NN 回退预测缓存（FastTree 模型未就绪时使用，从 ~20 条样本即可工作）----
+        // 冷启动期（样本 < AutoTrainThreshold 或某目标只有 1 类没训成 FastTree）用 k-NN 兜底，
+        // 消除旧版"满 200 条前完全不自动切"的空窗。样本数变化时按需重载。
+        static List<SampleStore.Sample> _knnCache;
+        static int _knnCacheCount = -1;
+        const int KnnK = 7;   // 近邻数
 
         static string Dir
         {
@@ -75,6 +84,16 @@ namespace PowerAudioManager
         public static bool HasPowerModel { get { lock (_lock) return _powerAvail; } }
         public static bool HasAudioModel { get { lock (_lock) return _audioAvail; } }
         public static bool IsLoaded => _loaded;
+
+        /// <summary>是否存在可用预测器（FastTree 模型 或 k-NN 回退样本已够）。LearningEngine 推理门用。</summary>
+        public static bool HasAnyPredictor
+        {
+            get
+            {
+                lock (_lock) { if (_powerAvail || _audioAvail) return true; }
+                return SampleStore.Count >= MinSamplesToInfer;
+            }
+        }
 
         public static ModelMeta LoadMeta()
         {
@@ -200,8 +219,8 @@ namespace PowerAudioManager
                     {
                         LabelColumnName = "Label",
                         FeatureColumnName = "Features",
-                        NumberOfTrees = 5,
-                        NumberOfLeaves = 10,
+                        NumberOfTrees = 30,
+                        NumberOfLeaves = 24,
                     })));
 
             var evalModel = core.Fit(split.TrainSet);
@@ -216,7 +235,7 @@ namespace PowerAudioManager
             return acc;
         }
 
-        /// <summary>用已加载模型预测电源/音频。无对应模型时该项返回 null。</summary>
+        /// <summary>预测电源/音频。FastTree 模型优先；某目标无模型时用 k-NN 回退（样本不足则该项返回 null）。</summary>
         public static (string power, string audio) Predict(FeatureCollector.Snapshot s)
         {
             if (s == null) return (null, null);
@@ -233,17 +252,83 @@ namespace PowerAudioManager
                     try { audio = _audioEngine.Predict(row)?.Label; } catch (Exception ex) { AppLog.Log("Learn", "predict audio fail: " + ex.Message); }
                 }
             }
+            // FastTree 未覆盖的目标用 k-NN 回退，冷启动期也能给出预测。
+            if (string.IsNullOrEmpty(power)) power = KnnPredictSafe(s, true);
+            if (string.IsNullOrEmpty(audio)) audio = KnnPredictSafe(s, false);
             return (power, audio);
         }
 
-        public static void Unload()
+        // ---- k-NN 回退预测 ----
+        // 保证缓存与磁盘样本同步：样本数变化时重载（观察式采样每 ~45s 追加一条，重载开销可忽略）。
+        static List<SampleStore.Sample> KnnSamples()
         {
-            lock (_lock)
+            int n = SampleStore.Count;
+            if (_knnCache == null || n != _knnCacheCount)
             {
-                _powerEngine = null; _audioEngine = null;
-                _powerAvail = false; _audioAvail = false;
+                _knnCache = SampleStore.LoadAll();
+                _knnCacheCount = n;
             }
+            return _knnCache;
         }
+
+        static string KnnPredictSafe(FeatureCollector.Snapshot s, bool power)
+        {
+            try
+            {
+                var samples = KnnSamples();
+                if (samples == null || samples.Count < MinSamplesToInfer) return null;
+                return KnnPredict(samples, s, power ? (Func<SampleStore.Sample, string>)(x => x.PowerPlan) : (x => x.AudioDevice));
+            }
+            catch (Exception ex) { AppLog.Log("Learn", "knn fail: " + ex.Message); return null; }
+        }
+
+        // 距离加权 k-NN：算每条历史样本到当前快照的情境距离，取最近 K 个，按 1/(1+d) 加权投票。
+        // exe 名命中给强负偏置——"这个应用上次选了什么"是最有用信号，盖过瞬时负载差异。
+        static string KnnPredict(List<SampleStore.Sample> samples, FeatureCollector.Snapshot s, Func<SampleStore.Sample, string> label)
+        {
+            var scored = new List<(double w, string lab)>(samples.Count);
+            foreach (var sm in samples)
+            {
+                string lab = label(sm) ?? "";
+                if (lab.Length == 0) continue;
+                scored.Add((1.0 / (1.0 + FeatureDistance(sm, s)), lab));
+            }
+            if (scored.Count == 0) return null;
+            int k = Math.Min(KnnK, scored.Count);
+            scored.Sort((a, b) => b.w.CompareTo(a.w));   // 权重大 = 距离小 = 更近，降序取前 k
+            var votes = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+            for (int i = 0; i < k; i++)
+            {
+                var t = scored[i];
+                if (votes.TryGetValue(t.lab, out var v)) votes[t.lab] = v + t.w;
+                else votes[t.lab] = t.w;
+            }
+            string best = null; double bestW = -1;
+            foreach (var kv in votes) if (kv.Value > bestW) { bestW = kv.Value; best = kv.Key; }
+            return best;
+        }
+
+        // 情境距离：电池/时间/进程类别权重高（情境上下文），CPU/GPU 次之，全屏再次。
+        // exe 名命中给 -2.0 强负偏置（同应用历史样本优先），距离下限 0。
+        static double FeatureDistance(SampleStore.Sample sm, FeatureCollector.Snapshot s)
+        {
+            double cpu = Math.Abs(sm.Cpu - s.CpuLoad) / 100.0;
+            double smGpu = sm.Gpu < 0 ? 0 : sm.Gpu, sGpu = s.GpuLoad < 0 ? 0 : s.GpuLoad;
+            double gpu = Math.Abs(smGpu - sGpu) / 100.0;
+            double fs = (sm.Fullscreen != 0) != s.Fullscreen ? 1 : 0;
+            double bat = (sm.Battery != 0) != s.OnBattery ? 1 : 0;
+            double dh = Math.Abs(sm.Hour - s.Hour);
+            if (dh > 12) dh = 24 - dh;     // 时间环形距离（23 点与 1 点相近）
+            dh /= 12.0;
+            double cat = Math.Abs(CategoryIndex(sm.Category) - s.CategoryIndex) / 3.0;
+            double d = cpu + gpu * 0.8 + fs * 0.5 + bat * 1.5 + dh * 1.2 + cat;
+            if (!string.IsNullOrEmpty(s.ExeName) && string.Equals(sm.Exe, s.ExeName, StringComparison.OrdinalIgnoreCase))
+                d -= 2.0;
+            return d < 0 ? 0 : d;
+        }
+
+        static int CategoryIndex(string category) =>
+            Enum.TryParse<AppCategory>(category, out var c) ? (int)c : 0;
 
         // 删除模型与元数据（设置面板"重置模型"）。
         public static void DeleteModels()
