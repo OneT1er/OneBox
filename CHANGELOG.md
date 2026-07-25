@@ -10,7 +10,6 @@
 - **性能**：`SampleStore.Count` 加缓存（Append 自增/Clear 清零），避免推理/训练门每秒读整个 CSV
 
 ### 新功能
-- **Steam 截图映射**：截图 tab 新增开关（`Screenshot.SteamF12`，默认关）。开启后按截图快捷键时先注入 F12 触发 Steam 截图，再走 OneBox 自身捕获（CopyFromScreen/Game Bar），体感同时。仅在 Steam 运行且前台为启用叠加的 Steam 游戏时生效
 - **性能趋势图表时长档扩充**：5分/15分/30分/1时/2时/6时/12时/全天，默认 15 分（原仅 15分/1时/全天）
 
 ### 修复

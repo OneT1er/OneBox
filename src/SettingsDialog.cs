@@ -557,11 +557,6 @@ namespace PowerAudioManager
             var gbToggle = new CheckBox { Content = "启用 Game Bar 截图回退（默认关闭，仅普通截图）", IsChecked = gbEnabled, Foreground = Brushes.White, FontSize = 12, Margin = new Thickness(0, 0, 0, 8) };
             stack.Children.Add(gbToggle);
 
-            // Steam 截图映射：按 OneBox 截图快捷键时同步注入 F12，先触发 Steam 截图再走 OneBox 自身捕获，体感同时。
-            // 仅在 Steam 运行且前台为 Steam 游戏（启用 Steam 叠加）时生效；F12 会发到前台，非 Steam 应用可能被其响应。
-            var steamCb = new CheckBox { Content = "Steam 截图映射（按截图键同步触发 Steam F12）", IsChecked = AppPrefs.GetBool("Screenshot.SteamF12", false), Foreground = Brushes.White, FontSize = 12, Margin = new Thickness(0, 0, 0, 8) };
-            stack.Children.Add(steamCb);
-
             // Game Bar 配置仅在启用时有效，关闭开关时整体变灰。
             var gbPanel = new StackPanel { Margin = new Thickness(0, 0, 0, 0) };
             gbPanel.IsEnabled = gbEnabled;
@@ -691,7 +686,6 @@ namespace PowerAudioManager
             {
                 AppPrefs.SetString("Screenshot.RootDir", rootBox.Text.Trim());
                 AppPrefs.SetBool("Screenshot.GameBarEnabled", gbToggle.IsChecked == true);
-                AppPrefs.SetBool("Screenshot.SteamF12", steamCb.IsChecked == true);
                 AppPrefs.SetString("Screenshot.GameBarDir", gbBox.Text.Trim());
                 AppPrefs.SetInt("Screenshot.GameBarHotkey", curGbHotkey);
                 AppPrefs.SetInt("Screenshot.Hotkey", curHotkey);
