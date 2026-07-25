@@ -7,6 +7,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.ML;
 using Microsoft.ML.Data;
+using Microsoft.ML.Transforms;
 using Microsoft.ML.Trainers.FastTree;
 
 namespace PowerAudioManager
@@ -28,6 +29,7 @@ namespace PowerAudioManager
             public float Battery { get; set; }     // 0/1
             public float Hour { get; set; }
             public float Category { get; set; }  // 0=Other 1=Game 2=Creative 3=VideoConf
+            public string Exe { get; set; }      // 前台 exe 无扩展名；one-hot 入特征，让模型区分"同类别不同应用"的偏好（如不同游戏选不同音频设备）
             public string PowerPlan { get; set; }
             public string AudioDevice { get; set; }
         }
@@ -207,13 +209,16 @@ namespace PowerAudioManager
             var data = _ml.Data.LoadFromEnumerable(rows);
             var split = _ml.Data.TrainTestSplit(data, testFraction: 0.2, seed: 0);
 
-            // 公共管道：标签转 Key + 类别 one-hot + 拼特征 + FastTree(OneVersusAll 多分类)。
+            // 公共管道：标签转 Key + exe one-hot（区分同类别不同应用的偏好）+ 拼特征 + FastTree(OneVersusAll 多分类)。
             // 验证集用 core（PredictedLabel 保持 key 类型供 Evaluate）；最终模型在 core 末尾追加 MapKeyToValue，
             // 预测时直接返回原始字符串标签，免去再查 key 映射。
             var core = _ml.Transforms.Conversion.MapValueToKey(outputColumnName: "Label", inputColumnName: labelCol)
+                .Append(_ml.Transforms.Categorical.OneHotEncoding(
+                    outputColumnName: "ExeFeat", inputColumnName: nameof(LearnRow.Exe),
+                    outputKind: OneHotEncodingEstimator.OutputKind.Binary))
                 .Append(_ml.Transforms.Concatenate("Features",
                     nameof(LearnRow.Cpu), nameof(LearnRow.Gpu), nameof(LearnRow.Fullscreen),
-                    nameof(LearnRow.Battery), nameof(LearnRow.Hour), nameof(LearnRow.Category)))
+                    nameof(LearnRow.Battery), nameof(LearnRow.Hour), nameof(LearnRow.Category), "ExeFeat"))
                 .Append(_ml.MulticlassClassification.Trainers.OneVersusAll(
                     _ml.BinaryClassification.Trainers.FastTree(new FastTreeBinaryTrainer.Options
                     {
@@ -352,6 +357,7 @@ namespace PowerAudioManager
             Battery = s.Battery,
             Hour = s.Hour,
             Category = Enum.TryParse<AppCategory>(s.Category, out var c) ? (float)c : 0f,
+            Exe = s.Exe ?? "",
             PowerPlan = s.PowerPlan ?? "",
             AudioDevice = s.AudioDevice ?? "",
         };
@@ -364,6 +370,7 @@ namespace PowerAudioManager
             Battery = s.OnBattery ? 1 : 0,
             Hour = s.Hour,
             Category = s.CategoryIndex,
+            Exe = s.ExeName ?? "",
             PowerPlan = "",   // 预测时不提供标签
             AudioDevice = "",
         };
