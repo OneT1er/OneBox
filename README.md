@@ -59,6 +59,20 @@
 - Steam 风格右下角完成弹窗，独立图库窗口查看最近截图
 - **高级 HDR 截图**（默认关闭）：HDR 显示器 / 全屏游戏回退 Game Bar（Vortice.DXGI 检测 HDR，Game Bar 读取位置与快捷键可配置，绕开"游戏前台吞 Win 键"）
 
+### 性能监控
+- **温度 / 风扇**：实时显示 CPU、GPU、主板、内存、硬盘等温度与风扇转速（传感器自选；管理员权限经后台服务 helper 经命名管道提供，无 UAC）
+- **性能趋势图表**：悬浮窗入口 + 双击大图；双 Y 轴（温度 + 风扇）；鼠标 tooltip（十字线 + 各线值 + 该时间点前台应用）；前台应用时间段色块标注；时长档 5 分 / 15 分 / 30 分 / 1 时 / 2 时 / 6 时 / 12 时 / 全天，默认 15 分
+- **缺口断线**：传感器失配或跨重启的无数据区间显示为断口，而非用上一次的值填满（仅存真实读数，按时间戳对齐）
+- 历史持久化 JSON，跨重启保留全天数据
+
+### 自学习（情境决策树）
+- 每秒采集 CPU/GPU 占用、全屏、电池、时间、进程类别、前台 exe 等情境特征
+- **两条样本来源**：手动切电源 / 音频时记一条（强信号）；情境稳定时每 45 秒自动记一条当前状态（观察式采样，一天即可积累足够样本）
+- **k-NN 回退**：≥20 条样本即可预测（exe 名强信号 + 情境距离加权投票），消除冷启动空窗
+- **ML.NET FastTree 决策树**：≥50 条自动训练（电源 / 音频各一模型；特征含 exe 名 one-hot，可区分同类别不同应用的偏好，如不同游戏分别外放 / 耳机），每 +25 且 ≥5min 重训
+- 推理连续 5 秒稳定才自动套用，切后冷却 30 秒，手动切换后暂停 10 分钟并记新样本
+- 设置 -> 自学习 tab 管理开关 / 手动训练 / 重置 / 清空 / 自定义游戏进程
+
 ### 快捷启动栏
 4 格启动栏，点击空格选择程序（`.exe` / `.lnk`，自动解析快捷方式目标并提取图标）；点击图标启动；右键清空；支持拖拽放入。
 
@@ -68,11 +82,15 @@
 - 点击悬浮窗按钮弹出历史列表，点击即复制回剪贴板
 
 ### 设置
-统一设置窗口，四个标签页：
-- **常规**：界面字体（下拉选系统已安装字体，实时预览）、窗口置顶、锁定位置、自动折叠开关与延时、开机自启
-- **板块**：显示 / 隐藏 电源 / 音频 / 内存 / 翻译 / 启动栏 / 剪贴板
+统一设置窗口，标签页：
+- **常规**：界面字体（下拉选系统已安装字体，实时预览）、窗口置顶、锁定位置、自动折叠开关与延时、开机自启（服务读 flag，无 UAC）
+- **板块**：显示 / 隐藏 各功能模块
 - **内存**：清理项勾选、自动清理触发条件、危险项确认
 - **翻译**：百度翻译 API Key / APPID / 翻译指令
+- **截图**：保存位置、截图快捷键、Game Bar 回退配置
+- **剪贴板**：历史条数等
+- **温度**：传感器选择、采样间隔、告警阈值
+- **自学习**：总开关 / 自动套用 / 通知、样本与模型状态（手动训练 / 重置 / 清空）、自定义游戏进程
 
 ### 自动更新
 - 启动时后台静默检查 GitHub Release
@@ -85,6 +103,8 @@
 | 快捷键 | 功能 |
 |--------|------|
 | `Ctrl+Shift+T` | 翻译剪贴板内容 |
+| 截图快捷键（可自定义） | 截取前台窗口客户区 |
+| 图片翻译快捷键（可自定义） | 框选屏幕区域翻译 |
 | `Ctrl+Shift+数字`（可自定义） | 切换到指定音频设备 |
 | 鼠标滚轮（悬浮窗上） | 调节音量 |
 
@@ -123,34 +143,38 @@ dotnet publish -c Release -r win-x64 -p:SelfContained=false   # 单文件 exe（
 ```
 OneBox/
 ├── src/
-│   ├── App.cs                  # 入口、单实例、全局异常、编码注册
+│   ├── App.cs                  # 入口、单实例、全局异常、编码注册、AppLog
 │   ├── MainWindow.cs           # 悬浮窗主界面、数据加载与渲染、热键分发
-│   ├── AppResources.cs         # 系统字体 + 嵌入资源加载
-│   ├── LauncherBar.cs          # 快捷启动栏（拖拽 / .lnk 解析）
+│   ├── AppResources.cs         # 系统字体 + 嵌入资源 + 共享深色样式
+│   ├── MaterialTheme.cs        # MaterialDesign 深色 + 紫影主题
+│   ├── LauncherBar.cs / LauncherWindow.cs / LauncherHost.cs  # 快捷启动栏（拖拽 / .lnk / UIPI 嵌入）
 │   ├── WindowScaling.cs        # 分辨率缩放 + 固定位置
 │   ├── TrayController.cs       # 系统托盘图标与菜单
 │   ├── SettingsDialog.cs       # 统一设置窗口（标签页）
+│   ├── Dialogs.cs              # 翻译窗口、快捷键捕获、统一窗口样式
 │   ├── AudioDevices.cs         # 音频设备枚举 / 切换 / 热插拔监听
 │   ├── VolumeControl.cs        # 音量控制
 │   ├── PowerPlanService.cs     # 电源计划
 │   ├── MemoryCleaner.cs        # 内存清理（NT Native API）
 │   ├── TranslateService.cs     # 百度文本翻译 API
-│   ├── ImageTranslateService.cs# 百度图片翻译 API
-│   ├── RegionCaptureService.cs # 框选截图遮罩（图片翻译用）
-│   ├── ImageTranslateWindow.cs # 图片翻译结果窗口
+│   ├── ImageTranslateService.cs / RegionCaptureService.cs / ImageTranslateWindow.cs  # 图片翻译
 │   ├── ScreenshotService.cs    # 前台截图 + HDR/Game Bar 回退
-│   ├── ScreenshotToast.cs      # 截图完成 Toast
-│   ├── ScreenshotGallery.cs    # 截图图库
-│   ├── Dialogs.cs              # 翻译窗口、快捷键捕获、统一窗口样式
+│   ├── ScreenshotToast.cs / ScreenshotGallery.cs  # 截图 Toast / 图库
 │   ├── ClipboardHistory.cs     # 剪贴板历史（DPAPI 加密）
+│   ├── HardwareMonitorService.cs  # 温度/风扇（LibreHardwareMonitor，admin helper 经管道推送）
+│   ├── PerfHistory.cs / PerfChart.cs / PerfChartWindow.cs  # 性能趋势图表（时间戳 + 缺口断线）
+│   ├── ForegroundWatcher.cs / ForegroundHistory.cs  # 前台应用 + 电源/音频状态轮询
+│   ├── FeatureCollector.cs     # 情境特征采集（CPU/GPU/全屏/电池/时间/进程类别）
+│   ├── SampleStore.cs          # 学习样本 CSV 持久化（Count 缓存）
+│   ├── DecisionTreeLearner.cs  # ML.NET FastTree + k-NN 回退预测
+│   ├── LearningEngine.cs       # 自学习引擎（观察式采样 + 自动套用）
+│   ├── OneBoxService.cs        # Windows 服务（开机自启 / 温度 helper 守护，无 UAC）
+│   ├── TempMonitorHelper.cs    # admin 温度 helper（命名管道推送）
+│   ├── AutoStartService.cs     # 开机自启（服务 / 计划任务 / 注册表）
 │   ├── UpdateChecker.cs        # GitHub Release 自动更新
-│   ├── Native.cs               # Win32 P/Invoke
-│   ├── Prefs.cs                # 注册表配置存储
-│   ├── AdminUtils.cs           # 管理员权限 / 提权
-│   ├── MemoryCleaner.cs        # 内存清理
-│   ├── Models.cs               # 数据模型
+│   ├── Native.cs / Prefs.cs / AdminUtils.cs / Models.cs  # Win32 / 注册表 / 提权 / 数据模型
 │   ├── OneBox.csproj           # .NET 8 项目文件
-│   ├── app.manifest            # UAC / 兼容性（DPI 由 csproj 配置）
+│   ├── app.manifest            # UAC / 兼容性（DPI 由 csproj 配）
 │   ├── app.ico / app.png       # 图标资源
 │   └── icon-*.png              # 板块图标
 ├── .gitignore
@@ -177,7 +201,7 @@ OneBox/
 ```csharp
 public const string Owner = "OneT1er";
 public const string Repo = "OneBox";
-public static readonly Version CurrentVersion = new Version(1, 3, 1);
+public static readonly Version CurrentVersion = new Version(1, 6, 3);
 ```
 
 发新版时在 GitHub 创建 Release，tag 用 `v1.3.0` 格式（程序解析其中的版本号与 `CurrentVersion` 对比）。若 Release 附带 `OneBox.exe` 资产，支持应用内下载并自动替换升级；否则打开 Release 页面手动下载。预发布版本不进 `releases/latest`，不影响稳定用户。
@@ -185,7 +209,7 @@ public static readonly Version CurrentVersion = new Version(1, 3, 1);
 ## 🛠️ 开发说明
 
 - **.NET 8 + WPF + WinForms**：用 `dotnet build` 构建，现代 C# 语法。主界面和对话框用 WPF，系统托盘用 WinForms（NotifyIcon）。
-- NuGet 依赖：`Vortice.DXGI`（HDR 检测）、`System.Text.Encoding.CodePages`（GBK 编码，电源计划/升级脚本必需）。
+- NuGet 依赖：`Vortice.DXGI`（HDR 检测）、`System.Text.Encoding.CodePages`（GBK 编码，电源计划/升级脚本必需）、`Microsoft.ML` + `Microsoft.ML.FastTree`（自学习决策树）、`LibreHardwareMonitorLib`（温度/风扇）、`MaterialDesignThemes`（主题）。
 - 音频切换通过 MMDevice API + IPolicyConfig COM 接口实现。
 - 字体改用系统字体（设置里可选），不再打包字体文件。
 - 内存清理使用 NT Native API（`NtSetSystemInformation`），与 memreduct 同源。

@@ -1,6 +1,6 @@
 # OneBox
 
-Windows 桌面悬浮工具箱（C# WPF + WinForms，.NET 8），集成电源计划/音频控制/内存清理/翻译/图片翻译/快捷启动/剪贴板历史/前台截图到一个可折叠悬浮窗 + 系统托盘。紫影主题 #8E8CD8，深色圆角卡片，单文件 exe（框架依赖）。仓库 https://github.com/OneT1er/OneBox ，当前版本 **v1.6.2**。
+Windows 桌面悬浮工具箱（C# WPF + WinForms，.NET 8），集成电源计划/音频控制/内存清理/翻译/图片翻译/快捷启动/剪贴板历史/前台截图到一个可折叠悬浮窗 + 系统托盘。紫影主题 #8E8CD8，深色圆角卡片，单文件 exe（框架依赖）。仓库 https://github.com/OneT1er/OneBox ，当前版本 **v1.6.3**。
 
 ## 构建（重要）
 
