@@ -26,6 +26,9 @@ namespace PowerAudioManager
         public string Unit;         // "°C", "RPM", "%"
         public bool IsTemp => Unit == "°C";
         public string ConfigKey;
+        // true=本次读数失败、用 _lastMetrics 兜底的旧值。UI 可照常显示（避免闪烁），
+        // 但 PerfHistory 不应存入历史（否则图表在没采到数据的地方填旧值）。
+        public bool Cached;
     }
 
     public class HardwareMonitorService : IDisposable
@@ -354,7 +357,8 @@ namespace PowerAudioManager
                     }
                     else
                     {
-                        lock (_lock) { if (_lastMetrics.TryGetValue(key, out var last)) values.Add(last); }
+                        // 读数失败：用上次值兜底供 UI 显示，但标记 Cached 让 PerfHistory 跳过（不污染历史图表）
+                        lock (_lock) { if (_lastMetrics.TryGetValue(key, out var last)) values.Add(new MetricValue { DisplayName = last.DisplayName, IconKey = last.IconKey, Value = last.Value, Unit = last.Unit, ConfigKey = last.ConfigKey, Cached = true }); }
                     }
                 }
 
@@ -387,7 +391,7 @@ namespace PowerAudioManager
                     lock (_lock) { _lastMetrics[key] = mv; }
                     values.Add(mv);
                 }
-                else { lock (_lock) { if (_lastMetrics.TryGetValue(key, out var last)) values.Add(last); } }
+                else { lock (_lock) { if (_lastMetrics.TryGetValue(key, out var last)) values.Add(new MetricValue { DisplayName = last.DisplayName, IconKey = last.IconKey, Value = last.Value, Unit = last.Unit, ConfigKey = last.ConfigKey, Cached = true }); } }
             }
             lock (_lock) { ActiveMetrics.Clear(); ActiveMetrics.AddRange(values); }
         }

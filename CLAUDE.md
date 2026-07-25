@@ -34,7 +34,8 @@ Windows 桌面悬浮工具箱（C# WPF + WinForms，.NET 8），集成电源计�
 - **DPI**：`<ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>`（csproj 配，.NET 8 会从 manifest 剥离 DPI 设置）。ApplyScaling 除以实时 DPI 避免叠加过大。曾误降级系统级导致切 4K 模糊，已修复。
 - **固定位置（无条件）**：拖到哪固定到哪，切分辨率不动（存绝对 Left/Top），仅完全离开屏幕才夹回。与"锁定位置"（LockPosition 禁拖）是两个独立开关。
 - **自动折叠**：默认开，离开延时折叠/悬停展开；手动折叠后保持折叠不自动展开（`_collapsedManually`）。折叠时标题栏改全圆角。
-- **截图**：CopyFromScreen 截前台窗口客户区。高级 HDR 截图（默认关，`Screenshot.GameBarEnabled`）：Vortice.DXGI 检测 HDR 显示器，HDR/全屏游戏回退 Game Bar（可配置快捷键绕开"游戏吞 Win 键"，可配置 Game Bar 读取位置）。jxr 保留。按应用 exe 名建子目录。Toast 右下角弹窗(WS_EX_NOACTIVATE 不抢焦点)。
+- **截图**：CopyFromScreen 截前台窗口客户区。高级 HDR 截图（默认关，`Screenshot.GameBarEnabled`）：Vortice.DXGI 检测 HDR 显示器，HDR/全屏游戏回退 Game Bar（可配置快捷键绕开"游戏吞 Win 键"，可配置 Game Bar 读取位置）。jxr 保留。按应用 exe 名建子目录。Toast 右下角弹窗(WS_EX_NOACTIVATE 不抢焦点)。Steam 截图映射（默认关，`Screenshot.SteamF12`）：按截图快捷键时先注入 F12 触发 Steam 截图，再走 OneBox 自身捕获，体感同时。
+- **性能趋势图表**：`PerfHistory` 环形存 (值,时间戳)，仅存真实读数（`MetricValue.Cached` 兜底旧值跳过）；`PerfChart` 按时间戳映射 x，相邻点时间差超阈值（3 间隔/≥5s）断线--传感器失配/跨重启缺口显示为断口而非填旧值。时长档 5分/15分/30分/1时/2时/6时/12时/全天，默认 15 分。旧 JSON 无时间戳时按文件修改时间回填。
 - **图片翻译**：`Screenshot.ImageTranslateHotkey` 触发 `RegionCaptureService`（全屏透明遮罩拖框，AllowsTransparency 必须开否则截全黑）→ `ImageTranslateService`（百度图片翻译 paste=1，复用文本翻译 AppId/Key Bearer 鉴权）→ `ImageTranslateWindow`（贴合图 + 复制译文）。
 - **热键 ID**：TRANSLATE=0xBFFF(固定Ctrl+Shift+T)、SCREENSHOT=0xBFFE、CLIPBOARD=0xBFD0、IMAGE_TRANSLATE=0xBFD1、设备 BASE=0xB000、测试 0xBE00。设置时 TestHotkey 试注册检测占用。
 - **启动**（v1.3.0）：PerformanceCounter 后台预热（`WarmupCounters`，.NET 8 首次创建 ~5s）；LoadData 延迟用 `System.Threading.Timer`（ApplicationIdle 在 .NET 8 冷启动被推迟 ~6s）；`Encoding.RegisterProvider(CodePagesEncodingProvider)` 在 Main 最前（GBK 936，电源计划/升级脚本必需）。

@@ -26,6 +26,7 @@ namespace PowerAudioManager
         const string GameBarDirPrefKey = "Screenshot.GameBarDir";
         const string GameBarHotkeyPrefKey = "Screenshot.GameBarHotkey";
         const string GameBarEnabledPrefKey = "Screenshot.GameBarEnabled";
+        const string SteamF12PrefKey = "Screenshot.SteamF12";   // 按截图快捷键时同步注入 F12 触发 Steam 截图
         const string DefaultRoot = "OneBoxScreenshots";
         // Game Bar 写文件较慢，HDR 下尤甚——需捕获、色调映射/编码，同时写入 .png 和 .jxr。
         // 实测 HDR 截图在高速机器上约需 16s，故最长等待 25s
@@ -110,6 +111,7 @@ namespace PowerAudioManager
         const byte VK_CONTROL = 0x11;
         const byte VK_SHIFT = 0x10;
         const byte VK_SNAPSHOT = 0x2C; // PrintScreen
+        const byte VK_F12 = 0x7B;     // Steam 默认截图键
         const uint KEYEVENTF_KEYDOWN = 0;
         const uint KEYEVENTF_KEYUP = 0x0002;
 
@@ -157,6 +159,16 @@ namespace PowerAudioManager
             string source = null;
             try
             {
+                // Steam 截图映射：按截图快捷键时同步注入 F12，先于 OneBox 自身捕获（CopyFromScreen/GameBar）。
+                // F12 注入瞬时完成、Steam 异步捕获，体感与 OneBox 截图同时。仅在选项开启时触发；
+                // 注意 F12 会发到前台，非 Steam 游戏可能被前台程序响应（如浏览器开发工具）。
+                if (AppPrefs.GetBool(SteamF12PrefKey, false))
+                {
+                    keybd_event(VK_F12, 0, KEYEVENTF_KEYDOWN, IntPtr.Zero);
+                    keybd_event(VK_F12, 0, KEYEVENTF_KEYUP, IntPtr.Zero);
+                    AppLog.Log("Screenshot", "steam F12 injected");
+                }
+
                 var hwnd = GetForegroundWindow();
                 if (hwnd == IntPtr.Zero) { error = "无可截取的前台窗口"; AppLog.Log("Screenshot", "fail: no foreground window"); goto done; }
 

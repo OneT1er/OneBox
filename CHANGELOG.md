@@ -9,6 +9,13 @@
 - **FastTree 加入 exe 名特征**：FastTree 特征向量增加前台 exe 名的 one-hot 编码，让模型能区分"同类别不同应用"的偏好（如不同游戏分别外放/耳机）。旧版 FastTree 只看进程类别（Game/Creative/...），同类下不同游戏无法区分；k-NN 本就用 exe 名做强信号，现在 FastTree 也跟上
 - **性能**：`SampleStore.Count` 加缓存（Append 自增/Clear 清零），避免推理/训练门每秒读整个 CSV
 
+### 新功能
+- **Steam 截图映射**：截图 tab 新增开关（`Screenshot.SteamF12`，默认关）。开启后按截图快捷键时先注入 F12 触发 Steam 截图，再走 OneBox 自身捕获（CopyFromScreen/Game Bar），体感同时。仅在 Steam 运行且前台为启用叠加的 Steam 游戏时生效
+- **性能趋势图表时长档扩充**：5分/15分/30分/1时/2时/6时/12时/全天，默认 15 分（原仅 15分/1时/全天）
+
+### 修复
+- **性能图表在无数据处填旧值**：`HardwareMonitorService` 传感器读数失败时用 `_lastMetrics` 兜底供 UI 显示（避免闪烁），但旧版把兜底旧值也存入 `PerfHistory`，导致图表在没采到数据的地方填上一次的值。现 `MetricValue` 加 `Cached` 标记，`PerfHistory` 仅存真实读数；`PerfChart` 改为按时间戳映射 x，相邻点时间差超阈值（3 间隔/≥5s）断线--传感器失配/跨重启缺口显示为断口而非填旧值。`PerfHistory` 持久化时间戳，旧 JSON 无时间戳时按文件修改时间回填
+
 ### 重构
 - 移除死代码：`LearningEngine.Enabled`、`DecisionTreeLearner.Unload()`、`FeatureCollector.IsRunning/IntervalMs` 公共成员、`DevicePrefs.SetHotkey` 别名、MainWindow 三个未用字段（`_perfChart`/`_perfChartPanel`/`_dragDropWired`，消除 CS0169/CS0649 警告）
 - 方法改名 `StartAppProfile/RestartAppProfile` -> `StartLearning/RestartLearning`（AppProfile 是已删旧概念）

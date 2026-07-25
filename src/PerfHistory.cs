@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
@@ -8,9 +9,10 @@ using System.Windows.Media;
 namespace PowerAudioManager
 {
     /// <summary>
-    /// 性能监控历史采样：按 ConfigKey 存最近 N 个值（环形 float[]，容量全天 86400 @1s）。
+    /// 性能监控历史采样：按 ConfigKey 存最近 N 个 (值, 时间戳)（环形数组，容量全天 86400 @1s）。
     /// 环形数组：Add 为 O(1)（替代 List.RemoveAt(0) 的 O(n)），内存固定无扩容。
-    /// 采集温度（°C）与风扇（RPM）。退出写 JSON / 启动读 JSON，跨重启保留全天历史。
+    /// 采集温度（°C）与风扇（RPM）。仅存真实读数（Cached 兜底值跳过），故传感器失配/跨重启缺口在图表上断线而非填旧值。
+    /// 退出写 JSON / 启动读 JSON，跨重启保留全天历史；时间戳随值一并持久化。
     /// </summary>
     public static class PerfHistory
     {
@@ -21,6 +23,7 @@ namespace PowerAudioManager
         class Series
         {
             public float[] Buf = new float[Capacity];
+            public DateTime[] Times = new DateTime[Capacity];
             public int Head, Count;
             public string Name, Icon;
             public bool IsTemp;
@@ -65,6 +68,7 @@ namespace PowerAudioManager
                     var currentKeys = new HashSet<string>(metrics.Where(m => m.IsTemp || m.Unit == "RPM").Select(m => m.ConfigKey));
                     foreach (var k in _series.Keys.Where(k => !currentKeys.Contains(k)).ToList()) _series.Remove(k);
                 }
+                var now = DateTime.Now;
                 foreach (var m in metrics)
                 {
                     bool isTemp = m.IsTemp;
@@ -72,9 +76,11 @@ namespace PowerAudioManager
                     if (!isTemp && !isFan) continue;
                     if (string.IsNullOrEmpty(m.ConfigKey)) continue;
                     if (!_series.TryGetValue(m.ConfigKey, out var s)) { s = new Series(); _series[m.ConfigKey] = s; }
-                    if (m.Value.HasValue)
+                    // 仅存真实读数；Cached（兜底旧值）跳过，历史图表在缺口处断线而非填旧值
+                    if (m.Value.HasValue && !m.Cached)
                     {
                         s.Buf[s.Head] = m.Value.Value;
+                        s.Times[s.Head] = now;
                         s.Head = (s.Head + 1) % Capacity;
                         if (s.Count < Capacity) s.Count++;
                     }
@@ -85,8 +91,8 @@ namespace PowerAudioManager
             }
         }
 
-        // maxPoints=0 取全部；否则取最近 maxPoints 个
-        public static List<ChartSeries> GetSeries(int maxPoints)
+        // 返回 [from, to] 时间窗内的点（带时间戳），供图表按真实时间定位、缺口断线。
+        public static List<ChartSeries> GetSeries(DateTime from, DateTime to)
         {
             lock (_lock)
             {
@@ -96,15 +102,23 @@ namespace PowerAudioManager
                 {
                     var s = kv.Value;
                     if (s.Count == 0) { idx++; continue; }
-                    int n = maxPoints > 0 && s.Count > maxPoints ? maxPoints : s.Count;
-                    int start = (s.Head - n + Capacity) % Capacity;
-                    var pts = new List<float>(n);
-                    for (int i = 0; i < n; i++) pts.Add(s.Buf[(start + i) % Capacity]);
+                    var pts = new List<float>();
+                    var times = new List<DateTime>();
+                    for (int i = 0; i < s.Count; i++)
+                    {
+                        int bi = (s.Head - s.Count + i + Capacity) % Capacity;
+                        var t = s.Times[bi];
+                        if (t < from || t > to) continue;
+                        pts.Add(s.Buf[bi]);
+                        times.Add(t);
+                    }
+                    if (pts.Count == 0) { idx++; continue; }
                     result.Add(new ChartSeries
                     {
                         Name = s.Name ?? kv.Key,
                         Color = Palette[idx % Palette.Length],
                         Points = pts,
+                        Times = times,
                         IsTemp = s.IsTemp,
                         Unit = s.IsTemp ? "°C" : "rpm"
                     });
@@ -118,7 +132,7 @@ namespace PowerAudioManager
         public static int SeriesCount { get { lock (_lock) return _series.Count; } }
 
         // ---- 持久化（退出写 / 启动读）----
-        class SeriesData { public string name { get; set; } public string icon { get; set; } public bool isTemp { get; set; } public List<float> points { get; set; } }
+        class SeriesData { public string name { get; set; } public string icon { get; set; } public bool isTemp { get; set; } public List<float> points { get; set; } public List<string> times { get; set; } }
 
         public static void Save()
         {
@@ -132,9 +146,14 @@ namespace PowerAudioManager
                     {
                         var s = kv.Value;
                         var pts = new List<float>(s.Count);
+                        var times = new List<string>(s.Count);
                         int start = (s.Head - s.Count + Capacity) % Capacity;
-                        for (int i = 0; i < s.Count; i++) pts.Add(s.Buf[(start + i) % Capacity]);
-                        data[kv.Key] = new SeriesData { name = s.Name, icon = s.Icon, isTemp = s.IsTemp, points = pts };
+                        for (int i = 0; i < s.Count; i++)
+                        {
+                            pts.Add(s.Buf[(start + i) % Capacity]);
+                            times.Add(s.Times[(start + i) % Capacity].ToString("o", CultureInfo.InvariantCulture));
+                        }
+                        data[kv.Key] = new SeriesData { name = s.Name, icon = s.Icon, isTemp = s.IsTemp, points = pts, times = times };
                     }
                 }
                 File.WriteAllText(FilePath, JsonSerializer.Serialize(data));
@@ -150,17 +169,30 @@ namespace PowerAudioManager
                 if (!File.Exists(FilePath)) return;
                 var data = JsonSerializer.Deserialize<Dictionary<string, SeriesData>>(File.ReadAllText(FilePath));
                 if (data == null) return;
+                // 旧版 JSON 无 times：用文件最后修改时间回填（数据结束于保存时刻），避免旧数据被当成"最近"绘制
+                DateTime fileTime = File.GetLastWriteTime(FilePath);
                 lock (_lock)
                 {
                     foreach (var kv in data)
                     {
                         var s = new Series { Name = kv.Value.name, Icon = kv.Value.icon, IsTemp = kv.Value.isTemp };
-                        if (kv.Value.points != null)
-                            foreach (var v in kv.Value.points)
+                        var pts = kv.Value.points;
+                        var times = kv.Value.times;
+                        if (pts != null)
+                        {
+                            for (int i = 0; i < pts.Count; i++)
                             {
-                                s.Buf[s.Head] = v; s.Head = (s.Head + 1) % Capacity;
+                                DateTime t;
+                                if (times != null && i < times.Count && DateTime.TryParse(times[i], null, DateTimeStyles.RoundtripKind, out var parsed))
+                                    t = parsed;
+                                else
+                                    t = fileTime.AddSeconds(-(pts.Count - 1 - i)); // 旧格式回填：1s 间距结束于保存时刻
+                                s.Buf[s.Head] = pts[i];
+                                s.Times[s.Head] = t;
+                                s.Head = (s.Head + 1) % Capacity;
                                 if (s.Count < Capacity) s.Count++;
                             }
+                        }
                         _series[kv.Key] = s;
                     }
                 }
