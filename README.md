@@ -190,7 +190,7 @@ OneBox/
 ```csharp
 public const string Owner = "OneT1er";
 public const string Repo = "OneBox";
-public static readonly Version CurrentVersion = new Version(1, 7, 0);
+public static readonly Version CurrentVersion = new Version(1, 7, 1);
 ```
 
 发新版时在 GitHub 创建 Release，tag 用 `v1.3.0` 格式（程序解析其中的版本号与 `CurrentVersion` 对比）。若 Release 附带 `OneBox.exe` 资产，支持应用内下载并自动替换升级；否则打开 Release 页面手动下载。预发布版本不进 `releases/latest`，不影响稳定用户。

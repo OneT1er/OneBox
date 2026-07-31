@@ -29,7 +29,7 @@ namespace PowerAudioManager
         public const string Owner = "OneT1er";
         public const string Repo = "OneBox";
         // 发版时升级此值，需与 GitHub release tag 一致。
-        public static readonly Version CurrentVersion = new Version(1, 7, 0);
+        public static readonly Version CurrentVersion = new Version(1, 7, 1);
 
         const string ApiUrl = $"https://api.github.com/repos/{Owner}/{Repo}/releases/latest";
         const string ReleasesPage = $"https://github.com/{Owner}/{Repo}/releases/latest";
@@ -288,36 +288,55 @@ namespace PowerAudioManager
             return tmp;
         }
 
-        // 写批处理：等待进程退出 → 强杀所有 OneBox → 覆盖 exe → 重新启动。
+        // 写批处理：等待进程退出 → 杀 GUI 实例 → 重命名旧 exe 释放文件名 → 写入新 exe → 重新启动。
+        // 服务 OneBoxSvc 可能以同一 exe 运行（LocalSystem，普通权限 taskkill 杀不掉），运行中的 exe 允许重命名：
+        // 先把旧 exe 改名为 .old.*.exe，主文件名即无锁，可直接写入新文件，无需管理员/杀服务。
+        // 旧文件在进程退出后删除（删不掉则残留，下次更新自动清理）；全部操作写 %TEMP%\OneBox_update.log 便于诊断。
+        // 延时用 ping 而不用 timeout：隐藏窗口/管道环境下 timeout 会报错立即返回，失去等待语义。
         static void LaunchUpdaterAndExit(string downloadedExePath)
         {
             string currentExe = Environment.ProcessPath;
+            string currentName = Path.GetFileName(currentExe);
+            string oldPattern = currentName + ".old.*.exe";
+            string oldRandomName = currentName + ".old.%RANDOM%.exe";   // rename 目标只给文件名（rename 不接受路径）
+            string oldGlob = Path.Combine(Path.GetDirectoryName(currentExe), oldPattern);
             // 随机批处理名，防本地攻击者预置恶意 .bat。
             string batPath = Path.Combine(Path.GetTempPath(), $"OneBox_{Path.GetRandomFileName()}.bat");
+            string logPath = Path.Combine(Path.GetTempPath(), "OneBox_update.log");
             var sb = new StringBuilder();
             sb.AppendLine("@echo off");
             sb.AppendLine("chcp 65001 >nul");
-            sb.AppendLine($"echo [Update] copy \"{downloadedExePath}\" -> \"{currentExe}\"");
+            sb.AppendLine($"echo [Update] %date% %time% replace \"{currentExe}\" >> \"{logPath}\"");
             // 先等当前进程退出（释放 exe 文件锁）
-            sb.AppendLine("timeout /t 2 /nobreak >nul");
-            // 杀掉所有 OneBox 实例（包括服务启动的），确保 exe 不被占用
+            sb.AppendLine("ping -n 3 127.0.0.1 >nul");
+            // 杀掉所有 OneBox 实例；LocalSystem 服务实例杀不掉也没关系（下面对旧文件重命名）
             sb.AppendLine("taskkill /f /im OneBox.exe >nul 2>&1");
-            sb.AppendLine("timeout /t 1 /nobreak >nul");
+            sb.AppendLine("ping -n 2 127.0.0.1 >nul");
+            // 清理上次更新残留的旧文件（服务还锁着的会延迟删除）
+            sb.AppendLine($"del /f /q \"{oldGlob}\" >nul 2>&1");
+            // 重命名旧 exe（运行中的 exe 允许重命名），主文件名释放后可写入新文件
+            sb.AppendLine($"if exist \"{currentExe}\" rename \"{currentExe}\" \"{oldRandomName}\" >> \"{logPath}\" 2>&1");
             // 重试复制，最多 10 次
             sb.AppendLine("set /a tries=0");
             sb.AppendLine(":copy");
-            sb.AppendLine($"copy /Y \"{downloadedExePath}\" \"{currentExe}\" >nul 2>&1");
+            sb.AppendLine($"copy /Y \"{downloadedExePath}\" \"{currentExe}\" >> \"{logPath}\" 2>&1");
             sb.AppendLine("if errorlevel 1 (");
             sb.AppendLine("  set /a tries+=1");
-            sb.AppendLine("  echo [Update] copy failed, retry %tries%");
+            sb.AppendLine("  echo [Update] copy failed, retry %tries% >> \"{logPath}\"");
             sb.AppendLine("  if %tries% LSS 10 (");
             sb.AppendLine("    taskkill /f /im OneBox.exe >nul 2>&1");
-            sb.AppendLine("    timeout /t 1 /nobreak >nul");
+            sb.AppendLine("    ping -n 2 127.0.0.1 >nul");
             sb.AppendLine("    goto copy");
             sb.AppendLine("  )");
+            sb.AppendLine("  echo [Update] COPY FAILED after 10 tries. manual fix: >> \"{logPath}\"");
+            sb.AppendLine($"  echo [Update]   copy /Y \"{downloadedExePath}\" \"{currentExe}\" >> \"{logPath}\"");
+            sb.AppendLine("  goto start");
             sb.AppendLine(")");
             sb.AppendLine($"del /f /q \"{downloadedExePath}\" >nul 2>&1");
-            sb.AppendLine($"echo [Update] starting \"{currentExe}\"");
+            // 清掉本次重命名的旧文件（进程未退出则延迟删除，服务重启后自动消失）
+            sb.AppendLine($"del /f /q \"{oldGlob}\" >nul 2>&1");
+            sb.AppendLine(":start");
+            sb.AppendLine($"echo [Update] starting \"{currentExe}\" >> \"{logPath}\"");
             sb.AppendLine($"start \"\" \"{currentExe}\"");
             sb.AppendLine("(goto) 2>nul & del \"%~f0\"");
             File.WriteAllText(batPath, sb.ToString(), Encoding.GetEncoding(936));
