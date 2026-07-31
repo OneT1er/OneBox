@@ -24,9 +24,9 @@ namespace PowerAudioManager
         // requestRebuild 在槽位路径变更时回调，宿主据此重新渲染图标
         public static void Build(StackPanel contentPanel, Action requestRebuild)
         {
-            if (contentPanel.Children.Count > 0) contentPanel.Children.Add(MainWindow.MakeDivider());
+            if (contentPanel.Children.Count > 0) contentPanel.Children.Add(UiKit.MakeDivider());
             var header = new TextBlock {
-                Foreground = new SolidColorBrush(MainWindow.AccentColor), FontSize = 12,
+                Foreground = new SolidColorBrush(UiKit.AccentColor), FontSize = 12,
                 FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 0, 0, 6) };
             header.Inlines.Add(new Run("🚀") { FontFamily = AppResources.EmojiFont });
             header.Inlines.Add(new Run(" 快捷启动"));
@@ -115,12 +115,12 @@ namespace PowerAudioManager
                 Width = 44, Height = 44,
                 Margin = new Thickness(0, 0, 6, 6),
                 Cursor = Cursors.Hand,
-                Background = new SolidColorBrush(MainWindow.CardColor),
-                BorderBrush = new SolidColorBrush(MainWindow.BorderColor),
+                Background = new SolidColorBrush(UiKit.CardColor),
+                BorderBrush = new SolidColorBrush(UiKit.BorderColor),
                 ToolTip = string.IsNullOrEmpty(path) ? "拖入程序 / 快捷方式 / 文件夹 / URL" : path,
                 AllowDrop = true
             };
-            MainWindow.ApplyIconButtonStyle(btn);
+            UiKit.ApplyIconButtonStyle(btn);
 
             if (!string.IsNullOrEmpty(path))
             {
@@ -151,7 +151,7 @@ namespace PowerAudioManager
             {
                 btn.Content = "+";
                 btn.FontSize = 18;
-                btn.Foreground = new SolidColorBrush(MainWindow.TextSecondary);
+                btn.Foreground = new SolidColorBrush(UiKit.TextSecondary);
             }
 
             btn.Click += (s, e) =>
@@ -200,7 +200,7 @@ namespace PowerAudioManager
                 if (LauncherBar.HasDropData(e.Data))
                 {
                     e.Effects = DragDropEffects.Copy;
-                    btn.BorderBrush = new SolidColorBrush(MainWindow.AccentColor);
+                    btn.BorderBrush = new SolidColorBrush(UiKit.AccentColor);
                     btn.BorderThickness = new Thickness(2);
                 }
                 else { e.Effects = DragDropEffects.None; }
@@ -213,13 +213,13 @@ namespace PowerAudioManager
             };
             btn.DragLeave += (s, e) =>
             {
-                btn.BorderBrush = new SolidColorBrush(MainWindow.BorderColor);
+                btn.BorderBrush = new SolidColorBrush(UiKit.BorderColor);
                 btn.BorderThickness = new Thickness(1);
                 e.Handled = true;
             };
             btn.Drop += (s, e) =>
             {
-                btn.BorderBrush = new SolidColorBrush(MainWindow.BorderColor);
+                btn.BorderBrush = new SolidColorBrush(UiKit.BorderColor);
                 btn.BorderThickness = new Thickness(1);
                 string dropped = ExtractDropped(e);
                 if (!string.IsNullOrEmpty(dropped)) AddDropped(dropped, requestRebuild);
@@ -455,3 +455,4 @@ namespace PowerAudioManager
         }
     }
 }
+

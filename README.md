@@ -63,15 +63,8 @@
 - **温度 / 风扇**：实时显示 CPU、GPU、主板、内存、硬盘等温度与风扇转速（传感器自选；管理员权限经后台服务 helper 经命名管道提供，无 UAC）
 - **性能趋势图表**：悬浮窗入口 + 双击大图；双 Y 轴（温度 + 风扇）；鼠标 tooltip（十字线 + 各线值 + 该时间点前台应用）；前台应用时间段色块标注；时长档 5 分 / 15 分 / 30 分 / 1 时 / 2 时 / 6 时 / 12 时 / 全天，默认 15 分
 - **缺口断线**：传感器失配或跨重启的无数据区间显示为断口，而非用上一次的值填满（仅存真实读数，按时间戳对齐）
-- 历史持久化 JSON，跨重启保留全天数据
+- 历史持久化 JSON，跨重启保留全天数据；**仅图表打开时采集**（关闭即释放内存、不再写入），打开时自动加载并显示以前记录的历史
 
-### 自学习（情境决策树）
-- 每秒采集 CPU/GPU 占用、全屏、电池、时间、进程类别、前台 exe 等情境特征
-- **两条样本来源**：手动切电源 / 音频时记一条（强信号）；情境稳定时每 45 秒自动记一条当前状态（观察式采样，一天即可积累足够样本）
-- **k-NN 回退**：≥20 条样本即可预测（exe 名强信号 + 情境距离加权投票），消除冷启动空窗
-- **ML.NET FastTree 决策树**：≥50 条自动训练（电源 / 音频各一模型；特征含 exe 名 one-hot，可区分同类别不同应用的偏好，如不同游戏分别外放 / 耳机），每 +25 且 ≥5min 重训
-- 推理连续 5 秒稳定才自动套用，切后冷却 30 秒，手动切换后暂停 10 分钟并记新样本
-- 设置 -> 自学习 tab 管理开关 / 手动训练 / 重置 / 清空 / 自定义游戏进程
 
 ### 快捷启动栏
 4 格启动栏，点击空格选择程序（`.exe` / `.lnk`，自动解析快捷方式目标并提取图标）；点击图标启动；右键清空；支持拖拽放入。
@@ -90,7 +83,6 @@
 - **截图**：保存位置、截图快捷键、Game Bar 回退配置
 - **剪贴板**：历史条数等
 - **温度**：传感器选择、采样间隔、告警阈值
-- **自学习**：总开关 / 自动套用 / 通知、样本与模型状态（手动训练 / 重置 / 清空）、自定义游戏进程
 
 ### 自动更新
 - 启动时后台静默检查 GitHub Release
@@ -163,11 +155,7 @@ OneBox/
 │   ├── ClipboardHistory.cs     # 剪贴板历史（DPAPI 加密）
 │   ├── HardwareMonitorService.cs  # 温度/风扇（LibreHardwareMonitor，admin helper 经管道推送）
 │   ├── PerfHistory.cs / PerfChart.cs / PerfChartWindow.cs  # 性能趋势图表（时间戳 + 缺口断线）
-│   ├── ForegroundWatcher.cs / ForegroundHistory.cs  # 前台应用 + 电源/音频状态轮询
-│   ├── FeatureCollector.cs     # 情境特征采集（CPU/GPU/全屏/电池/时间/进程类别）
-│   ├── SampleStore.cs          # 学习样本 CSV 持久化（Count 缓存）
-│   ├── DecisionTreeLearner.cs  # ML.NET FastTree + k-NN 回退预测
-│   ├── LearningEngine.cs       # 自学习引擎（观察式采样 + 自动套用）
+│   ├── ForegroundWatcher.cs / ForegroundHistory.cs  # 前台 exe 捕获 / 前台切换历史（图表标注用）
 │   ├── OneBoxService.cs        # Windows 服务（开机自启 / 温度 helper 守护，无 UAC）
 │   ├── TempMonitorHelper.cs    # admin 温度 helper（命名管道推送）
 │   ├── AutoStartService.cs     # 开机自启（服务 / 计划任务 / 注册表）
@@ -209,7 +197,7 @@ public static readonly Version CurrentVersion = new Version(1, 6, 3);
 ## 🛠️ 开发说明
 
 - **.NET 8 + WPF + WinForms**：用 `dotnet build` 构建，现代 C# 语法。主界面和对话框用 WPF，系统托盘用 WinForms（NotifyIcon）。
-- NuGet 依赖：`Vortice.DXGI`（HDR 检测）、`System.Text.Encoding.CodePages`（GBK 编码，电源计划/升级脚本必需）、`Microsoft.ML` + `Microsoft.ML.FastTree`（自学习决策树）、`LibreHardwareMonitorLib`（温度/风扇）、`MaterialDesignThemes`（主题）。
+- NuGet 依赖：`Vortice.DXGI`（HDR 检测）、`System.Text.Encoding.CodePages`（GBK 编码，电源计划/升级脚本必需）、`LibreHardwareMonitorLib`（温度/风扇）、`MaterialDesignThemes`（主题）。
 - 音频切换通过 MMDevice API + IPolicyConfig COM 接口实现。
 - 字体改用系统字体（设置里可选），不再打包字体文件。
 - 内存清理使用 NT Native API（`NtSetSystemInformation`），与 memreduct 同源。

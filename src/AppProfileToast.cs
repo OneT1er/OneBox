@@ -7,20 +7,28 @@ using System.Windows.Threading;
 
 namespace PowerAudioManager
 {
-    // 自学习自动切换的右下角通知，仿 ScreenshotToast 样式：无边框圆角深色卡片，
-    // WS_EX_NOACTIVATE 不抢焦点，约 3.5s 淡出，点击可关闭。Learn.Notify 控制是否弹。
+    // 电源/音频手动切换的右下角通知，仿 ScreenshotToast 样式：无边框圆角深色卡片，
+    // WS_EX_NOACTIVATE 不抢焦点，约 3.5s 淡出，点击可关闭。
     internal static class AppProfileToast
     {
         static Window _current;
 
-        // powerName/audioName 为 null 表示该项未切换（不显示该行）。
-        public static void Show(string exeName, string powerName, string audioName)
+
+        // 手动音频循环切换提示（SoundSwitch 式）：只显示音频行，标题用"音频已切换"。
+        public static void ShowAudioSwitch(string deviceName)
         {
-            if (string.IsNullOrEmpty(exeName)) return;
-            Application.Current?.Dispatcher.BeginInvoke(new Action(() => ShowInternal(exeName, powerName, audioName)));
+            if (string.IsNullOrEmpty(deviceName)) return;
+            Application.Current?.Dispatcher.BeginInvoke(new Action(() => ShowInternal("🔊 音频已切换", null, deviceName)));
         }
 
-        static void ShowInternal(string exeName, string powerName, string audioName)
+        // 手动电源循环切换提示：只显示电源行，标题用"电源已切换"。
+        public static void ShowPowerSwitch(string planName)
+        {
+            if (string.IsNullOrEmpty(planName)) return;
+            Application.Current?.Dispatcher.BeginInvoke(new Action(() => ShowInternal("⚡ 电源已切换", planName, null)));
+        }
+
+        static void ShowInternal(string title, string powerName, string audioName)
         {
             if (_current != null) { try { _current.Close(); } catch { } _current = null; }
 
@@ -53,7 +61,7 @@ namespace PowerAudioManager
             var stack = new StackPanel();
             stack.Children.Add(new TextBlock
             {
-                Text = "🎓 已为 " + exeName + " 自动切换",
+                Text = title,
                 Foreground = Brushes.White,
                 FontSize = 12,
                 FontWeight = FontWeights.SemiBold,

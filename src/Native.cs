@@ -47,6 +47,8 @@ namespace PowerAudioManager
         public const int HOTKEY_ID_SCREENSHOT = 0xBFFE;
         public const int HOTKEY_ID_CLIPBOARD = 0xBFD0;
         public const int HOTKEY_ID_IMAGE_TRANSLATE = 0xBFD1;
+        public const int HOTKEY_ID_AUDIO_CYCLE = 0xBFD2;   // 循环切换下一个音频输出设备（SoundSwitch 式）
+        public const int HOTKEY_ID_POWER_CYCLE = 0xBFD3;    // 循环切换下一个电源计划
 
         [DllImport("kernel32.dll")]
         public static extern bool SetProcessWorkingSetSize(IntPtr hProcess, int min, int max);

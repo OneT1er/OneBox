@@ -184,6 +184,8 @@ namespace PowerAudioManager
         // 日志位于 exe 同目录，便于查找。若 exe 目录不可写则回退到 %TEMP%。
         static readonly string _path = ResolveLogPath();
         static readonly object _lock = new object();
+        /// <summary>日志文件绝对路径（exe 同目录 OneBox.log，不可写则 %TEMP%）。供设置面板"查看日志"按钮打开。</summary>
+        public static string Path => _path;
         static string ResolveLogPath()
         {
             try

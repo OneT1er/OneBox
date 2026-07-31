@@ -94,8 +94,8 @@ namespace PowerAudioManager
                     AppPrefs.SetBool("LockPosition", _owner._lockPosition);
                     if (_owner._pinBtn != null)
                     {
-                        _owner._pinBtn.Content = MainWindow.PinIcon(_owner._lockPosition);
-                        _owner._pinBtn.Foreground = new System.Windows.Media.SolidColorBrush(_owner._lockPosition ? MainWindow.AccentColor : MainWindow.TextSecondary);
+                        _owner._pinBtn.Content = UiKit.PinIcon(_owner._lockPosition);
+                        _owner._pinBtn.Foreground = new System.Windows.Media.SolidColorBrush(_owner._lockPosition ? UiKit.AccentColor : UiKit.TextSecondary);
                     }
                 };
                 _menu.Items.Insert(_menu.Items.Count - 1, _lockItem);
@@ -303,3 +303,4 @@ namespace PowerAudioManager
         }
     }
 }
+

@@ -47,11 +47,43 @@ namespace PowerAudioManager
         static readonly Typeface LabelType =
             new Typeface(SystemFonts.MessageFontFamily, FontStyles.Normal, FontWeights.Normal, FontStretches.Normal);
 
+        // 每秒重绘都会用到的画笔/笔：提为静态冻结，避免每帧 new 一批 Freezable 制造 GC 压力。
+        // 按系列颜色缓存（颜色数 = 系列数，有界），命中即复用冻结实例。
+        static readonly Dictionary<Color, SolidColorBrush> _brushCache = new Dictionary<Color, SolidColorBrush>();
+        static readonly Dictionary<Color, Pen> _penCache = new Dictionary<Color, Pen>();
+        static readonly Pen _gridPen;
+        static readonly Pen _segPen;
+        static readonly SolidColorBrush _segBrushAlt;
+        static readonly Pen _vpen;
+
         double _mouseX = -1;
 
         static PerfChart()
         {
             BgBrush.Freeze(); AxisBrush.Freeze(); TempLabelBrush.Freeze(); FanLabelBrush.Freeze(); LegendBrush.Freeze(); TooltipBg.Freeze();
+            _gridPen = new Pen(AxisBrush, 1) { DashStyle = DashStyles.Dash }; _gridPen.Freeze();
+            _segBrushAlt = new SolidColorBrush(Color.FromArgb(0x20, 0x8E, 0x8C, 0xD8)); _segBrushAlt.Freeze();
+            _segPen = new Pen(new SolidColorBrush(Color.FromArgb(0x60, 0x9A, 0x96, 0xB8)), 1) { DashStyle = DashStyles.Dot }; _segPen.Freeze();
+            _vpen = new Pen(new SolidColorBrush(Color.FromRgb(0x9A, 0x96, 0xB8)), 1) { DashStyle = DashStyles.Dot }; _vpen.Freeze();
+        }
+
+        static SolidColorBrush BrushFor(Color c)
+        {
+            if (!_brushCache.TryGetValue(c, out var b))
+            {
+                b = new SolidColorBrush(c); b.Freeze();
+                _brushCache[c] = b;
+            }
+            return b;
+        }
+        static Pen PenFor(Color c)
+        {
+            if (!_penCache.TryGetValue(c, out var p))
+            {
+                p = new Pen(new SolidColorBrush(c), 1.5); p.Freeze();
+                _penCache[c] = p;
+            }
+            return p;
         }
 
         public PerfChart() { SnapsToDevicePixels = true; Width = double.NaN; Focusable = false; Background = Brushes.Transparent; }
@@ -132,12 +164,10 @@ namespace PowerAudioManager
             dc.DrawRoundedRectangle(BgBrush, null, new Rect(0, 0, w, h), 6, 6);
 
             // 网格 + 双 Y 轴标签
-            var gridPen = new Pen(AxisBrush, 1) { DashStyle = DashStyles.Dash };
-            gridPen.Freeze();
             for (int pct = 0; pct <= 100; pct += 25)
             {
                 double y = padTop + plotH - (pct / 100.0) * plotH;
-                dc.DrawLine(gridPen, new Point(padLeft, y), new Point(w - padRight, y));
+                dc.DrawLine(_gridPen, new Point(padLeft, y), new Point(w - padRight, y));
                 var ftT = MakeText(pct + "°", 9, TempLabelBrush, ppd);
                 dc.DrawText(ftT, new Point(1, y - ftT.Height / 2));
                 if (!OnlyTemp)
@@ -157,10 +187,6 @@ namespace PowerAudioManager
             // 前台应用时间段标注：半透明色块（交替）+ 切换点虚线 + exe 标签，按 x 轴时间对齐
             if (Segments != null && Segments.Count > 0 && plotH > 2)
             {
-                var segBrushAlt = new SolidColorBrush(Color.FromArgb(0x20, 0x8E, 0x8C, 0xD8));
-                segBrushAlt.Freeze();
-                var segPen = new Pen(new SolidColorBrush(Color.FromArgb(0x60, 0x9A, 0x96, 0xB8)), 1) { DashStyle = DashStyles.Dot };
-                segPen.Freeze();
                 int si = 0;
                 foreach (var seg in Segments)
                 {
@@ -172,8 +198,8 @@ namespace PowerAudioManager
                     if (x2 > w - padRight) x2 = w - padRight;
                     if (x2 <= x1) { si++; continue; }
                     if ((si % 2) == 0)
-                        dc.DrawRectangle(segBrushAlt, null, new Rect(x1, padTop, x2 - x1, plotH));
-                    if (x1 > padLeft) dc.DrawLine(segPen, new Point(x1, padTop), new Point(x1, h - padBottom));
+                        dc.DrawRectangle(_segBrushAlt, null, new Rect(x1, padTop, x2 - x1, plotH));
+                    if (x1 > padLeft) dc.DrawLine(_segPen, new Point(x1, padTop), new Point(x1, h - padBottom));
                     double segW = x2 - x1;
                     if (segW > 28 && !string.IsNullOrEmpty(seg.Exe))
                     {
@@ -193,8 +219,7 @@ namespace PowerAudioManager
                 double yMax = s.IsTemp ? 100.0 : fanMax;
                 if (yMax <= 0) yMax = 1;
 
-                var pen = new Pen(new SolidColorBrush(s.Color), 1.5);
-                pen.Freeze();
+                var pen = PenFor(s.Color);
                 var geo = new StreamGeometry();
                 int lastInWin = -1;
                 using (var ctx = geo.Open())
@@ -226,7 +251,7 @@ namespace PowerAudioManager
                     double lx = TimeToX(s.Times[lastInWin]);
                     float lv = Clamp(s.Points[lastInWin], s.IsTemp, yMax);
                     double ly = padTop + plotH - (lv / yMax) * plotH;
-                    dc.DrawEllipse(new SolidColorBrush(s.Color), null, new Point(lx, ly), 2, 2);
+                    dc.DrawEllipse(BrushFor(s.Color), null, new Point(lx, ly), 2, 2);
                 }
             }
 
@@ -238,7 +263,7 @@ namespace PowerAudioManager
                 var ft = MakeText($"{s.Name} {cur:0}{s.Unit}", 10, LegendBrush, ppd);
                 double itemW = 12 + ft.Width + 12;
                 if (lgx + itemW > w - padRight && lgx > padLeft + 2) { lgx = padLeft + 2; lgy += 14; }
-                dc.DrawRectangle(new SolidColorBrush(s.Color), null, new Rect(lgx, lgy + 3, 8, 8));
+                dc.DrawRectangle(BrushFor(s.Color), null, new Rect(lgx, lgy + 3, 8, 8));
                 dc.DrawText(ft, new Point(lgx + 12, lgy));
                 lgx += itemW;
             }
@@ -262,8 +287,7 @@ namespace PowerAudioManager
             // tooltip：十字线 + 各线在该时间点最近的值卡片（顶部显示该时间点的前台应用）
             if (EnableTooltip && _mouseX >= padLeft && _mouseX <= w - padRight && plotH > 2)
             {
-                var vpen = new Pen(new SolidColorBrush(Color.FromRgb(0x9A, 0x96, 0xB8)), 1) { DashStyle = DashStyles.Dot };
-                vpen.Freeze();
+                var vpen = _vpen;
                 dc.DrawLine(vpen, new Point(_mouseX, padTop), new Point(_mouseX, h - padBottom));
 
                 double tt = (_mouseX - padLeft) / plotW;
@@ -292,7 +316,7 @@ namespace PowerAudioManager
                     double yMax = s.IsTemp ? 100.0 : fanMax; if (yMax <= 0) yMax = 1;
                     float vv = Clamp(val, s.IsTemp, yMax);
                     double y = padTop + plotH - (vv / yMax) * plotH;
-                    dc.DrawEllipse(new SolidColorBrush(s.Color), null, new Point(_mouseX, y), 3, 3);
+                    dc.DrawEllipse(BrushFor(s.Color), null, new Point(_mouseX, y), 3, 3);
                     labels.Add((s.Color, $"{s.Name} {val:0}{s.Unit}"));
                 }
 
@@ -318,7 +342,7 @@ namespace PowerAudioManager
                     }
                     for (int i = 0; i < labels.Count; i++)
                     {
-                        dc.DrawRectangle(new SolidColorBrush(labels[i].Item1), null, new Rect(cx + 6, cy + 7 + row * 14, 8, 8));
+                        dc.DrawRectangle(BrushFor(labels[i].Item1), null, new Rect(cx + 6, cy + 7 + row * 14, 8, 8));
                         var ft = MakeText(labels[i].Item2, 10, LegendBrush, ppd);
                         dc.DrawText(ft, new Point(cx + 20, cy + 4 + row * 14));
                         row++;

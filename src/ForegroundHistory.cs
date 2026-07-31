@@ -16,7 +16,7 @@ namespace PowerAudioManager
 
     /// <summary>
     /// 前台应用切换历史：独立轻量定时器（2s）用 CaptureExeName 检测前台 exe 变化，记录切换点。
-    /// 供大图 tooltip 显示“鼠标时间点对应的前台应用”。不依赖自学习开关，温度模块开启时启动。
+    /// 供大图 tooltip 显示“鼠标时间点对应的前台应用”。仅性能趋势图打开时启动（引用计数）。
     /// 退出写 JSON / 启动读 JSON，跨重启保留历史。只调 GetForegroundWindow+QueryFullProcessImageName，开销小。
     /// </summary>
     public static class ForegroundHistory
@@ -27,6 +27,9 @@ namespace PowerAudioManager
         static string _lastExe;
         static Timer _timer;
         static bool _running;
+        // 引用计数：仅当性能趋势图窗口打开时才采集 + 驻留内存（与 PerfHistory 一致）。
+        static int _openCount;
+        static bool _loaded;   // 已从磁盘加载；Save 未加载时跳过，避免空写覆盖
         const int MaxEntries = 3000;
 
         static string _fpath;
@@ -58,6 +61,31 @@ namespace PowerAudioManager
         public static void Stop()
         {
             lock (_lock) { _running = false; _timer?.Dispose(); _timer = null; }
+        }
+
+        // 性能趋势图窗口打开/关闭时调用（引用计数）。首次打开 Load+Start；最后关闭 Stop+Save+Clear 释放。
+        public static void Acquire()
+        {
+            lock (_lock)
+            {
+                if (_openCount == 0) { _loaded = Load(); Start(); }
+                _openCount++;
+            }
+        }
+
+        public static void Release()
+        {
+            lock (_lock)
+            {
+                if (_openCount == 0) return;
+                if (--_openCount == 0)
+                {
+                    Stop();
+                    try { Save(); } catch (Exception ex) { AppLog.Log("FGHistory", ex); }
+                    _entries.Clear(); _lastExe = null; _loaded = false;
+                    AppLog.Log("FGHistory", "released (in-memory cleared)");
+                }
+            }
         }
 
         static void Tick(object state)
@@ -114,6 +142,7 @@ namespace PowerAudioManager
         {
             try
             {
+                if (!_loaded) return;   // 未加载（图表已关闭，Release 时已存盘）：不空写覆盖
                 List<EntryData> data;
                 lock (_lock) data = _entries.Select(e => new EntryData { time = e.Time.ToString("o"), exe = e.Exe }).ToList();
                 File.WriteAllText(FilePath, JsonSerializer.Serialize(data));
@@ -122,13 +151,14 @@ namespace PowerAudioManager
             catch (Exception ex) { AppLog.Log("FGHistory", "save fail: " + ex.Message); }
         }
 
-        public static void Load()
+        // 返回是否成功加载（文件不存在视为成功）。失败时 Release 的 Save 跳过，避免空写覆盖旧文件。
+        public static bool Load()
         {
             try
             {
-                if (!File.Exists(FilePath)) return;
+                if (!File.Exists(FilePath)) return true;
                 var data = JsonSerializer.Deserialize<List<EntryData>>(File.ReadAllText(FilePath));
-                if (data == null) return;
+                if (data == null) return true;
                 lock (_lock)
                 {
                     _entries.Clear();
@@ -138,8 +168,9 @@ namespace PowerAudioManager
                     _lastExe = _entries.Count > 0 ? _entries[_entries.Count - 1].Exe : null;
                 }
                 AppLog.Log("FGHistory", "loaded " + _entries.Count);
+                return true;
             }
-            catch (Exception ex) { AppLog.Log("FGHistory", "load fail: " + ex.Message); }
+            catch (Exception ex) { AppLog.Log("FGHistory", "load fail: " + ex.Message); return false; }
         }
     }
 }

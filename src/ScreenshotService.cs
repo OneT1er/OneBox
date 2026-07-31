@@ -509,24 +509,6 @@ namespace PowerAudioManager
             catch { return null; }
         }
 
-        // 获取所有应用子目录中最近 N 张截图（最新在前），供悬浮窗内嵌图库预览。
-        public static System.Collections.Generic.List<string> GetRecent(int count)
-        {
-            var list = new System.Collections.Generic.List<string>();
-            try
-            {
-                if (count <= 0) return list;
-                var root = RootDir();
-                if (!System.IO.Directory.Exists(root)) return list;
-                var files = new System.Collections.Generic.List<string>(
-                    System.IO.Directory.GetFiles(root, "*.png", System.IO.SearchOption.AllDirectories));
-                files.Sort((a, b) => System.IO.File.GetLastWriteTime(b).CompareTo(System.IO.File.GetLastWriteTime(a)));
-                for (int i = 0; i < files.Count && i < count; i++) list.Add(files[i]);
-            }
-            catch { }
-            return list;
-        }
-
         public static string RootDir()
         {
             var s = AppPrefs.GetString(RootPrefKey, "");

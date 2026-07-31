@@ -1,5 +1,16 @@
 # 更新日志
 
+## v1.7.0（未发布）
+
+### 移除
+- **自学习功能整体移除**：删除情境决策树引擎（ML.NET FastTree + k-NN 回退、观察式采样）、设置「自学习」tab、OneBox.learn.* 模型与 OneBox.samples.csv 样本逻辑；csproj 去掉 Microsoft.ML / Microsoft.ML.FastTree 依赖。电源/音频仍支持手动热键循环切换
+- 移除 FeatureCollector / SampleStore / DecisionTreeLearner / LearningEngine / ForegroundWatcher 轮询部分（仅保留轻量前台 exe 捕获，供图表标注）
+
+### 优化
+- **性能趋势图表改为按需采集**：仅图表打开时才加载历史并采集（引用计数），关闭即保存并释放内存，不再常驻记录
+- **打开图表即可见历史数据**：窗口内暂无数据时自动把时间窗锚到最后一条历史记录，以前记录的数据立即可见；新数据到达后滑回当前时间
+- **历史文件防覆盖**：历史 JSON 加载失败（损坏）时不再用空数据覆盖原文件
+
 ## v1.6.3 (2026-07-25)
 
 ### 优化

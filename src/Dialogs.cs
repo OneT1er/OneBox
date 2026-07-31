@@ -186,7 +186,7 @@ namespace PowerAudioManager
                 Cursor = Cursors.Hand,
                 ToolTip = "关闭"
             };
-            MainWindow.ApplyIconButtonStyle(closeBtn);
+            UiKit.ApplyIconButtonStyle(closeBtn);
             closeBtn.Click += (s, e) => Close();
             DockPanel.SetDock(closeBtn, Dock.Right);
             titleBar.Children.Add(closeBtn);
@@ -206,7 +206,7 @@ namespace PowerAudioManager
             _fromBox = MakeLangBox(true);
             _toBox = MakeLangBox(false);
             _btnSwap = new Button { Content = new PackIcon { Kind = PackIconKind.SwapHorizontal, Width = 16, Height = 16 }, Width = 32, Height = 28, Margin = new Thickness(4, 0, 4, 0), ToolTip = "交换源/目标语言", Foreground = new SolidColorBrush(Color.FromRgb(190, 188, 220)) };
-            MainWindow.ApplyIconButtonStyle(_btnSwap);
+            UiKit.ApplyIconButtonStyle(_btnSwap);
             _btnSwap.Click += (s, e) => SwapLanguages();
             DockPanel.SetDock(_fromBox, Dock.Left);
             DockPanel.SetDock(_btnSwap, Dock.Left);
@@ -220,7 +220,7 @@ namespace PowerAudioManager
             DockPanel.SetDock(_btnGo, Dock.Right);
             bar.Children.Add(_btnGo);
             _btnSettings = new Button { Content = new PackIcon { Kind = PackIconKind.Cog, Width = 16, Height = 16 }, Width = 32, Height = 28, Margin = new Thickness(0, 0, 4, 0), ToolTip = "翻译 API 设置", Foreground = new SolidColorBrush(Color.FromRgb(190, 188, 220)) };
-            MainWindow.ApplyIconButtonStyle(_btnSettings);
+            UiKit.ApplyIconButtonStyle(_btnSettings);
             _btnSettings.Click += (s, e) =>
             {
                 SettingsDialog.Show(this, 3);
@@ -407,7 +407,7 @@ namespace PowerAudioManager
                 BorderBrush = Brushes.Transparent, Cursor = Cursors.Hand, ToolTip = "关闭"
             };
             // MD 按钮样式的 MinWidth/MinHeight 会裁剪此 36x36 槽位中的图标；ApplyIconButtonStyle 禁用这些限制
-            MainWindow.ApplyIconButtonStyle(closeBtn);
+            UiKit.ApplyIconButtonStyle(closeBtn);
             closeBtn.Click += (s, e) => dlg.Close();
             DockPanel.SetDock(closeBtn, Dock.Right);
             titleBar.Children.Add(closeBtn);
@@ -431,3 +431,4 @@ namespace PowerAudioManager
         }
     }
 }
+

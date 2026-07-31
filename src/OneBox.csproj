@@ -23,9 +23,8 @@
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>false</SelfContained>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
-    <!-- 必须为 true：把 native 依赖（ML.NET 的 FastTreeNative/LdaNative、Vortice、LibreHardwareMonitorLib 等）
-         打包进单文件 exe，启动时解压到 %TEMP%\.net\OneBox\<hash>\。否则只发 OneBox.exe 的自动更新
-         会让 FastTree 找不到 FastTreeNative.dll -> 训练 0x8007007E 失败（自学习"立即训练"无效）。 -->
+    <!-- 必须为 true：把 native 依赖（Vortice、LibreHardwareMonitorLib 等）打包进单文件 exe，
+         启动时解压到 %TEMP%\.net\OneBox\<hash>\。否则只发 OneBox.exe 的自动更新会缺 DLL。 -->
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <IncludeAllContentForSelfExtract>false</IncludeAllContentForSelfExtract>
     <!-- ReadyToRun precompiles IL to native, cutting cold-start JIT.
@@ -46,9 +45,6 @@
     <PackageReference Include="Vortice.DXGI" Version="3.8.3" />
     <PackageReference Include="MaterialDesignThemes" Version="5.1.0" />
     <PackageReference Include="System.ServiceProcess.ServiceController" Version="8.0.0" />
-    <!-- 自学习决策树：ML.NET FastTree 多分类（电源计划/音频设备预测） -->
-    <PackageReference Include="Microsoft.ML" Version="3.0.1" />
-    <PackageReference Include="Microsoft.ML.FastTree" Version="3.0.1" />
   </ItemGroup>
 
 </Project>

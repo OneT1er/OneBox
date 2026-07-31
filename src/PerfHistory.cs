@@ -19,6 +19,10 @@ namespace PowerAudioManager
         public const int Capacity = 86400; // 全天 @1s
         static readonly object _lock = new object();
         static readonly Dictionary<string, Series> _series = new Dictionary<string, Series>();
+        // 引用计数：仅当性能趋势图窗口打开时才在内存保留历史（每条 series ~1MB）。
+        // 关闭即 Save+Clear 释放，下次打开再 Load。Add 在 _openCount==0 时直接返回，不积累。
+        static int _openCount;
+        static bool _loaded;   // _series 已从磁盘加载；Save 未加载时跳过，避免空写覆盖持久化数据
 
         class Series
         {
@@ -59,9 +63,10 @@ namespace PowerAudioManager
 
         public static void Add(List<MetricValue> metrics)
         {
-            if (metrics == null) return;
+            if (metrics == null || _openCount == 0) return;
             lock (_lock)
             {
+                if (_openCount == 0) return;
                 // 清理已删除的指标（用户在设置里删的，不再显示历史数据）
                 if (metrics.Count > 0)
                 {
@@ -128,8 +133,51 @@ namespace PowerAudioManager
             }
         }
 
+        // 所有系列里最新一条记录的时间戳（无记录返回 null）。
+        // 图表刚打开且窗口内无数据时，用它将时间窗锚到历史末尾，让以前记录的数据立即可见。
+        public static DateTime? GetLastTime()
+        {
+            lock (_lock)
+            {
+                DateTime? last = null;
+                foreach (var s in _series.Values)
+                {
+                    if (s.Count == 0) continue;
+                    var t = s.Times[(s.Head - 1 + Capacity) % Capacity];
+                    if (last == null || t > last.Value) last = t;
+                }
+                return last;
+            }
+        }
+
         public static void Clear() { lock (_lock) _series.Clear(); }
         public static int SeriesCount { get { lock (_lock) return _series.Count; } }
+
+        // 性能趋势图窗口打开/关闭时调用（引用计数）。首次打开 Load 历史；最后关闭 Save+Clear 释放内存。
+        // 图表关闭期间 Add 直接返回，不在内存积累——关窗即省下每条 series ~1MB。
+        public static void Acquire()
+        {
+            lock (_lock)
+            {
+                if (_openCount == 0 && !_loaded) _loaded = Load();
+                _openCount++;
+            }
+        }
+
+        public static void Release()
+        {
+            lock (_lock)
+            {
+                if (_openCount == 0) return;
+                if (--_openCount == 0)
+                {
+                    try { Save(); } catch (Exception ex) { AppLog.Log("PerfHistory", ex); }
+                    _series.Clear();
+                    _loaded = false;
+                    AppLog.Log("PerfHistory", "released (in-memory cleared)");
+                }
+            }
+        }
 
         // ---- 持久化（退出写 / 启动读）----
         class SeriesData { public string name { get; set; } public string icon { get; set; } public bool isTemp { get; set; } public List<float> points { get; set; } public List<string> times { get; set; } }
@@ -141,6 +189,7 @@ namespace PowerAudioManager
                 Dictionary<string, SeriesData> data;
                 lock (_lock)
                 {
+                    if (!_loaded) return;   // 未加载（图表已关闭，Release 时已存盘）：不空写覆盖持久化数据
                     data = new Dictionary<string, SeriesData>();
                     foreach (var kv in _series)
                     {
@@ -162,13 +211,15 @@ namespace PowerAudioManager
             catch (Exception ex) { AppLog.Log("PerfHistory", "save fail: " + ex.Message); }
         }
 
-        public static void Load()
+        // 返回是否成功加载（文件不存在视为成功：空历史也是合法状态）。失败（损坏/解析异常）返回 false，
+        // Release 的 Save 会因此跳过，避免用空数据覆盖无法读取的旧历史文件。
+        public static bool Load()
         {
             try
             {
-                if (!File.Exists(FilePath)) return;
+                if (!File.Exists(FilePath)) return true;
                 var data = JsonSerializer.Deserialize<Dictionary<string, SeriesData>>(File.ReadAllText(FilePath));
-                if (data == null) return;
+                if (data == null) return true;
                 // 旧版 JSON 无 times：用文件最后修改时间回填（数据结束于保存时刻），避免旧数据被当成"最近"绘制
                 DateTime fileTime = File.GetLastWriteTime(FilePath);
                 lock (_lock)
@@ -197,8 +248,9 @@ namespace PowerAudioManager
                     }
                 }
                 AppLog.Log("PerfHistory", "loaded " + data.Count + " series");
+                return true;
             }
-            catch (Exception ex) { AppLog.Log("PerfHistory", "load fail: " + ex.Message); }
+            catch (Exception ex) { AppLog.Log("PerfHistory", "load fail: " + ex.Message); return false; }
         }
     }
 }

@@ -18,6 +18,11 @@ namespace PowerAudioManager
 
         public PerfChartWindow()
         {
+            // 持有历史数据引用计数：构造时 Load，关闭时 Save+Clear 释放内存。
+            // 图表未打开期间 PerfHistory/ForegroundHistory 不驻留内存、不采集。
+            try { PerfHistory.Acquire(); } catch (Exception ex) { AppLog.Log("PerfChartWindow", ex); }
+            try { ForegroundHistory.Acquire(); } catch (Exception ex) { AppLog.Log("PerfChartWindow", ex); }
+
             Title = "性能趋势";
             Width = 820; Height = 360;
             MinWidth = 640;
@@ -66,7 +71,21 @@ namespace PowerAudioManager
             double windowSec = _chart.WindowSec > 0 ? _chart.WindowSec : PerfHistory.Capacity * _chart.IntervalSec;
             DateTime to = DateTime.Now;
             DateTime from = to.AddSeconds(-windowSec);
-            _chart.Series = PerfHistory.GetSeries(from, to);
+            var series = PerfHistory.GetSeries(from, to);
+            // 图表刚打开且窗口内暂无数据（上次记录早于窗口起点）时，把窗口锚到最后一条历史记录，
+            // 让以前记录的数据立即可见；新数据到达后窗口自然滑回当前时间。
+            if (series.Count == 0)
+            {
+                var last = PerfHistory.GetLastTime();
+                if (last.HasValue && last.Value < from)
+                {
+                    to = last.Value.AddSeconds(Math.Max(_chart.IntervalSec, 1));
+                    if (to > DateTime.Now) to = DateTime.Now;
+                    from = to.AddSeconds(-windowSec);
+                    series = PerfHistory.GetSeries(from, to);
+                }
+            }
+            _chart.Series = series;
             _chart.Segments = ForegroundHistory.GetSegments(from, to);
             _chart.Refresh();
         }
@@ -74,6 +93,8 @@ namespace PowerAudioManager
         protected override void OnClosed(EventArgs e)
         {
             try { _timer?.Stop(); } catch { }
+            try { PerfHistory.Release(); } catch { }
+            try { ForegroundHistory.Release(); } catch { }
             base.OnClosed(e);
         }
     }

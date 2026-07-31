@@ -13,9 +13,12 @@ namespace PowerAudioManager
     {
         public string HardwareName { get; set; }
         public string SensorName { get; set; }
-        public HardwareType HwType { get; set; }
-        public SensorType SensorType { get; set; }
-        public override string ToString() => $"{HardwareName} — {SensorName}";
+        // 用字符串存 LibreHardwareMonitor 枚举名（"Cpu"/"GpuNvidia"/"Memory"... 与 "Temperature"/"Fan"/"Control"），
+        // 而非 HardwareType/SensorType 枚举：这样非管理员 GUI（温度走管道，从不碰 Computer）不会因 SensorInfo
+        // 字段类型而加载 LibreHardwareMonitorLib.dll（省几 MB）。admin helper 仍用枚举，在边界 .ToString() 转字符串。
+        public string HwType { get; set; }
+        public string SensorType { get; set; }
+        public override string ToString() => $"{HardwareName} - {SensorName}";
     }
 
     public class MetricValue
@@ -35,6 +38,8 @@ namespace PowerAudioManager
     {
         public static readonly HardwareMonitorService Instance = new HardwareMonitorService();
 
+        // 仅 admin 路径（StartAdmin/UpdateAdmin/DiscoverSensors/ReadAllMetrics/ReadSensorValue/StopAdmin）访问。
+        // 非管理员 GUI 从不调用这些方法 -> 不 JIT -> 不加载 LibreHardwareMonitorLib。字段类型本身不会在类型加载时解析程序集。
         private Computer _computer;
         private bool _started, _hwReady;
         private readonly object _lock = new object();
@@ -58,6 +63,11 @@ namespace PowerAudioManager
         private readonly HashSet<string> _loggedRemaps = new();
         private List<MetricValue> _allPipeMetrics = new List<MetricValue>();
 
+        // 字符串枚举名比较（SensorInfo 已字符串化）
+        static bool HwIs(string hw, string name) => string.Equals(hw, name, StringComparison.OrdinalIgnoreCase);
+        static bool IsGpuHw(string hw) => HwIs(hw, "GpuNvidia") || HwIs(hw, "GpuAmd") || HwIs(hw, "GpuIntel");
+        static bool StIs(string st, string name) => string.Equals(st, name, StringComparison.OrdinalIgnoreCase);
+
         private HardwareMonitorService() { }
 
         public void Start()
@@ -65,7 +75,7 @@ namespace PowerAudioManager
             if (_started) return;
             lock (_lock) { if (_started) return; _started = true; }
 
-            // 非管理员：温度由服务（OneBoxSvc）的 --temp-monitor helper 经 Global 管道推送，无 UAC
+            // 非管理员：温度由服务（OneBoxSvc）的 --temp-monitor helper 经 Global 管道推送，无 UAC，不加载 LibreHardwareMonitorLib
             if (!AdminUtils.IsAdmin())
             {
                 LoadEnabledMetrics();  // 加载用户配的指标（UpdateFromPipe 过滤用），否则重启后指标为空
@@ -73,6 +83,12 @@ namespace PowerAudioManager
                 return;
             }
 
+            StartAdmin();
+        }
+
+        // admin 专属：创建 Computer 并枚举传感器。独立方法使非管理员 GUI 不会 JIT 本方法 -> 不加载 LibreHardwareMonitorLib。
+        void StartAdmin()
+        {
             System.Threading.ThreadPool.QueueUserWorkItem(_ =>
             {
                 try
@@ -161,23 +177,21 @@ namespace PowerAudioManager
                         foreach (var m in p.allMetrics)
                             _allPipeMetrics.Add(new MetricValue { DisplayName = m.name, IconKey = m.icon, Value = m.value, Unit = m.unit, ConfigKey = m.key });
                     AllTempSensors.Clear();
-                    if (p.sensors != null) foreach (var s in p.sensors) AllTempSensors.Add(new SensorInfo { HardwareName = s.hw, SensorName = s.name, HwType = ParseHw(s.hwtype), SensorType = ParseSt(s.stype) });
+                    if (p.sensors != null) foreach (var s in p.sensors) AllTempSensors.Add(new SensorInfo { HardwareName = s.hw, SensorName = s.name, HwType = s.hwtype, SensorType = string.IsNullOrEmpty(s.stype) ? "Temperature" : s.stype });
                     AllFanSensors.Clear();
-                    if (p.fans != null) foreach (var s in p.fans) AllFanSensors.Add(new SensorInfo { HardwareName = s.hw, SensorName = s.name, HwType = ParseHw(s.hwtype), SensorType = ParseSt(s.stype) });
+                    if (p.fans != null) foreach (var s in p.fans) AllFanSensors.Add(new SensorInfo { HardwareName = s.hw, SensorName = s.name, HwType = s.hwtype, SensorType = string.IsNullOrEmpty(s.stype) ? "Fan" : s.stype });
                     AllControlSensors.Clear();
-                    if (p.controls != null) foreach (var s in p.controls) AllControlSensors.Add(new SensorInfo { HardwareName = s.hw, SensorName = s.name, HwType = ParseHw(s.hwtype), SensorType = ParseSt(s.stype) });
+                    if (p.controls != null) foreach (var s in p.controls) AllControlSensors.Add(new SensorInfo { HardwareName = s.hw, SensorName = s.name, HwType = s.hwtype, SensorType = string.IsNullOrEmpty(s.stype) ? "Control" : s.stype });
                 }
             }
             catch { }
         }
 
-        static HardwareType ParseHw(string s) => Enum.TryParse<HardwareType>(s, out var v) ? v : default;
-        static SensorType ParseSt(string s) => Enum.TryParse<SensorType>(s, out var v) ? v : SensorType.Temperature;
-
         class TempPayload { public float? cpu { get; set; } public float? gpu { get; set; } public bool ready { get; set; } public List<TempMetric> metrics { get; set; } public List<TempMetric> allMetrics { get; set; } public List<TempSensor> sensors { get; set; } public List<TempSensor> fans { get; set; } public List<TempSensor> controls { get; set; } }
         class TempMetric { public string name { get; set; } public string icon { get; set; } public float? value { get; set; } public string unit { get; set; } public string key { get; set; } }
         class TempSensor { public string hw { get; set; } public string name { get; set; } public string hwtype { get; set; } public string stype { get; set; } }
 
+        // admin 专属：枚举 LibreHardwareMonitor 传感器。非管理员不调用 -> 不加载 lib。
         void DiscoverSensors()
         {
             AllTempSensors.Clear(); AllFanSensors.Clear();
@@ -190,7 +204,7 @@ namespace PowerAudioManager
                     var key = $"{hw.Name}|{s.Name}|{s.SensorType}";
                     if (!seen.Add(key)) continue; // 去重：不同层级可能有同名传感器
 
-                    var info = new SensorInfo { HardwareName = hw.Name, SensorName = s.Name, HwType = hw.HardwareType, SensorType = s.SensorType };
+                    var info = new SensorInfo { HardwareName = hw.Name, SensorName = s.Name, HwType = hw.HardwareType.ToString(), SensorType = s.SensorType.ToString() };
                     if (s.SensorType == SensorType.Temperature)
                     {
                         // 过滤阈值/元数据传感器（值恒为 0 或固定阈值，非实时温度）：内存 SPD 的
@@ -224,9 +238,8 @@ namespace PowerAudioManager
             if (string.IsNullOrWhiteSpace(raw))
             {
                 // 首次运行：自动添加 CPU + GPU 温度
-                var cpuSensor = AllTempSensors.FirstOrDefault(s => s.HwType == HardwareType.Cpu);
-                var gpuSensor = AllTempSensors.FirstOrDefault(s =>
-                    s.HwType == HardwareType.GpuNvidia || s.HwType == HardwareType.GpuAmd || s.HwType == HardwareType.GpuIntel);
+                var cpuSensor = AllTempSensors.FirstOrDefault(s => HwIs(s.HwType, "Cpu"));
+                var gpuSensor = AllTempSensors.FirstOrDefault(s => IsGpuHw(s.HwType));
                 var list = new List<string>();
                 if (cpuSensor != null)
                     list.Add(EncodeConfig(cpuSensor, "CPU"));
@@ -242,7 +255,7 @@ namespace PowerAudioManager
 
         public static string EncodeConfig(SensorInfo s, string displayName, string iconKey)
         {
-            string type = s.SensorType.ToString();
+            string type = s.SensorType;   // 已是字符串
             return $"{type}|{s.HardwareName}|{s.SensorName}|{displayName}|{iconKey}";
         }
 
@@ -251,8 +264,8 @@ namespace PowerAudioManager
             displayName = ""; iconKey = "def";
             var parts = key.Split('|');
             if (parts.Length < 3) return null;
-            SensorType st;
-            if (!Enum.TryParse(parts[0], out st)) st = SensorType.Temperature;
+            string st = parts[0];
+            if (string.IsNullOrEmpty(st)) st = "Temperature";
             displayName = parts.Length >= 4 ? parts[3] : DefaultDisplayName(parts[1], parts[2], st);
             iconKey = parts.Length >= 5 ? parts[4] : AutoIconKey(displayName, null);
             return new SensorInfo { SensorType = st, HardwareName = parts[1], SensorName = parts[2] };
@@ -267,8 +280,8 @@ namespace PowerAudioManager
 
             if (s != null)
             {
-                if (s.SensorType == SensorType.Fan) return "fan";
-                if (s.SensorType == SensorType.Control) return "ctrl";
+                if (StIs(s.SensorType, "Fan")) return "fan";
+                if (StIs(s.SensorType, "Control")) return "ctrl";
                 if (sn.Contains("hot spot")) return "hot";
                 if (sn.Contains("memory") || sn.Contains("junction")) return "vram";
                 // 硬件名推断
@@ -288,12 +301,12 @@ namespace PowerAudioManager
             return "def";
         }
 
-        public static string DefaultDisplayName(string hwName, string sensorName, SensorType st)
+        public static string DefaultDisplayName(string hwName, string sensorName, string st)
         {
             bool isCpu = hwName.ToLower().Contains("cpu") || hwName.ToLower().Contains("ryzen");
             bool isGpu = hwName.ToLower().Contains("nvidia") || hwName.ToLower().Contains("geforce") || hwName.ToLower().Contains("rtx") || hwName.ToLower().Contains("radeon");
 
-            if (st == SensorType.Temperature)
+            if (StIs(st, "Temperature"))
             {
                 if (sensorName.Contains("Hot Spot")) return "GPU HotSpot";
                 if (sensorName.Contains("Memory") || sensorName.Contains("Junction")) return "VRAM";
@@ -301,13 +314,13 @@ namespace PowerAudioManager
                 if (isGpu) return "GPU";
                 return "Temp";
             }
-            if (st == SensorType.Fan)
+            if (StIs(st, "Fan"))
             {
                 if (isCpu) return "CPU Fan";
                 if (isGpu) return "GPU Fan";
                 return sensorName;
             }
-            if (st == SensorType.Control)
+            if (StIs(st, "Control"))
             {
                 if (isCpu) return "CPU Fan%";
                 if (isGpu) return "GPU Fan%";
@@ -327,8 +340,13 @@ namespace PowerAudioManager
         public void Update()
         {
             if (!IsAvailable) return;
-            // 非管理员：数据由服务 helper 经管道推送，用用户 EnabledMetrics 过滤 _allPipeMetrics
-            if (_computer == null || !_hwReady) { UpdateFromPipe(); return; }
+            if (!_hwReady) { UpdateFromPipe(); return; }
+            UpdateAdmin();
+        }
+
+        // admin 专属轮询：读 Computer 传感器。独立方法避免非管理员 GUI JIT 加载 lib。
+        void UpdateAdmin()
+        {
             try
             {
                 _computer.Accept(new UpdateVisitor());
@@ -349,8 +367,8 @@ namespace PowerAudioManager
 
                     if (val.HasValue)
                     {
-                        string unit = cfg.SensorType == SensorType.Temperature ? "°C" :
-                                      cfg.SensorType == SensorType.Control ? "%" : "RPM";
+                        string unit = StIs(cfg.SensorType, "Temperature") ? "°C" :
+                                      StIs(cfg.SensorType, "Control") ? "%" : "RPM";
                         var mv = new MetricValue { DisplayName = displayName, IconKey = iconKey, Value = val, Unit = unit, ConfigKey = key };
                         lock (_lock) { _lastMetrics[key] = mv; }
                         values.Add(mv);
@@ -382,7 +400,7 @@ namespace PowerAudioManager
                 if (m == null)
                 {
                     // fallback：按 SensorName+SensorType 匹配（DDR5 名字漂移），仅当唯一避免串台
-                    var nm = all.Where(x => { var p = x.ConfigKey.Split('|'); return p.Length >= 3 && p[2] == cfg.SensorName && p[0] == cfg.SensorType.ToString(); }).ToList();
+                    var nm = all.Where(x => { var p = x.ConfigKey.Split('|'); return p.Length >= 3 && p[2] == cfg.SensorName && p[0] == cfg.SensorType; }).ToList();
                     if (nm.Count == 1) m = nm[0];
                 }
                 if (m != null && m.Value.HasValue)
@@ -399,15 +417,7 @@ namespace PowerAudioManager
         // 设置中预览传感器实时值（读取缓存值，不触发硬件刷新）
         public float? ReadSensorPreview(SensorInfo cfg)
         {
-            if (_computer != null && _hwReady)
-            {
-                try
-                {
-                    var sensor = FindSensor(cfg) ?? cfg;
-                    return ReadSensorValue(sensor);
-                }
-                catch { return null; }
-            }
+            if (_hwReady) return ReadSensorPreviewAdmin(cfg);
             // 非管理员：从管道推送的所有传感器值找匹配
             if (cfg == null) return null;
             try
@@ -417,7 +427,7 @@ namespace PowerAudioManager
                     foreach (var m in _allPipeMetrics)
                     {
                         var p = m.ConfigKey.Split('|');
-                        if (p.Length >= 3 && p[0] == cfg.SensorType.ToString() && p[1] == cfg.HardwareName && p[2] == cfg.SensorName) return m.Value;
+                        if (p.Length >= 3 && p[0] == cfg.SensorType && p[1] == cfg.HardwareName && p[2] == cfg.SensorName) return m.Value;
                     }
                 }
             }
@@ -425,16 +435,28 @@ namespace PowerAudioManager
             return null;
         }
 
+        // admin 专属预览。独立方法避免非管理员 JIT 加载 lib。
+        float? ReadSensorPreviewAdmin(SensorInfo cfg)
+        {
+            try
+            {
+                var sensor = FindSensor(cfg) ?? cfg;
+                return ReadSensorValue(sensor);
+            }
+            catch { return null; }
+        }
+
+        // ---- 以下为 admin 专属（引用 LibreHardwareMonitorLib 类型），非管理员 GUI 不调用 -> 不加载 lib ----
+
         float? ReadCpuTemp()
         {
-            var sensor = AllTempSensors.FirstOrDefault(s => s.HwType == HardwareType.Cpu);
+            var sensor = AllTempSensors.FirstOrDefault(s => HwIs(s.HwType, "Cpu"));
             return sensor != null ? ReadSensorValue(sensor) : null;
         }
 
         float? ReadGpuTemp()
         {
-            var sensor = AllTempSensors.FirstOrDefault(s =>
-                s.HwType == HardwareType.GpuNvidia || s.HwType == HardwareType.GpuAmd || s.HwType == HardwareType.GpuIntel);
+            var sensor = AllTempSensors.FirstOrDefault(s => IsGpuHw(s.HwType));
             if (sensor == null) return null;
             // 优先 GPU Core，排除 Hot Spot
             var coreSensor = AllTempSensors.FirstOrDefault(s =>
@@ -446,7 +468,7 @@ namespace PowerAudioManager
         public List<MetricValue> ReadAllMetrics()
         {
             var list = new List<MetricValue>();
-            if (_computer == null || !_hwReady) return list;
+            if (!_hwReady) return list;
             try
             {
                 void Scan(IList<IHardware> hws)
@@ -459,8 +481,8 @@ namespace PowerAudioManager
                             if (!s.Value.HasValue) continue;
                             float v = s.Value.Value;
                             if (s.SensorType == SensorType.Temperature && (v <= 0 || v > 150)) continue;
-                            var info = new SensorInfo { HardwareName = hw.Name, SensorName = s.Name, HwType = hw.HardwareType, SensorType = s.SensorType };
-                            string dn = DefaultDisplayName(hw.Name, s.Name, s.SensorType);
+                            var info = new SensorInfo { HardwareName = hw.Name, SensorName = s.Name, HwType = hw.HardwareType.ToString(), SensorType = s.SensorType.ToString() };
+                            string dn = DefaultDisplayName(hw.Name, s.Name, info.SensorType);
                             string ik = AutoIconKey(dn, info);
                             string unit = s.SensorType == SensorType.Temperature ? "°C" : s.SensorType == SensorType.Control ? "%" : "RPM";
                             list.Add(new MetricValue { DisplayName = dn, IconKey = ik, Value = v, Unit = unit, ConfigKey = EncodeConfig(info, dn, ik) });
@@ -476,12 +498,9 @@ namespace PowerAudioManager
 
         SensorInfo FindSensor(SensorInfo cfg)
         {
-            List<SensorInfo> pool = cfg.SensorType switch
-            {
-                SensorType.Fan => AllFanSensors,
-                SensorType.Control => AllControlSensors,
-                _ => AllTempSensors
-            };
+            List<SensorInfo> pool = StIs(cfg.SensorType, "Fan") ? AllFanSensors
+                                  : StIs(cfg.SensorType, "Control") ? AllControlSensors
+                                  : AllTempSensors;
             if (pool.Count == 0) return null;
 
             // L1: 精确匹配 HardwareName + SensorName（CPU/GPU/SSD 名字稳定，走这条）
@@ -502,7 +521,7 @@ namespace PowerAudioManager
             string sn = (cfg.SensorName ?? "").ToLower();
             if (sn.Contains("dimm") || sn.Contains("memory"))
             {
-                var anyMem = pool.FirstOrDefault(s => s.HwType == HardwareType.Memory);
+                var anyMem = pool.FirstOrDefault(s => HwIs(s.HwType, "Memory"));
                 if (anyMem != null)
                 {
                     LogRemap(cfg, anyMem);
@@ -537,14 +556,13 @@ namespace PowerAudioManager
                 {
                     foreach (var s in hw.Sensors)
                     {
-                        if (s.Name == cfg.SensorName && s.SensorType == cfg.SensorType)
+                        if (s.Name == cfg.SensorName && string.Equals(s.SensorType.ToString(), cfg.SensorType, StringComparison.OrdinalIgnoreCase))
                         {
                             float v = s.Value ?? float.NaN;
                             if (float.IsNaN(v)) return null;
-                            if (cfg.SensorType == SensorType.Temperature && (v <= 0 || v > 150)) return null;
-                            bool isFanType = cfg.SensorType == SensorType.Fan || cfg.SensorType == SensorType.Control;
-                            if (cfg.SensorType == SensorType.Control && (v < 0 || v > 100)) return null;
-                            if (cfg.SensorType == SensorType.Fan && (v < 0 || v > 10000)) return null;
+                            if (StIs(cfg.SensorType, "Temperature") && (v <= 0 || v > 150)) return null;
+                            if (StIs(cfg.SensorType, "Control") && (v < 0 || v > 100)) return null;
+                            if (StIs(cfg.SensorType, "Fan") && (v < 0 || v > 10000)) return null;
                             return v;
                         }
                     }
@@ -565,7 +583,7 @@ namespace PowerAudioManager
             bool isGpu = cfg.HardwareName.ToLower().Contains("nvidia") || cfg.HardwareName.ToLower().Contains("amd radeon") || cfg.HardwareName.ToLower().Contains("geforce") || cfg.HardwareName.ToLower().Contains("rtx");
             string name = cfg.SensorName.ToLower();
 
-            if (cfg.SensorType == SensorType.Temperature)
+            if (StIs(cfg.SensorType, "Temperature"))
             {
                 if (name.Contains("hot spot")) return "\U0001F525";
                 if (name.Contains("memory") || name.Contains("junction")) return "\U0001F4BE";
@@ -581,10 +599,17 @@ namespace PowerAudioManager
 
         public void Stop()
         {
-            try { _computer?.Close(); } catch { }
-            _computer = null; _started = false; _hwReady = false; IsAvailable = false;
+            if (_hwReady) StopAdmin();   // 非管理员 _hwReady=false，不调用 StopAdmin -> 不加载 lib
+            _started = false; _hwReady = false; IsAvailable = false;
             AllTempSensors.Clear(); AllFanSensors.Clear(); AllControlSensors.Clear();
             lock (_lock) { ActiveMetrics.Clear(); _lastMetrics.Clear(); _loggedRemaps.Clear(); }
+        }
+
+        // admin 专属：关闭 Computer。独立方法避免非管理员 GUI JIT 加载 lib。
+        void StopAdmin()
+        {
+            try { _computer?.Close(); } catch { }
+            _computer = null;
         }
 
         public void Dispose() => Stop();
