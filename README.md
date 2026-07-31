@@ -63,7 +63,7 @@
 - **温度 / 风扇**：实时显示 CPU、GPU、主板、内存、硬盘等温度与风扇转速（传感器自选；管理员权限经后台服务 helper 经命名管道提供，无 UAC）
 - **性能趋势图表**：悬浮窗入口 + 双击大图；双 Y 轴（温度 + 风扇）；鼠标 tooltip（十字线 + 各线值 + 该时间点前台应用）；前台应用时间段色块标注；时长档 5 分 / 15 分 / 30 分 / 1 时 / 2 时 / 6 时 / 12 时 / 全天，默认 15 分
 - **缺口断线**：传感器失配或跨重启的无数据区间显示为断口，而非用上一次的值填满（仅存真实读数，按时间戳对齐）
-- 历史持久化 JSON，跨重启保留全天数据；**仅图表打开时采集**（关闭即释放内存、不再写入），打开时自动加载并显示以前记录的历史
+- 历史持久化 JSON，跨重启保留全天数据；**后台持续采集**（无需打开图表即记录，每 60 秒自动落盘 + 退出落盘，损坏文件自动 .bak 备份），打开图表自动锚到最后一条历史并显示以前记录的全部数据
 
 
 ### 快捷启动栏
@@ -82,7 +82,7 @@
 - **翻译**：百度翻译 API Key / APPID / 翻译指令
 - **截图**：保存位置、截图快捷键、Game Bar 回退配置
 - **剪贴板**：历史条数等
-- **温度**：传感器选择、采样间隔、告警阈值
+- **性能**：传感器选择、采样间隔、告警阈值
 
 ### 自动更新
 - 启动时后台静默检查 GitHub Release
@@ -136,13 +136,14 @@ dotnet publish -c Release -r win-x64 -p:SelfContained=false   # 单文件 exe（
 OneBox/
 ├── src/
 │   ├── App.cs                  # 入口、单实例、全局异常、编码注册、AppLog
-│   ├── MainWindow.cs           # 悬浮窗主界面、数据加载与渲染、热键分发
+│   ├── MainWindow.cs / MainWindow.*.cs  # 悬浮窗主界面（partial：UI/Data/Hotkeys/Memory/Monitor/Translate/Collapse）
 │   ├── AppResources.cs         # 系统字体 + 嵌入资源 + 共享深色样式
 │   ├── MaterialTheme.cs        # MaterialDesign 深色 + 紫影主题
+│   ├── UiKit.cs                # 公共样式与控件（紫影主题复用）
 │   ├── LauncherBar.cs / LauncherWindow.cs / LauncherHost.cs  # 快捷启动栏（拖拽 / .lnk / UIPI 嵌入）
 │   ├── WindowScaling.cs        # 分辨率缩放 + 固定位置
 │   ├── TrayController.cs       # 系统托盘图标与菜单
-│   ├── SettingsDialog.cs       # 统一设置窗口（标签页）
+│   ├── SettingsDialog.cs / SettingsDialog.*.cs  # 统一设置窗口（partial：General/Modules/Memory/Translate/Screenshot/Clipboard/Metrics/Temp）
 │   ├── Dialogs.cs              # 翻译窗口、快捷键捕获、统一窗口样式
 │   ├── AudioDevices.cs         # 音频设备枚举 / 切换 / 热插拔监听
 │   ├── VolumeControl.cs        # 音量控制
@@ -151,10 +152,10 @@ OneBox/
 │   ├── TranslateService.cs     # 百度文本翻译 API
 │   ├── ImageTranslateService.cs / RegionCaptureService.cs / ImageTranslateWindow.cs  # 图片翻译
 │   ├── ScreenshotService.cs    # 前台截图 + HDR/Game Bar 回退
-│   ├── ScreenshotToast.cs / ScreenshotGallery.cs  # 截图 Toast / 图库
+│   ├── ScreenshotToast.cs      # 截图 Toast
 │   ├── ClipboardHistory.cs     # 剪贴板历史（DPAPI 加密）
 │   ├── HardwareMonitorService.cs  # 温度/风扇（LibreHardwareMonitor，admin helper 经管道推送）
-│   ├── PerfHistory.cs / PerfChart.cs / PerfChartWindow.cs  # 性能趋势图表（时间戳 + 缺口断线）
+│   ├── PerfHistory.cs / PerfChart.cs / PerfChartWindow.cs  # 性能趋势图表（后台持续采集 + 时间戳断线）
 │   ├── ForegroundWatcher.cs / ForegroundHistory.cs  # 前台 exe 捕获 / 前台切换历史（图表标注用）
 │   ├── OneBoxService.cs        # Windows 服务（开机自启 / 温度 helper 守护，无 UAC）
 │   ├── TempMonitorHelper.cs    # admin 温度 helper（命名管道推送）
@@ -189,7 +190,7 @@ OneBox/
 ```csharp
 public const string Owner = "OneT1er";
 public const string Repo = "OneBox";
-public static readonly Version CurrentVersion = new Version(1, 6, 3);
+public static readonly Version CurrentVersion = new Version(1, 7, 0);
 ```
 
 发新版时在 GitHub 创建 Release，tag 用 `v1.3.0` 格式（程序解析其中的版本号与 `CurrentVersion` 对比）。若 Release 附带 `OneBox.exe` 资产，支持应用内下载并自动替换升级；否则打开 Release 页面手动下载。预发布版本不进 `releases/latest`，不影响稳定用户。

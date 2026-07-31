@@ -12,17 +12,19 @@ namespace PowerAudioManager
     /// 性能监控历史采样：按 ConfigKey 存最近 N 个 (值, 时间戳)（环形数组，容量全天 86400 @1s）。
     /// 环形数组：Add 为 O(1)（替代 List.RemoveAt(0) 的 O(n)），内存固定无扩容。
     /// 采集温度（°C）与风扇（RPM）。仅存真实读数（Cached 兜底值跳过），故传感器失配/跨重启缺口在图表上断线而非填旧值。
-    /// 退出写 JSON / 启动读 JSON，跨重启保留全天历史；时间戳随值一并持久化。
+    /// 后台持续采集：无需打开图表即记录（数据常驻内存，全天容量固定）。
+    /// 启动懒加载磁盘历史，每 60 秒自动落盘 + 退出落盘，崩溃最多丢 1 分钟；时间戳随值一并持久化。
     /// </summary>
     public static class PerfHistory
     {
         public const int Capacity = 86400; // 全天 @1s
         static readonly object _lock = new object();
         static readonly Dictionary<string, Series> _series = new Dictionary<string, Series>();
-        // 引用计数：仅当性能趋势图窗口打开时才在内存保留历史（每条 series ~1MB）。
-        // 关闭即 Save+Clear 释放，下次打开再 Load。Add 在 _openCount==0 时直接返回，不积累。
-        static int _openCount;
-        static bool _loaded;   // _series 已从磁盘加载；Save 未加载时跳过，避免空写覆盖持久化数据
+        // 后台持续采集：数据常驻内存（每条 series 全天约 1MB，传感器数量有限，可接受），
+        // 每 60 秒自动落盘一次 + 退出落盘；加载失败仅尝试一次（损坏文件备份为 .bak 后按空历史继续）。
+        static System.Threading.Timer _saveTimer;
+        static bool _loadAttempted;   // Load 已尝试过（失败不每秒重试）
+        static bool _loaded;          // _series 已从磁盘加载；Save 未加载时跳过，避免空写覆盖持久化数据
 
         class Series
         {
@@ -63,10 +65,10 @@ namespace PowerAudioManager
 
         public static void Add(List<MetricValue> metrics)
         {
-            if (metrics == null || _openCount == 0) return;
+            if (metrics == null) return;
+            EnsureLoaded();
             lock (_lock)
             {
-                if (_openCount == 0) return;
                 // 清理已删除的指标（用户在设置里删的，不再显示历史数据）
                 if (metrics.Count > 0)
                 {
@@ -150,33 +152,41 @@ namespace PowerAudioManager
             }
         }
 
-        public static void Clear() { lock (_lock) _series.Clear(); }
         public static int SeriesCount { get { lock (_lock) return _series.Count; } }
 
-        // 性能趋势图窗口打开/关闭时调用（引用计数）。首次打开 Load 历史；最后关闭 Save+Clear 释放内存。
-        // 图表关闭期间 Add 直接返回，不在内存积累——关窗即省下每条 series ~1MB。
+        // 性能趋势图窗口打开时调用：确保历史已从磁盘加载（后台采集常驻，无需引用计数）。
         public static void Acquire()
         {
+            EnsureLoaded();
+        }
+
+        // 性能趋势图窗口关闭时调用：把当前数据落盘（内存保留，后台继续采集）。
+        public static void Release()
+        {
+            try { Save(); } catch (Exception ex) { AppLog.Log("PerfHistory", ex); }
+        }
+
+        // 首次 Add/图表打开时懒加载磁盘历史；失败仅尝试一次（损坏文件备份为 .bak 后按空历史继续）。
+        public static void EnsureLoaded()
+        {
+            if (_loaded || _loadAttempted) return;
             lock (_lock)
             {
-                if (_openCount == 0 && !_loaded) _loaded = Load();
-                _openCount++;
+                if (_loaded || _loadAttempted) return;
+                _loadAttempted = true;
+                try { _loaded = Load(); } catch (Exception ex) { AppLog.Log("PerfHistory", ex); }
+                EnsureSaveTimer();
             }
         }
 
-        public static void Release()
+        // 后台定期落盘（60 秒），崩溃最多丢 1 分钟；退出由 ExitApp 的 Save 兜底。
+        static void EnsureSaveTimer()
         {
-            lock (_lock)
+            if (_saveTimer != null) return;
+            _saveTimer = new System.Threading.Timer(_ =>
             {
-                if (_openCount == 0) return;
-                if (--_openCount == 0)
-                {
-                    try { Save(); } catch (Exception ex) { AppLog.Log("PerfHistory", ex); }
-                    _series.Clear();
-                    _loaded = false;
-                    AppLog.Log("PerfHistory", "released (in-memory cleared)");
-                }
-            }
+                try { Save(); } catch { }
+            }, null, TimeSpan.FromSeconds(60), TimeSpan.FromSeconds(60));
         }
 
         // ---- 持久化（退出写 / 启动读）----
@@ -189,7 +199,7 @@ namespace PowerAudioManager
                 Dictionary<string, SeriesData> data;
                 lock (_lock)
                 {
-                    if (!_loaded) return;   // 未加载（图表已关闭，Release 时已存盘）：不空写覆盖持久化数据
+                    if (!_loaded) return;   // 从未加载过磁盘数据：不空写覆盖持久化文件
                     data = new Dictionary<string, SeriesData>();
                     foreach (var kv in _series)
                     {
@@ -200,7 +210,7 @@ namespace PowerAudioManager
                         for (int i = 0; i < s.Count; i++)
                         {
                             pts.Add(s.Buf[(start + i) % Capacity]);
-                            times.Add(s.Times[(start + i) % Capacity].ToString("o", CultureInfo.InvariantCulture));
+                            times.Add(((DateTimeOffset)s.Times[(start + i) % Capacity].ToUniversalTime()).ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture));
                         }
                         data[kv.Key] = new SeriesData { name = s.Name, icon = s.Icon, isTemp = s.IsTemp, points = pts, times = times };
                     }
@@ -211,8 +221,8 @@ namespace PowerAudioManager
             catch (Exception ex) { AppLog.Log("PerfHistory", "save fail: " + ex.Message); }
         }
 
-        // 返回是否成功加载（文件不存在视为成功：空历史也是合法状态）。失败（损坏/解析异常）返回 false，
-        // Release 的 Save 会因此跳过，避免用空数据覆盖无法读取的旧历史文件。
+        // 返回是否成功加载（文件不存在视为成功：空历史也是合法状态）。损坏/解析异常时
+        // 把原文件备份为 .bak 并按空历史继续，避免新采集的数据永远无法落盘。
         public static bool Load()
         {
             try
@@ -234,8 +244,16 @@ namespace PowerAudioManager
                             for (int i = 0; i < pts.Count; i++)
                             {
                                 DateTime t;
-                                if (times != null && i < times.Count && DateTime.TryParse(times[i], null, DateTimeStyles.RoundtripKind, out var parsed))
-                                    t = parsed;
+                                if (times != null && i < times.Count)
+                                {
+                                    // 兼容两种格式：旧版 ISO "o"；新版 unix 秒（更紧凑）。都解析不了则按保存时刻回填
+                                    if (DateTime.TryParse(times[i], null, DateTimeStyles.RoundtripKind, out var parsed))
+                                        t = parsed;
+                                    else if (long.TryParse(times[i], out var unixSec))
+                                        t = DateTimeOffset.FromUnixTimeSeconds(unixSec).LocalDateTime;
+                                    else
+                                        t = fileTime.AddSeconds(-(pts.Count - 1 - i)); // 旧格式回填：1s 间距结束于保存时刻
+                                }
                                 else
                                     t = fileTime.AddSeconds(-(pts.Count - 1 - i)); // 旧格式回填：1s 间距结束于保存时刻
                                 s.Buf[s.Head] = pts[i];
@@ -250,7 +268,16 @@ namespace PowerAudioManager
                 AppLog.Log("PerfHistory", "loaded " + data.Count + " series");
                 return true;
             }
-            catch (Exception ex) { AppLog.Log("PerfHistory", "load fail: " + ex.Message); return false; }
+            catch (Exception ex)
+            {
+                AppLog.Log("PerfHistory", "load fail, backing up: " + ex.Message);
+                try
+                {
+                    if (File.Exists(FilePath)) { File.Copy(FilePath, FilePath + ".bak", true); File.Delete(FilePath); }
+                }
+                catch { }
+                return true;   // 损坏文件已备份，按空历史继续，后续数据可正常落盘
+            }
         }
     }
 }

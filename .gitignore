@@ -31,3 +31,8 @@ commit_ui.txt
 # Claude Code local working memory (not for the repo)
 .claude/memory/
 .claude/settings.local.json
+# AI 辅助文档（不发布）
+.claude/
+.Codex/
+AGENTS.md
+CLAUDE.md
