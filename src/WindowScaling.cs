@@ -10,7 +10,7 @@ namespace PowerAudioManager
     //
     // 缩放策略：
     //   - 以 1920×1080 (1080p) 为基准 (auto scale = 1.0)，按屏幕对角线像素数用幂曲线平滑缩放。
-    //     1080p=1.00  2K=1.19  4K=1.52  8K=2.30(钳到 1.6)  1366×768=0.81  800×600=0.74。
+    //     1080p=1.00  2K=1.12  4K=1.32  8K=1.74(钳到 1.35)  1366×768≈0.87  800×600≈0.81。
     //   - WPF PerMonitorV2 已按 DPI 自动缩放内容，LayoutTransform 不再除以 DPI 缩放比
     //     （旧的除法在 1080p+150% DPI、4K+200% DPI 等常见组合下被钳到下限 0.85，对绝大多数用户失效）。
     //   - 通过 LayoutTransform 整体放大 Border 内子元素（文字、图标、Padding），同时显式缩放
@@ -29,10 +29,10 @@ namespace PowerAudioManager
         // 1080p 对角线像素数 = sqrt(1920² + 1080²) ≈ 2202.9
         const double ReferenceDiagonal = 2202.907;
         // 缩放幂指数（<1 让分辨率差异比线性更柔和）
-        const double ScaleExponent = 0.6;
+        const double ScaleExponent = 0.4;
         // 自动缩放范围；手动滑块上限放宽到 2.0
         const double AutoMin = 0.7;
-        const double AutoMax = 1.6;
+        const double AutoMax = 1.35;
         const double FinalMin = 0.7;
         const double FinalMax = 2.0;
 

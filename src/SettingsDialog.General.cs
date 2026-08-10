@@ -86,8 +86,8 @@ namespace PowerAudioManager
 
             stack.Children.Add(new Border { Height = 1, Background = new SolidColorBrush(Color.FromRgb(80, 75, 120)), Margin = new Thickness(0, 4, 0, 12) });
 
-            // 窗口缩放：auto 模式按屏幕对角线像素的幂曲线计算（1080p=1.0  2K≈1.19  4K≈1.52），
-            // 手动模式覆盖 auto。圆角/边线/阴影随缩放同步，保持 1080p↔4K 观感一致。
+            // 窗口缩放：auto 按对角线幂曲线（1080p=100%  4K≈132%）；手动 80%–200%。
+
             double curScale = 1.0;
             AppPrefs.GetDouble("WindowScale.Factor", out curScale);
             if (curScale < 0.8 || curScale > 2.0) curScale = 0; // 0 = auto
@@ -117,7 +117,7 @@ namespace PowerAudioManager
 
             stack.Children.Add(new TextBlock { Text = "窗口缩放", Foreground = Brushes.White, FontSize = 12, Margin = new Thickness(0, 0, 0, 4) });
             stack.Children.Add(new TextBlock {
-                Text = $"当前屏幕 {screenDesc}，自动缩放 {(int)Math.Round(autoScaleShown * 100)}%{(isAuto ? "（已应用）" : "（手动覆盖）")}",
+                Text = $"屏幕 {screenDesc} · 自动 {(int)Math.Round(autoScaleShown * 100)}%{(isAuto ? "" : " · 手动覆盖")}",
                 Foreground = fg, FontSize = 10, Margin = new Thickness(0, 0, 0, 4)
             });
             var scaleRow = new DockPanel { Margin = new Thickness(0, 0, 0, 4) };
@@ -134,7 +134,7 @@ namespace PowerAudioManager
             scaleRow.Children.Add(scaleAutoCb);
             scaleRow.Children.Add(scaleSlider);
             stack.Children.Add(scaleRow);
-            stack.Children.Add(new TextBlock { Text = "自动：按屏幕分辨率自动调整（1080p 100% 基准）；手动：拖动滑块覆盖自动值，关闭自动后滑块可调 80%–200%。", Foreground = fg, FontSize = 10, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 16) });
+            stack.Children.Add(new TextBlock { Text = "1080p 自动 100%，4K ≈132%，可手动 80%–200% 覆盖。", Foreground = fg, FontSize = 10, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 16) });
 
             stack.Children.Add(new Border { Height = 1, Background = new SolidColorBrush(Color.FromRgb(80, 75, 120)), Margin = new Thickness(0, 4, 0, 12) });
 
@@ -193,5 +193,3 @@ namespace PowerAudioManager
         }
     }
 }
-
-
