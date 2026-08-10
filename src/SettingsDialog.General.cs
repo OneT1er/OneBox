@@ -86,40 +86,17 @@ namespace PowerAudioManager
 
             stack.Children.Add(new Border { Height = 1, Background = new SolidColorBrush(Color.FromRgb(80, 75, 120)), Margin = new Thickness(0, 4, 0, 12) });
 
-            // 窗口缩放：auto 按对角线幂曲线（1080p=100%  4K≈132%）；手动 80%–200%。
-
+            // 窗口缩放：1080p=100%（4K 同样），小屏自动缩小；手动 80%–200%。
             double curScale = 1.0;
             AppPrefs.GetDouble("WindowScale.Factor", out curScale);
             if (curScale < 0.8 || curScale > 2.0) curScale = 0; // 0 = auto
             bool isAuto = curScale == 0;
             var mwForScale = owner as MainWindow;
-            string screenDesc = "";
             double autoScaleShown = 1.0;
-            try
-            {
-                if (mwForScale != null && mwForScale._scaling != null)
-                {
-                    autoScaleShown = mwForScale._scaling.AutoScale;
-                    screenDesc = mwForScale._scaling.CurrentScreenDescription;
-                }
-            }
-            catch { }
-            if (string.IsNullOrEmpty(screenDesc))
-            {
-                try
-                {
-                    var ps = System.Windows.Forms.Screen.PrimaryScreen;
-                    if (ps != null) screenDesc = $"{(int)ps.Bounds.Width}×{(int)ps.Bounds.Height}";
-                }
-                catch { }
-            }
-            if (string.IsNullOrEmpty(screenDesc)) screenDesc = "未知";
+            try { if (mwForScale != null && mwForScale._scaling != null) autoScaleShown = mwForScale._scaling.AutoScale; } catch { }
 
             stack.Children.Add(new TextBlock { Text = "窗口缩放", Foreground = Brushes.White, FontSize = 12, Margin = new Thickness(0, 0, 0, 4) });
-            stack.Children.Add(new TextBlock {
-                Text = $"屏幕 {screenDesc} · 自动 {(int)Math.Round(autoScaleShown * 100)}%{(isAuto ? "" : " · 手动覆盖")}",
-                Foreground = fg, FontSize = 10, Margin = new Thickness(0, 0, 0, 4)
-            });
+            stack.Children.Add(new TextBlock { Text = $"auto {(int)Math.Round(autoScaleShown * 100)}%", Foreground = fg, FontSize = 10, Margin = new Thickness(0, 0, 0, 4) });
             var scaleRow = new DockPanel { Margin = new Thickness(0, 0, 0, 4) };
             var scaleSlider = new Slider { Minimum = 80, Maximum = 200, Value = isAuto ? 100 : (int)(curScale * 100), TickFrequency = 5, IsSnapToTickEnabled = true, Width = 160, VerticalAlignment = VerticalAlignment.Center };
             var scalePctLabel = new TextBlock { Text = isAuto ? "自动" : $"{(int)(curScale * 100)}%", Foreground = fg, FontSize = 11, Width = 40, TextAlignment = TextAlignment.Right, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0) };
@@ -134,7 +111,7 @@ namespace PowerAudioManager
             scaleRow.Children.Add(scaleAutoCb);
             scaleRow.Children.Add(scaleSlider);
             stack.Children.Add(scaleRow);
-            stack.Children.Add(new TextBlock { Text = "1080p 自动 100%，4K ≈132%，可手动 80%–200% 覆盖。", Foreground = fg, FontSize = 10, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 16) });
+            stack.Children.Add(new TextBlock { Text = "小屏自动缩小；手动 80%–200%。", Foreground = fg, FontSize = 10, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 16) });
 
             stack.Children.Add(new Border { Height = 1, Background = new SolidColorBrush(Color.FromRgb(80, 75, 120)), Margin = new Thickness(0, 4, 0, 12) });
 
