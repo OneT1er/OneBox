@@ -1,10 +1,11 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <TargetFramework>$(OneBoxWindowsTargetFramework)</TargetFramework>
     <AssemblyName>OneBox.Hardware</AssemblyName>
     <RootNamespace>OneBox.Hardware</RootNamespace>
     <SelfContained>false</SelfContained>
+    <RuntimeIdentifier>$(OneBoxCompanionRuntimeIdentifier)</RuntimeIdentifier>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\OneBox.Contracts\OneBox.Contracts.csproj" />

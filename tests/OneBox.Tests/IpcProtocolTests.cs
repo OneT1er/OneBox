@@ -198,6 +198,29 @@ public sealed class IpcProtocolTests
         Assert.Equal(0, operations.StartCalls);
     }
 
+    [Fact]
+    public void ServiceCoordinator_PreservesStructuredOperationDiagnostic()
+    {
+        var operations = new FakeServiceOperations
+        {
+            IsInstalled = true,
+            ImagePath = "\"C:\\Other\\Service.exe\"",
+            ConfigureExitCode = -1,
+            LastError = "sc.exe launch failed: Win32Exception: access denied",
+        };
+        ServiceRegistrationResult result = new ServiceRegistrationCoordinator(operations).Ensure(@"C:\OneBox\OneBox.Service.exe");
+        Assert.False(result.Success);
+        Assert.Equal(-1, result.ExitCode);
+        Assert.Equal("sc.exe launch failed: Win32Exception: access denied", result.Diagnostic);
+    }
+
+    [Fact]
+    public void ElevatedHelperTimeout_ReportsWhetherProcessWasTerminated()
+    {
+        Assert.Contains("已终止", ElevatedHelperPolicy.TimeoutMessage(true), StringComparison.Ordinal);
+        Assert.Contains("仍在运行", ElevatedHelperPolicy.TimeoutMessage(false), StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData("S-1-5-18", true)]
     [InlineData("s-1-5-18", true)]
@@ -268,6 +291,7 @@ public sealed class IpcProtocolTests
     {
         public bool IsInstalled { get; set; }
         public string ImagePath { get; set; }
+        public string LastError { get; set; }
         public int ConfigureExitCode { get; set; }
         public int StartExitCode { get; set; }
         public int StopCalls { get; private set; }

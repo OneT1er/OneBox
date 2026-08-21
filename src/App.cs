@@ -55,15 +55,14 @@ namespace PowerAudioManager
             // 非管理员 GUI 实例启动它，使 UAC 对话框显示 OneBox 名称。
             if (args.Length > 1 && args[0] == "--elevate-autostart")
             {
-                if (int.TryParse(args[1], out int m) && m >= 0 && m <= 3)
+                if (!AdminUtils.IsAdmin())
+                {
+                    Environment.ExitCode = RunCommandLineHelper("AutoStart", "提权辅助进程未获得管理员权限。");
+                }
+                else if (int.TryParse(args[1], out int m) && m >= 0 && m <= 3)
                 {
                     var method = (PowerAudioManager.AutoStartMethod)m;
-                    string err = PowerAudioManager.AutoStartService.ApplyAutoStart(method);
-                    if (err != null)
-                    {
-                        Environment.ExitCode = 1;
-                        System.Windows.MessageBox.Show(err, "OneBox 开机自启", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Warning);
-                    }
+                    Environment.ExitCode = RunCommandLineHelper("AutoStart", () => PowerAudioManager.AutoStartService.ApplyAutoStart(method));
                 }
                 else Environment.ExitCode = 2;
                 return;
@@ -72,12 +71,9 @@ namespace PowerAudioManager
             // 提权后迁移/修复独立服务路径，不改变用户的自启动偏好。
             if (args.Length > 0 && args[0] == "--repair-service")
             {
-                string err = PowerAudioManager.AutoStartService.RepairService();
-                if (err != null)
-                {
-                    Environment.ExitCode = 1;
-                    System.Windows.MessageBox.Show(err, "OneBox 服务迁移", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Warning);
-                }
+                Environment.ExitCode = !AdminUtils.IsAdmin()
+                    ? RunCommandLineHelper("ServiceRepair", "提权辅助进程未获得管理员权限。")
+                    : RunCommandLineHelper("ServiceRepair", PowerAudioManager.AutoStartService.RepairService);
                 return;
             }
 
@@ -85,12 +81,9 @@ namespace PowerAudioManager
             if (args.Length > 0 && args[0] == "--disable-autostart")
             {
                 AppLog.Log("AutoStart", "disable helper start");
-                string err = PowerAudioManager.AutoStartService.Disable();
-                if (err != null)
-                {
-                    Environment.ExitCode = 1;
-                    System.Windows.MessageBox.Show(err, "开机自启", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Warning);
-                }
+                Environment.ExitCode = !AdminUtils.IsAdmin()
+                    ? RunCommandLineHelper("AutoStart", "提权辅助进程未获得管理员权限。")
+                    : RunCommandLineHelper("AutoStart", PowerAudioManager.AutoStartService.Disable);
                 return;
             }
 
@@ -201,6 +194,28 @@ namespace PowerAudioManager
                 }
             }) { IsBackground = true, Name = "ActivateListener" }.Start();
             try { app.Run(); } catch (Exception ex) { try { System.IO.File.AppendAllText(System.IO.Path.GetTempPath() + "pam_crash.log", $"{System.Environment.NewLine}{DateTime.Now} Run: {ex}"); } catch { } throw; }
+        }
+
+        static int RunCommandLineHelper(string category, string error)
+        {
+            AppLog.Log(category, "helper failed: " + error);
+            return 1;
+        }
+
+        static int RunCommandLineHelper(string category, Func<string> operation)
+        {
+            try
+            {
+                string error = operation();
+                if (error == null) return 0;
+                AppLog.Log(category, "helper failed: " + error);
+                return 1;
+            }
+            catch (Exception ex)
+            {
+                AppLog.Log(category, "helper crashed: " + ex);
+                return 1;
+            }
         }
     }
 

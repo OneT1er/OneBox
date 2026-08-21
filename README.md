@@ -141,7 +141,7 @@ powershell -ExecutionPolicy Bypass -File scripts/package.ps1
 
 测试使用 xUnit v3 的 VSTest 适配器（`xunit.runner.visualstudio` + `Microsoft.NET.Test.Sdk`）；直接执行上面的 `dotnet test OneBox.sln -c Release` 即可发现并运行测试。
 
-开发构建输出 `src\bin\Debug\net10.0-windows10.0.19041.0\OneBox.exe`。完整发布 staging 在 `artifacts\publish\win-x64\`，必须同时包含 `OneBox.exe`、`OneBox.Service.exe`、`OneBox.Hardware.exe`、Contracts 及依赖 DLL，不能只复制单个 exe。`scripts/package.ps1` 从 `Directory.Build.props` 的唯一 `Version` 属性读取版本，生成物写到 `artifacts\packages\win-x64\`。目录 publish 运行需安装 [.NET 10 桌面运行时](https://dotnet.microsoft.com/download/dotnet/10.0)，Velopack Setup 会声明 `net10-x64-desktop` 运行时要求。旧版注册为 `OneBox.exe --service` 的 `OneBoxSvc` 会明确迁移到当前安装目录的 `OneBox.Service.exe`，不会创建并存服务。
+开发构建输出 `src\bin\Debug\net10.0-windows10.0.19041.0\`；普通 `dotnet build OneBox.sln -c Debug/Release` 会按项目依赖先构建 Service、Hardware，再把两个进程及其 `.deps.json`、`runtimeconfig.json`、Contracts 和依赖 DLL 组合到 GUI 同一目录，因此可直接启动该目录的 `OneBox.exe`。完整发布 staging 在 `artifacts\publish\win-x64\`，必须同时包含 `OneBox.exe`、`OneBox.Service.exe`、`OneBox.Hardware.exe`、Contracts 及依赖 DLL，不能只复制单个 exe。`scripts/package.ps1` 从 `Directory.Build.props` 的唯一 `Version` 属性读取版本，生成物写到 `artifacts\packages\win-x64\`。目录 publish 运行需安装 [.NET 10 桌面运行时](https://dotnet.microsoft.com/download/dotnet/10.0)，Velopack Setup 会声明 `net10-x64-desktop` 运行时要求。旧版注册为 `OneBox.exe --service` 的 `OneBoxSvc` 会明确迁移到当前安装目录的 `OneBox.Service.exe`，不会创建并存服务。
 
 ## 项目结构
 

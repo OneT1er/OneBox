@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
@@ -60,6 +61,18 @@ public sealed class QualityInvariantTests
     }
 
     [Fact]
+    public void ElevatedHelpers_LogWithoutShowingDuplicateDialogs()
+    {
+        string app = ReadSource("src", "App.cs");
+        string autoStart = ReadSource("src", "AutoStartService.cs");
+        Assert.Contains("RunCommandLineHelper", app, StringComparison.Ordinal);
+        Assert.DoesNotContain("MessageBox.Show(err", app, StringComparison.Ordinal);
+        Assert.Contains("详细原因已写入 OneBox.log", autoStart, StringComparison.Ordinal);
+        Assert.Contains("ElevatedHelperPolicy.TimeoutMessage", autoStart, StringComparison.Ordinal);
+        Assert.Contains("process.Kill()", autoStart, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void GeneralSettings_DoNotApplyAfterPersistenceFailure()
     {
         string dialog = ReadSource("src", "SettingsDialog.cs");
@@ -68,6 +81,70 @@ public sealed class QualityInvariantTests
         Assert.Contains("if (!TryPersist", ReadSource("src", "SettingsDialog.General.cs"), StringComparison.Ordinal);
         Assert.Contains("previousTopmost", command, StringComparison.Ordinal);
         Assert.Contains("AppPrefs.Set(PreferenceKeys.Window.Topmost, previousTopmost)", command, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SolutionBuild_ComposesCompanionProcessesIntoGuiOutput()
+    {
+#if DEBUG
+        const string configuration = "Debug";
+#else
+        const string configuration = "Release";
+#endif
+        string root = FindRepositoryRoot();
+        string bin = Path.Combine(root, "src", "bin", configuration);
+        string output = Directory.GetDirectories(bin, "net*", SearchOption.TopDirectoryOnly)
+            .FirstOrDefault(path => File.Exists(Path.Combine(path, "OneBox.exe")));
+        Assert.False(string.IsNullOrEmpty(output), "GUI build output was not found.");
+
+        foreach (string file in new[]
+        {
+            "OneBox.Service.exe", "OneBox.Service.dll", "OneBox.Service.deps.json",
+            "OneBox.Service.runtimeconfig.json", "OneBox.Hardware.exe", "OneBox.Hardware.dll",
+            "OneBox.Hardware.deps.json", "OneBox.Hardware.runtimeconfig.json",
+            "OneBox.Contracts.dll", "Microsoft.Extensions.Hosting.dll",
+            "Microsoft.Extensions.Hosting.WindowsServices.dll", "Microsoft.Extensions.Logging.EventLog.dll",
+            "System.Diagnostics.EventLog.dll", "LibreHardwareMonitorLib.dll"
+        })
+            Assert.True(File.Exists(Path.Combine(output, file)), file);
+    }
+
+    [Fact]
+    public void ServiceStartupProbe_LoadsTheComposedHostWithoutEventLogProviderFailure()
+    {
+#if DEBUG
+        const string configuration = "Debug";
+#else
+        const string configuration = "Release";
+#endif
+        string root = FindRepositoryRoot();
+        string bin = Path.Combine(root, "src", "bin", configuration);
+        string output = Directory.GetDirectories(bin, "net*", SearchOption.TopDirectoryOnly)
+            .FirstOrDefault(path => File.Exists(Path.Combine(path, "OneBox.exe")));
+        Assert.False(string.IsNullOrEmpty(output), "GUI build output was not found.");
+        string servicePath = Path.Combine(output, "OneBox.Service.exe");
+        Assert.True(File.Exists(servicePath), servicePath);
+
+        using var process = Process.Start(new ProcessStartInfo
+        {
+            FileName = servicePath,
+            Arguments = "--startup-probe",
+            WorkingDirectory = output,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardError = true,
+            RedirectStandardOutput = true,
+        });
+        Assert.NotNull(process);
+        bool exited = process.WaitForExit(15000);
+        if (!exited)
+        {
+            try { process.Kill(); } catch { }
+        }
+        Assert.True(exited, "Service startup probe did not exit promptly.");
+        string stderr = process.StandardError.ReadToEnd();
+        Assert.Equal(0, process.ExitCode);
+        Assert.DoesNotContain("FileNotFoundException", stderr, StringComparison.Ordinal);
     }
 
     private static string ReadSource(params string[] parts)
@@ -80,5 +157,16 @@ public sealed class QualityInvariantTests
             directory = directory.Parent;
         }
         throw new FileNotFoundException("Repository source file was not found.", Path.Combine(parts));
+    }
+
+    private static string FindRepositoryRoot()
+    {
+        DirectoryInfo directory = new(AppContext.BaseDirectory);
+        while (directory != null)
+        {
+            if (Directory.Exists(Path.Combine(directory.FullName, "src"))) return directory.FullName;
+            directory = directory.Parent;
+        }
+        throw new DirectoryNotFoundException("Repository root was not found.");
     }
 }

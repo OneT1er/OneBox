@@ -2,7 +2,7 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <TargetFramework>$(OneBoxWindowsTargetFramework)</TargetFramework>
     <UseWPF>true</UseWPF>
     <UseWindowsForms>true</UseWindowsForms>
     <RootNamespace>PowerAudioManager</RootNamespace>
@@ -43,6 +43,11 @@
 
   <ItemGroup>
     <ProjectReference Include="OneBox.Contracts\OneBox.Contracts.csproj" />
+    <!-- Build the two companion processes before the GUI. Their assemblies
+         are intentionally not compile-time references; the target below
+         composes their runnable artifacts beside OneBox.exe. -->
+    <ProjectReference Include="OneBox.Service\OneBox.Service.csproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="OneBox.Hardware\OneBox.Hardware.csproj" ReferenceOutputAssembly="false" />
     <PackageReference Include="CommunityToolkit.Mvvm" />
     <PackageReference Include="NAudio" />
     <PackageReference Include="Vortice.DXGI" />
@@ -50,5 +55,26 @@
     <PackageReference Include="System.ServiceProcess.ServiceController" />
     <PackageReference Include="Velopack" />
   </ItemGroup>
+
+  <!-- A normal solution build must be runnable from the GUI output directory,
+       just like the folder-publish output used by Velopack. Build-order-only
+       project references ensure these directories exist before this target. -->
+  <Target Name="CopyOneBoxCompanionBuildOutputs" AfterTargets="Build"
+          Condition="'$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true'">
+    <PropertyGroup>
+      <_OneBoxServiceOutputDir>$(MSBuildProjectDirectory)\OneBox.Service\bin\$(Configuration)\$(OneBoxWindowsTargetFramework)\</_OneBoxServiceOutputDir>
+      <_OneBoxHardwareOutputDir>$(MSBuildProjectDirectory)\OneBox.Hardware\bin\$(Configuration)\$(OneBoxWindowsTargetFramework)\$(OneBoxCompanionRuntimeIdentifier)\</_OneBoxHardwareOutputDir>
+      <_OneBoxServiceOutputDir Condition="'$(RuntimeIdentifier)' != ''">$(MSBuildProjectDirectory)\OneBox.Service\bin\$(Configuration)\$(OneBoxWindowsTargetFramework)\$(RuntimeIdentifier)\</_OneBoxServiceOutputDir>
+      <_OneBoxHardwareOutputDir Condition="'$(RuntimeIdentifier)' != ''">$(MSBuildProjectDirectory)\OneBox.Hardware\bin\$(Configuration)\$(OneBoxWindowsTargetFramework)\$(RuntimeIdentifier)\</_OneBoxHardwareOutputDir>
+    </PropertyGroup>
+    <ItemGroup>
+      <_OneBoxCompanionArtifacts Include="$(_OneBoxServiceOutputDir)*.exe;$(_OneBoxServiceOutputDir)*.dll;$(_OneBoxServiceOutputDir)*.json;$(_OneBoxServiceOutputDir)*.pdb" />
+      <_OneBoxCompanionArtifacts Include="$(_OneBoxHardwareOutputDir)*.exe;$(_OneBoxHardwareOutputDir)*.dll;$(_OneBoxHardwareOutputDir)*.json;$(_OneBoxHardwareOutputDir)*.pdb" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_OneBoxCompanionArtifacts)"
+          DestinationFiles="@(_OneBoxCompanionArtifacts->'$(TargetDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+    <Message Importance="Low" Text="Composed OneBox companion outputs into $(TargetDir)" />
+  </Target>
 
 </Project>

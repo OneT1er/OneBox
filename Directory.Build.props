@@ -6,6 +6,13 @@
     <LangVersion>latest</LangVersion>
     <Nullable>disable</Nullable>
     <ImplicitUsings>disable</ImplicitUsings>
+    <!-- Keep the three runtime projects on one Windows TFM so their normal
+         build outputs can be composed into the GUI's runnable directory. -->
+    <OneBoxWindowsTargetFramework>net10.0-windows10.0.19041.0</OneBoxWindowsTargetFramework>
+    <!-- LibreHardwareMonitor ships its implementation as a Windows RID asset;
+         build the hardware helper for the same directory-publish architecture
+         used by the package scripts even when the solution build omits -r. -->
+    <OneBoxCompanionRuntimeIdentifier>win-x64</OneBoxCompanionRuntimeIdentifier>
     <DebugType>portable</DebugType>
     <Deterministic>true</Deterministic>
     <!-- Single application version source used by every executable and scripts/package.ps1. -->

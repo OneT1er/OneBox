@@ -181,8 +181,7 @@ namespace PowerAudioManager
                 };
                 using Process process = Process.Start(psi);
                 if (process == null) return "无法启动提权辅助进程";
-                if (!process.WaitForExit(60000)) return "提权操作等待超时";
-                return process.ExitCode == 0 ? null : $"提权操作失败 (exit={process.ExitCode})";
+                return ReadElevatedExit(process);
             }
             catch (Win32Exception ex) when (ex.NativeErrorCode == 1223)
             { return "已取消 UAC 授权"; }
@@ -201,11 +200,27 @@ namespace PowerAudioManager
                     UseShellExecute = true,
                 });
                 if (process == null) return "无法启动提权辅助进程";
-                if (!process.WaitForExit(60000)) return "提权操作等待超时";
-                return process.ExitCode == 0 ? null : $"提权操作失败 (exit={process.ExitCode})";
+                return ReadElevatedExit(process);
             }
             catch (Win32Exception ex) when (ex.NativeErrorCode == 1223) { return "已取消 UAC 授权"; }
             catch (Exception ex) { return $"提权失败: {ex.Message}"; }
+        }
+
+        static string ReadElevatedExit(Process process)
+        {
+            if (!process.WaitForExit(60000))
+            {
+                try
+                {
+                    if (!process.HasExited) process.Kill();
+                    process.WaitForExit(5000);
+                }
+                catch { }
+                bool terminated = false;
+                try { terminated = process.HasExited; } catch { }
+                return ElevatedHelperPolicy.TimeoutMessage(terminated);
+            }
+            return process.ExitCode == 0 ? null : $"提权操作失败（exit={process.ExitCode}；详细原因已写入 OneBox.log）";
         }
 
         public static string Enable(AutoStartMethod method)
@@ -354,9 +369,14 @@ namespace PowerAudioManager
                 var coordinator = new ServiceRegistrationCoordinator(ServiceRegistration);
                 ServiceRegistrationResult registration = coordinator.Ensure(ServiceExePath);
                 if (!registration.Success)
+                {
+                    string detail = string.IsNullOrWhiteSpace(registration.Diagnostic)
+                        ? $"exit={registration.ExitCode}"
+                        : registration.Diagnostic;
                     return registration.PreviousPathKind == ServiceImagePathKind.LegacyGui
-                        ? $"检测到旧 OneBox.exe --service 注册，但迁移到 OneBox.Service.exe 失败 (exit={registration.ExitCode})。请关闭自启后重新安装服务。"
-                        : $"服务安装或路径修复失败 (exit={registration.ExitCode})，当前路径: {ServiceRegistration.ImagePath}";
+                        ? $"检测到旧 OneBox.exe --service 注册，但迁移到 OneBox.Service.exe 失败（{detail}）。请关闭自启后重新安装服务。"
+                        : $"服务安装或路径修复失败（{detail}），当前路径: {ServiceRegistration.ImagePath}";
+                }
                 if (registration.Action != ServiceRegistrationAction.None)
                     AppLog.Log("AutoStart", $"service registration action={registration.Action}");
                 try
