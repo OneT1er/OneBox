@@ -107,6 +107,8 @@ public sealed class QualityInvariantTests
             "System.Diagnostics.EventLog.dll", "LibreHardwareMonitorLib.dll"
         })
             Assert.True(File.Exists(Path.Combine(output, file)), file);
+        Assert.True(new FileInfo(Path.Combine(output, "System.Diagnostics.EventLog.dll")).Length > 100_000,
+            "GUI output must contain the win-x64 EventLog implementation, not its ref assembly.");
     }
 
     [Fact]

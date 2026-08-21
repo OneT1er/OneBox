@@ -6,6 +6,7 @@
     <RootNamespace>OneBox.Service</RootNamespace>
     <ImplicitUsings>enable</ImplicitUsings>
     <SelfContained>false</SelfContained>
+    <RuntimeIdentifier>$(OneBoxCompanionRuntimeIdentifier)</RuntimeIdentifier>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\OneBox.Contracts\OneBox.Contracts.csproj" />

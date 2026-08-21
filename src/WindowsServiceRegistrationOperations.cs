@@ -42,6 +42,7 @@ internal sealed class WindowsServiceRegistrationOperations : IServiceRegistratio
 
     public int StopIfRunning()
     {
+        LastError = null;
         try
         {
             using var controller = new ServiceController(ServiceName);
@@ -65,6 +66,7 @@ internal sealed class WindowsServiceRegistrationOperations : IServiceRegistratio
 
     public int StartIfStopped()
     {
+        LastError = null;
         try
         {
             using var controller = new ServiceController(ServiceName);

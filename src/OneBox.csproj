@@ -62,7 +62,7 @@
   <Target Name="CopyOneBoxCompanionBuildOutputs" AfterTargets="Build"
           Condition="'$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true'">
     <PropertyGroup>
-      <_OneBoxServiceOutputDir>$(MSBuildProjectDirectory)\OneBox.Service\bin\$(Configuration)\$(OneBoxWindowsTargetFramework)\</_OneBoxServiceOutputDir>
+      <_OneBoxServiceOutputDir>$(MSBuildProjectDirectory)\OneBox.Service\bin\$(Configuration)\$(OneBoxWindowsTargetFramework)\$(OneBoxCompanionRuntimeIdentifier)\</_OneBoxServiceOutputDir>
       <_OneBoxHardwareOutputDir>$(MSBuildProjectDirectory)\OneBox.Hardware\bin\$(Configuration)\$(OneBoxWindowsTargetFramework)\$(OneBoxCompanionRuntimeIdentifier)\</_OneBoxHardwareOutputDir>
       <_OneBoxServiceOutputDir Condition="'$(RuntimeIdentifier)' != ''">$(MSBuildProjectDirectory)\OneBox.Service\bin\$(Configuration)\$(OneBoxWindowsTargetFramework)\$(RuntimeIdentifier)\</_OneBoxServiceOutputDir>
       <_OneBoxHardwareOutputDir Condition="'$(RuntimeIdentifier)' != ''">$(MSBuildProjectDirectory)\OneBox.Hardware\bin\$(Configuration)\$(OneBoxWindowsTargetFramework)\$(RuntimeIdentifier)\</_OneBoxHardwareOutputDir>
