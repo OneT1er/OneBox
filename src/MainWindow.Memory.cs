@@ -5,6 +5,11 @@ using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Threading;
 using System.IO;
+using System.IO.Pipes;
+using System.Security.Principal;
+using System.Threading;
+using OneBox.Contracts;
+using PowerAudioManager.Commands;
 
 namespace PowerAudioManager
 {
@@ -29,61 +34,87 @@ namespace PowerAudioManager
 
         internal void CleanMemory()
         {
-            CleanMemory(MemoryCleaner.GetSavedFlags());
+            _ = ExecuteCommandAsync(AppCommandId.MemoryClean, CommandSource.System,
+                new MemoryCleanPayload(MemoryCleaner.GetSavedFlags()));
         }
 
         internal void CleanMemory(MemoryCleaner.CleanFlags flags)
         {
-            if (_memStatusLabel != null) _memStatusLabel.Text = "正在清理...";
-            System.Threading.ThreadPool.QueueUserWorkItem(state =>
-            {
-                // 非管理员：命令服务（OneBoxSvc）执行清理，无 UAC
-                if (!AdminUtils.IsAdmin())
-                {
-                    Exception err = null;
-                    ulong freedBytes = 0;
-                    try
-                    {
-                        using (var client = new System.IO.Pipes.NamedPipeClientStream(".", "Global\\OneBox\\MemClean", System.IO.Pipes.PipeDirection.InOut))
-                        {
-                            client.Connect(8000);
-                            using (var bw = new System.IO.BinaryWriter(client, System.Text.Encoding.UTF8, true)) { bw.Write((int)flags); bw.Flush(); }
-                            using (var br = new System.IO.BinaryReader(client, System.Text.Encoding.UTF8, true)) freedBytes = br.ReadUInt64();
-                        }
-                    }
-                    catch (Exception ex) { err = ex; }
-                    Dispatcher.BeginInvoke(new Action(() =>
-                    {
-                        if (err != null) { if (_memStatusLabel != null) _memStatusLabel.Text = "清理失败: " + err.Message; return; }
-                        if (_memStatusLabel != null) _memStatusLabel.Text = string.Format("已释放 {0:0} MB（服务清理）", freedBytes / 1024.0 / 1024.0);
-                        AppLog.Log("MemoryClean", "service freed=" + (int)(freedBytes / 1024 / 1024) + "MB");
-                        Dispatcher.BeginInvoke(new Action(UpdateMemoryUI), System.Windows.Threading.DispatcherPriority.ApplicationIdle);
-                    }));
-                    return;
-                }
+            _ = ExecuteCommandAsync(AppCommandId.MemoryClean, CommandSource.System,
+                new MemoryCleanPayload(flags));
+        }
 
-                // 管理员：直接清理
-                MemoryCleaner.CleanResult r = null;
-                Exception err2 = null;
-                try { r = MemoryCleaner.CleanAll(flags); }
-                catch (Exception ex) { err2 = ex; }
-                Dispatcher.BeginInvoke(new Action(() =>
+        internal async System.Threading.Tasks.Task<CommandResult> CleanMemoryCoreAsync(
+            MemoryCleaner.CleanFlags flags, CancellationToken cancellationToken)
+        {
+            if (!MemoryCleaner.HasSelectedAreas(flags))
+            {
+                if (_memStatusLabel != null) _memStatusLabel.Text = "未选择清理项目";
+                AppLog.Log("MemoryClean", "skipped: no area selected");
+                return CommandResult.Fail(CommandErrorCode.Rejected, "未选择内存清理项目。");
+            }
+            if (_memStatusLabel != null) _memStatusLabel.Text = "正在清理...";
+            cancellationToken.ThrowIfCancellationRequested();
+
+            // 非管理员：命令服务（OneBoxSvc）执行清理，无 UAC。
+            if (!AdminUtils.IsAdmin())
+            {
+                try
                 {
-                    if (err2 != null)
+                    ulong freedBytes = await System.Threading.Tasks.Task.Run(() =>
                     {
-                        if (_memStatusLabel != null) _memStatusLabel.Text = "清理失败: " + err2.Message;
-                        AppLog.Log("MemoryClean", "error: " + err2.Message);
-                        return;
-                    }
-                    if (r != null && _memStatusLabel != null)
-                    {
-                        double freedMb = r.FreedBytes / 1024.0 / 1024.0;
-                        _memStatusLabel.Text = string.Format("已释放 {0:0} MB", freedMb);
-                        AppLog.Log("MemoryClean", "freed=" + (int)freedMb + "MB flags=" + flags);
-                        Dispatcher.BeginInvoke(new Action(UpdateMemoryUI), System.Windows.Threading.DispatcherPriority.ApplicationIdle);
-                    }
-                }));
-            });
+                        using (var identity = WindowsIdentity.GetCurrent(TokenAccessLevels.Query))
+                        using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
+                        using (var client = new NamedPipeClientStream(".", PipeNames.ForCommand(identity.User?.Value), PipeDirection.InOut,
+                            PipeOptions.Asynchronous, TokenImpersonationLevel.Impersonation))
+                        {
+                            timeout.CancelAfter(TimeSpan.FromSeconds(15));
+                            client.ConnectAsync((int)IpcProtocol.ConnectTimeout.TotalMilliseconds, timeout.Token).GetAwaiter().GetResult();
+                            PipeServerIdentityVerifier.EnsureLocalSystemServer(client);
+                            var request = IpcRequest.Create(IpcCommand.CleanMemory, new CleanMemoryPayload { Flags = (int)flags });
+                            IpcFraming.WriteAsync(client, request, timeout.Token).GetAwaiter().GetResult();
+                            IpcResponse response = IpcFraming.ReadAsync<IpcResponse>(client, timeout.Token).GetAwaiter().GetResult();
+                            if (response.Version != IpcProtocol.Version || response.RequestId != request.RequestId || response.Command != IpcCommand.CleanMemory)
+                                throw new IpcProtocolException(IpcErrorCode.InvalidMessage, "内存清理响应协议无效");
+                            if (!response.Success)
+                                throw new IpcProtocolException(response.ErrorCode, response.ErrorMessage ?? "服务拒绝内存清理请求");
+                            CleanMemoryResult result = response.ReadResult<CleanMemoryResult>();
+                            return result?.FreedBytes ?? 0;
+                        }
+                    }, cancellationToken);
+                    if (_memStatusLabel != null) _memStatusLabel.Text = string.Format(
+                        "已释放 {0:0} MB（服务清理）", freedBytes / 1024.0 / 1024.0);
+                    AppLog.Log("MemoryClean", "service freed=" + (int)(freedBytes / 1024 / 1024) + "MB");
+                    _ = Dispatcher.BeginInvoke(new Action(UpdateMemoryUI), DispatcherPriority.ApplicationIdle);
+                    return CommandResult.Ok(freedBytes);
+                }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex)
+                {
+                    AppLog.Log("MemoryClean", "service pipe rejected/disconnected: " + ex.Message);
+                    if (_memStatusLabel != null) _memStatusLabel.Text = "清理失败: " + ex.Message;
+                    return CommandResult.Fail(CommandErrorCode.Failed, "内存清理失败：" + ex.Message);
+                }
+            }
+
+            // 管理员：直接清理。
+            try
+            {
+                var result = await System.Threading.Tasks.Task.Run(() => MemoryCleaner.CleanAll(flags),
+                    cancellationToken);
+                double freedMb = result.FreedBytes / 1024.0 / 1024.0;
+                if (_memStatusLabel != null) _memStatusLabel.Text = string.Format("已释放 {0:0} MB", freedMb);
+                AppLog.Log("MemoryClean", "freed=" + (int)freedMb + "MB flags=" + flags);
+                _ = Dispatcher.BeginInvoke(new Action(UpdateMemoryUI), DispatcherPriority.ApplicationIdle);
+                return CommandResult.Ok(result);
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                if (_memStatusLabel != null) _memStatusLabel.Text = "清理失败: " + ex.Message;
+                AppLog.Log("MemoryClean", ex);
+                return CommandResult.Fail(CommandErrorCode.Failed, "内存清理失败：" + ex.Message);
+            }
         }
 
         public void RestartAutoCleanTimer()

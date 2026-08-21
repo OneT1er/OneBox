@@ -11,6 +11,7 @@ using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using System.IO;
 using Microsoft.Win32;
+using Velopack;
 
 namespace PowerAudioManager
 {
@@ -29,21 +30,26 @@ namespace PowerAudioManager
         [STAThread]
         public static void Main(string[] args)
         {
+            VelopackApp.Build()
+                .SetAutoApplyOnStartup(false)
+                .OnBeforeUpdateFastCallback(_ => UpdateLifecycleHooks.BeforeUpdateFastCallback())
+                .OnAfterUpdateFastCallback(_ => UpdateLifecycleHooks.AfterUpdateFastCallback())
+                .OnRestarted(_ => UpdateLifecycleHooks.Restarted())
+                .Run();
+
             // 尽早记录进程启动（含参数），用于诊断开机自启中 GUI 静默消失等早期故障。
             AppLog.Log("Main", args.Length > 0 ? $"start args=[{string.Join(", ", args)}]" : "start (no args)");
+            if (args.Length == 0)
+            {
+                try { UpdateLifecycleHooks.RetryPendingServiceRepair(); }
+                catch (Exception ex) { AppLog.Log("Update service retry", ex); }
+            }
 
-            // .NET 8 默认仅支持 ASCII/UTF-8/UTF-16；936 (GBK) 等代码页在
+            // .NET 10 默认仅支持 ASCII/UTF-8/UTF-16；936 (GBK) 等代码页在
             // 未注册提供程序时会抛 NotSupportedException。powercfg OEM 输出和
             // 升级脚本依赖 GBK，必须在所有 Encoding 调用前注册。
             // .NET Framework 4 默认加载所有 Windows 代码页，这是迁移回归。
             try { System.Text.Encoding.RegisterProvider(System.Text.CodePagesEncodingProvider.Instance); } catch { }
-
-            // --service: 以 Windows 服务模式运行，监听会话变化并在交互会话中启动 OneBox.exe（不带 --service）。
-            if (args.Length > 0 && args[0] == "--service")
-            {
-                try { PowerAudioManager.OneBoxService.RunService(); } catch { }
-                return;
-            }
 
             // --elevate-autostart <method>: 提权辅助进程，应用开机自启设置（schtasks/sc 需管理员权限）后退出。
             // 非管理员 GUI 实例启动它，使 UAC 对话框显示 OneBox 名称。
@@ -54,7 +60,23 @@ namespace PowerAudioManager
                     var method = (PowerAudioManager.AutoStartMethod)m;
                     string err = PowerAudioManager.AutoStartService.ApplyAutoStart(method);
                     if (err != null)
+                    {
+                        Environment.ExitCode = 1;
                         System.Windows.MessageBox.Show(err, "OneBox 开机自启", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Warning);
+                    }
+                }
+                else Environment.ExitCode = 2;
+                return;
+            }
+
+            // 提权后迁移/修复独立服务路径，不改变用户的自启动偏好。
+            if (args.Length > 0 && args[0] == "--repair-service")
+            {
+                string err = PowerAudioManager.AutoStartService.RepairService();
+                if (err != null)
+                {
+                    Environment.ExitCode = 1;
+                    System.Windows.MessageBox.Show(err, "OneBox 服务迁移", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Warning);
                 }
                 return;
             }
@@ -65,7 +87,21 @@ namespace PowerAudioManager
                 AppLog.Log("AutoStart", "disable helper start");
                 string err = PowerAudioManager.AutoStartService.Disable();
                 if (err != null)
+                {
+                    Environment.ExitCode = 1;
                     System.Windows.MessageBox.Show(err, "开机自启", System.Windows.MessageBoxButton.OK, System.Windows.MessageBoxImage.Warning);
+                }
+                return;
+            }
+
+            if (args.Length > 0 && args[0] == "--prepare-update")
+            {
+                string err = AutoStartService.StopServiceForUpdate();
+                if (err != null)
+                {
+                    Environment.ExitCode = 1;
+                    AppLog.Log("Update prepare helper", err);
+                }
                 return;
             }
 
@@ -85,14 +121,6 @@ namespace PowerAudioManager
                 return;
             }
 
-            // --temp-monitor: admin 温度 helper 进程，运行 LibreHardwareMonitor 经命名管道推送温度给普通主进程
-            if (args.Length > 0 && args[0] == "--temp-monitor")
-            {
-                AppLog.Log("TempHelper", "start");
-                PowerAudioManager.TempMonitorHelper.Run();
-                return;
-            }
-
             // --launcher <parentHwnd>: 普通权限快捷启动窗口，SetParent 嵌入 admin 悬浮窗容器
             if (args.Length > 1 && args[0] == "--launcher")
             {
@@ -106,7 +134,7 @@ namespace PowerAudioManager
                 return;
             }
 
-            // 后台预热内存 PerformanceCounter：.NET 8 冷启动首次构造 ~5s，GetStatus() 在 UI 线程执行，提前启动避免界面卡顿。
+            // 后台预热内存 PerformanceCounter：.NET 10 冷启动首次构造 ~5s，GetStatus() 在 UI 线程执行，提前启动避免界面卡顿。
             try { PowerAudioManager.MemoryCleaner.WarmupCounters(); } catch { }
 
             // 单实例守护：第二个启动通过 Mutex.TryOpenExisting 检测已有实例，发信号激活窗口后退出。
@@ -137,7 +165,7 @@ namespace PowerAudioManager
             };
             var app = new App();
             app.DispatcherUnhandledException += (s, ex) => { try { System.IO.File.AppendAllText(System.IO.Path.GetTempPath() + "pam_crash.log", $"{System.Environment.NewLine}{DateTime.Now} Dispatcher: {ex.Exception}"); } catch { } ex.Handled = true; };
-            // MaterialDesign 深色 + 紫影主题 #8E8CD8，应用级作用域，所有窗口共享同一设计语言。
+            // OneBox 深色 + 紫影主题 #8E8CD8，应用级作用域，所有窗口共享同一设计语言。
             // 必须在 new App() 之后（Application.Current 存在）、窗口构建之前执行。
             try { MaterialTheme.Apply(); } catch (Exception ex) { try { System.IO.File.AppendAllText(System.IO.Path.GetTempPath() + "pam_crash.log", $"{DateTime.Now} MaterialTheme: {ex}"); } catch { } }
             // global:: 前缀绕过 Application.MainWindow 属性名冲突

@@ -1,7 +1,11 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
+using System.Net.Http;
+using System.Net.Http.Headers;
+using System.Text;
 using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
 using Microsoft.Win32;
 
 namespace PowerAudioManager
@@ -14,6 +18,8 @@ namespace PowerAudioManager
         // DPAPI 熵绑定加密数据到本应用。存储格式 "DP1:" + Base64(ProtectedData(...))，
         // 加密值与遗留明文可明确区分，GetKey 透明读取。
         static readonly byte[] KeyEntropy = System.Text.Encoding.UTF8.GetBytes("OneBox.Translate.Key.v1");
+        static readonly object CredentialErrorLock = new object();
+        static string _credentialError;
 
         public static string GetAppId()
         {
@@ -23,8 +29,42 @@ namespace PowerAudioManager
 
         public static string GetKey()
         {
-            try { using (var k = Registry.CurrentUser.OpenSubKey(KeyPath)) return UnprotectKey(k == null ? "" : (k.GetValue("Translate.Key") as string ?? "")); }
-            catch { return ""; }
+            SetCredentialError(null);
+            string stored;
+            try
+            {
+                using var key = Registry.CurrentUser.OpenSubKey(KeyPath);
+                stored = key == null ? "" : key.GetValue("Translate.Key") as string ?? "";
+            }
+            catch (Exception ex)
+            {
+                SetCredentialError("无法读取翻译 API Key：" + ex.Message);
+                return "";
+            }
+
+            if (!TryUnprotectKeyFromStorage(stored, UnprotectWithDpapi, out var plain, out var legacy, out var error))
+            {
+                SetCredentialError(error);
+                return "";
+            }
+            if (!legacy || string.IsNullOrEmpty(plain)) return plain;
+
+            // 遗留明文先加密成功，再原位替换；任一步失败都保留原值。
+            if (!TryProtectKeyForStorage(plain, ProtectWithDpapi, out var protectedValue, out error))
+            {
+                SetCredentialError("API Key 安全迁移失败，原值已保留：" + error);
+                return plain;
+            }
+            try
+            {
+                using var key = Registry.CurrentUser.CreateSubKey(KeyPath);
+                key.SetValue("Translate.Key", protectedValue);
+            }
+            catch (Exception ex)
+            {
+                SetCredentialError("API Key 安全迁移失败，原值已保留：" + ex.Message);
+            }
+            return plain;
         }
 
         public static string GetInstruction()
@@ -33,48 +73,109 @@ namespace PowerAudioManager
             catch { return ""; }
         }
 
-        public static void SetCreds(string appId, string key, string instruction)
+        public static bool SetCreds(string appId, string key, string instruction)
         {
+            SetCredentialError(null);
+            if (!TryProtectKeyForStorage(key ?? "", ProtectWithDpapi, out var protectedKey, out var error))
+            {
+                SetCredentialError("API Key 加密失败，设置未保存：" + error);
+                return false;
+            }
             try
             {
                 using (var k = Registry.CurrentUser.CreateSubKey(KeyPath))
                 {
                     k.SetValue("Translate.AppId", appId ?? "");
-                    k.SetValue("Translate.Key", ProtectKey(key ?? ""));
+                    k.SetValue("Translate.Key", protectedKey);
                     k.SetValue("Translate.Instruction", instruction ?? "");
                 }
+                return true;
             }
-            catch { }
+            catch (Exception ex)
+            {
+                SetCredentialError("翻译设置保存失败：" + ex.Message);
+                return false;
+            }
         }
 
-        static string ProtectKey(string plain)
+        public static string GetCredentialError()
         {
-            if (string.IsNullOrEmpty(plain)) return "";
+            lock (CredentialErrorLock) return _credentialError;
+        }
+
+        static void SetCredentialError(string error)
+        {
+            lock (CredentialErrorLock) _credentialError = error;
+        }
+
+        static byte[] ProtectWithDpapi(byte[] plain)
+        {
+            return System.Security.Cryptography.ProtectedData.Protect(
+                plain, KeyEntropy, System.Security.Cryptography.DataProtectionScope.CurrentUser);
+        }
+
+        static byte[] UnprotectWithDpapi(byte[] encrypted)
+        {
+            return System.Security.Cryptography.ProtectedData.Unprotect(
+                encrypted, KeyEntropy, System.Security.Cryptography.DataProtectionScope.CurrentUser);
+        }
+
+        // 公开为无注册表、无真实 DPAPI 的纯逻辑测试入口。
+        public static bool TryProtectKeyForStorage(
+            string plain, Func<byte[], byte[]> protector, out string stored, out string error)
+        {
+            stored = "";
+            error = null;
+            if (string.IsNullOrEmpty(plain)) return true;
+            if (protector == null)
+            {
+                error = "没有可用的凭据保护器";
+                return false;
+            }
             try
             {
-                var enc = System.Security.Cryptography.ProtectedData.Protect(
-                    System.Text.Encoding.UTF8.GetBytes(plain), KeyEntropy,
-                    System.Security.Cryptography.DataProtectionScope.CurrentUser);
-                return "DP1:" + Convert.ToBase64String(enc);
+                byte[] encrypted = protector(Encoding.UTF8.GetBytes(plain));
+                if (encrypted == null || encrypted.Length == 0) throw new InvalidOperationException("保护器返回空数据");
+                stored = "DP1:" + Convert.ToBase64String(encrypted);
+                return true;
             }
-            catch { return plain; } // DPAPI 不可用 — 存储明文以免丢失密钥
+            catch (Exception ex)
+            {
+                error = ex.Message;
+                return false;
+            }
         }
 
-        static string UnprotectKey(string stored)
+        public static bool TryUnprotectKeyFromStorage(
+            string stored, Func<byte[], byte[]> unprotector, out string plain, out bool legacy, out string error)
         {
-            if (string.IsNullOrEmpty(stored)) return "";
-            if (stored.StartsWith("DP1:"))
+            plain = "";
+            legacy = false;
+            error = null;
+            if (string.IsNullOrEmpty(stored)) return true;
+            if (!stored.StartsWith("DP1:", StringComparison.Ordinal))
             {
-                try
-                {
-                    var enc = Convert.FromBase64String(stored.Substring(4));
-                    return System.Text.Encoding.UTF8.GetString(
-                        System.Security.Cryptography.ProtectedData.Unprotect(enc, KeyEntropy,
-                            System.Security.Cryptography.DataProtectionScope.CurrentUser));
-                }
-                catch { return ""; } // 加密数据损坏 — 不退回乱码
+                plain = stored;
+                legacy = true;
+                return true;
             }
-            return stored; // DPAPI 加密前的遗留明文
+            if (unprotector == null)
+            {
+                error = "没有可用的凭据解密器";
+                return false;
+            }
+            try
+            {
+                byte[] decrypted = unprotector(Convert.FromBase64String(stored.Substring(4)));
+                if (decrypted == null) throw new InvalidOperationException("解密器返回空数据");
+                plain = Encoding.UTF8.GetString(decrypted);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                error = "API Key 解密失败：" + ex.Message;
+                return false;
+            }
         }
 
         public class Result
@@ -96,12 +197,33 @@ namespace PowerAudioManager
 
         public static Result Translate(string text, string from, string to)
         {
-            var r = new Result();
+            return TranslateAsync(text, from, to, CancellationToken.None).GetAwaiter().GetResult();
+        }
+
+        public static async Task<Result> TranslateAsync(
+            string text, string from, string to, CancellationToken cancellationToken)
+        {
             string appId = GetAppId();
             string key = GetKey();
             string instruction = GetInstruction();
+            string credentialError = GetCredentialError();
+            if (!string.IsNullOrEmpty(credentialError)) return new Result { Error = credentialError };
+            return await TranslateAsync(
+                text, from, to, appId, key, instruction, OneBoxHttp.Client, cancellationToken).ConfigureAwait(false);
+        }
 
-            if (string.IsNullOrEmpty(key))
+        public static async Task<Result> TranslateAsync(
+            string text,
+            string from,
+            string to,
+            string appId,
+            string apiKey,
+            string instruction,
+            HttpClient httpClient,
+            CancellationToken cancellationToken)
+        {
+            var r = new Result();
+            if (string.IsNullOrEmpty(apiKey))
             {
                 r.Error = "未设置 API Key（点击翻译窗口的设置按钮配置）";
                 return r;
@@ -115,7 +237,8 @@ namespace PowerAudioManager
             var chunks = SplitIntoChunks(text, MaxChunkBytes);
             if (chunks.Count == 1)
             {
-                return TranslateOnce(chunks[0], from, to, appId, key, instruction);
+                return await TranslateOnceAsync(
+                    chunks[0], from, to, appId, apiKey, instruction, httpClient, cancellationToken).ConfigureAwait(false);
             }
 
             // 逐段翻译并拼接。首错即停。分段已保留尾部分隔符（空格/换行/标点），
@@ -124,7 +247,10 @@ namespace PowerAudioManager
             string detected = null;
             for (int i = 0; i < chunks.Count; i++)
             {
-                var cr = TranslateOnce(chunks[i], from, to, appId, key, instruction);
+                if (cancellationToken.IsCancellationRequested)
+                    return new Result { Error = "请求已取消" };
+                var cr = await TranslateOnceAsync(
+                    chunks[i], from, to, appId, apiKey, instruction, httpClient, cancellationToken).ConfigureAwait(false);
                 if (!string.IsNullOrEmpty(cr.Error))
                 {
                     r.Error = $"第 {i + 1}/{chunks.Count} 段失败: {cr.Error}";
@@ -244,20 +370,20 @@ namespace PowerAudioManager
             return maxIdx;
         }
 
-        static Result TranslateOnce(string text, string from, string to, string appId, string key, string instruction)
+        static async Task<Result> TranslateOnceAsync(
+            string text,
+            string from,
+            string to,
+            string appId,
+            string key,
+            string instruction,
+            HttpClient httpClient,
+            CancellationToken cancellationToken)
         {
             var r = new Result();
             if (string.IsNullOrEmpty(text)) { r.Translation = ""; return r; }
             try
             {
-                System.Net.ServicePointManager.SecurityProtocol =
-                    System.Net.SecurityProtocolType.Tls12 | System.Net.ServicePointManager.SecurityProtocol;
-                var req = (System.Net.HttpWebRequest)System.Net.WebRequest.Create(EndpointAi);
-                req.Method = "POST";
-                req.ContentType = "application/json";
-                req.Headers["Authorization"] = "Bearer " + key;
-                req.Timeout = 15000;
-
                 string fromArg = string.IsNullOrEmpty(from) ? "auto" : from;
                 string toArg = string.IsNullOrEmpty(to) ? "zh" : to;
 
@@ -268,75 +394,59 @@ namespace PowerAudioManager
                 payload["q"] = text;
                 if (!string.IsNullOrEmpty(instruction)) payload["instruction"] = instruction;
 
-                var body = JsonSerializer.SerializeToUtf8Bytes(payload);
-                req.ContentLength = body.Length;
-                using (var s = req.GetRequestStream()) s.Write(body, 0, body.Length);
+                using var request = new HttpRequestMessage(HttpMethod.Post, EndpointAi);
+                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", key);
+                request.Headers.UserAgent.ParseAdd("OneBox/1.7.2");
+                request.Headers.Accept.ParseAdd("application/json");
+                request.Content = new ByteArrayContent(JsonSerializer.SerializeToUtf8Bytes(payload));
+                request.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");
+                string json = await OneBoxHttp.SendForTextAsync(
+                    httpClient, request, TimeSpan.FromSeconds(15), cancellationToken).ConfigureAwait(false);
 
-                using (var resp = (System.Net.HttpWebResponse)req.GetResponse())
-                using (var rs = resp.GetResponseStream())
-                using (var rd = new StreamReader(rs, System.Text.Encoding.UTF8))
+                try
                 {
-                    var json = rd.ReadToEnd();
-                    var root = ParseJson(json);
+                    using var root = JsonDocument.Parse(json);
 
-                    string err = root == null ? null : AsString(root, "error_code");
+                    string err = AsString(root, "error_code");
                     if (!string.IsNullOrEmpty(err) && err != "0" && err != "52000")
                     {
                         r.Error = $"百度: {err} {AsString(root, "error_msg")}";
                         return r;
                     }
 
-                    string result = root == null ? null : ExtractResult(root);
+                    string result = ExtractResult(root);
                     if (!string.IsNullOrEmpty(result))
                     {
                         r.Translation = result;
-                        r.DetectedFrom = root == null ? null : AsString(root, "from");
+                        r.DetectedFrom = AsString(root, "from");
                         return r;
                     }
 
-                    var dst = root == null ? null : ExtractDstList(root);
+                    var dst = ExtractDstList(root);
                     if (dst != null && dst.Count > 0)
                     {
                         r.Translation = string.Join(System.Environment.NewLine, dst.ToArray());
-                        r.DetectedFrom = root == null ? null : AsString(root, "from");
+                        r.DetectedFrom = AsString(root, "from");
                         return r;
                     }
 
-                    r.Error = "响应解析失败: " + (json.Length > 200 ? json.Substring(0, 200) + "..." : json);
+                    r.Error = "服务响应中没有翻译结果";
                 }
-            }
-            catch (System.Net.WebException webEx)
-            {
-                try
+                catch (JsonException ex)
                 {
-                    using (var resp = webEx.Response as System.Net.HttpWebResponse)
-                    {
-                        if (resp != null)
-                        {
-                            using (var rd = new StreamReader(resp.GetResponseStream(), System.Text.Encoding.UTF8))
-                            {
-                                var b = rd.ReadToEnd();
-                                r.Error = "HTTP " + (int)resp.StatusCode + ": " + (b.Length > 200 ? b.Substring(0, 200) : b);
-                                return r;
-                            }
-                        }
-                    }
+                    r.Error = "服务响应格式无效：" + ex.Message;
                 }
-                catch { }
-                r.Error = $"网络错误: {webEx.Message}";
             }
-            catch (Exception ex)
+            catch (OneBoxHttpException ex)
             {
                 r.Error = ex.Message;
             }
+            catch (Exception ex)
+            {
+                AppLog.Log("TranslateService", ex);
+                r.Error = "翻译失败：" + ex.Message;
+            }
             return r;
-        }
-
-        static JsonDocument ParseJson(string json)
-        {
-            if (string.IsNullOrEmpty(json)) return null;
-            try { return JsonDocument.Parse(json); }
-            catch { return null; }
         }
 
         static string AsString(JsonDocument d, string key)
@@ -348,8 +458,11 @@ namespace PowerAudioManager
         static string AsString(JsonElement el, string key)
         {
             if (el.ValueKind != JsonValueKind.Object) return null;
-            if (el.TryGetProperty(key, out var p) && p.ValueKind == JsonValueKind.String)
-                return p.GetString();
+            if (el.TryGetProperty(key, out var p))
+            {
+                if (p.ValueKind == JsonValueKind.String) return p.GetString();
+                if (p.ValueKind == JsonValueKind.Number) return p.ToString();
+            }
             return null;
         }
 

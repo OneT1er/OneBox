@@ -18,14 +18,14 @@ namespace PowerAudioManager
         public static void ShowAudioSwitch(string deviceName)
         {
             if (string.IsNullOrEmpty(deviceName)) return;
-            Application.Current?.Dispatcher.BeginInvoke(new Action(() => ShowInternal("🔊 音频已切换", null, deviceName)));
+            Application.Current?.Dispatcher.BeginInvoke(new Action(() => ShowInternal("音频已切换", null, deviceName)));
         }
 
         // 手动电源循环切换提示：只显示电源行，标题用"电源已切换"。
         public static void ShowPowerSwitch(string planName)
         {
             if (string.IsNullOrEmpty(planName)) return;
-            Application.Current?.Dispatcher.BeginInvoke(new Action(() => ShowInternal("⚡ 电源已切换", planName, null)));
+            Application.Current?.Dispatcher.BeginInvoke(new Action(() => ShowInternal("电源已切换", planName, null)));
         }
 
         static void ShowInternal(string title, string powerName, string audioName)
@@ -69,9 +69,9 @@ namespace PowerAudioManager
             });
 
             if (powerName != null)
-                stack.Children.Add(Row("⚡ 电源", powerName));
+                stack.Children.Add(Row(IconKey.Power, "电源", powerName));
             if (audioName != null)
-                stack.Children.Add(Row("🔊 音频", audioName));
+                stack.Children.Add(Row(IconKey.Audio, "音频", audioName));
             if (powerName == null && audioName == null)
                 stack.Children.Add(new TextBlock { Text = "(无变化)", Foreground = new SolidColorBrush(Color.FromRgb(154, 150, 184)), FontSize = 11 });
 
@@ -109,10 +109,11 @@ namespace PowerAudioManager
             dlg.Show();
         }
 
-        static UIElement Row(string label, string value)
+        static UIElement Row(IconKey icon, string label, string value)
         {
             var sp = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 2, 0, 0) };
-            sp.Children.Add(new TextBlock { Text = label + "  ", Foreground = new SolidColorBrush(Color.FromRgb(154, 150, 184)), FontSize = 11 });
+            sp.Children.Add(IconCatalog.CreateElement(icon, 14, UiKit.FrozenBrush(UiKit.TextSecondary)));
+            sp.Children.Add(new TextBlock { Text = label + "  ", Foreground = new SolidColorBrush(Color.FromRgb(154, 150, 184)), FontSize = 11, Margin = new Thickness(4, 0, 0, 0) });
             sp.Children.Add(new TextBlock { Text = value, Foreground = Brushes.White, FontSize = 11, FontWeight = FontWeights.Medium });
             return sp;
         }

@@ -1,0 +1,23 @@
+<Project>
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Application packages: stable versions compatible with net10.0. -->
+    <PackageVersion Include="LibreHardwareMonitorLib" Version="0.9.6" />
+    <PackageVersion Include="H.NotifyIcon.Wpf" Version="2.4.1" />
+    <PackageVersion Include="CommunityToolkit.Mvvm" Version="8.4.2" />
+    <PackageVersion Include="NAudio" Version="3.0.0" />
+    <PackageVersion Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.11" />
+    <PackageVersion Include="System.ServiceProcess.ServiceController" Version="10.0.11" />
+    <PackageVersion Include="Velopack" Version="1.2.0" />
+    <PackageVersion Include="Vortice.DXGI" Version="3.8.3" />
+
+    <!-- VSTest-compatible xUnit v3 test infrastructure. -->
+    <PackageVersion Include="xunit.v3.mtp-off" Version="4.0.0" />
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.9.0" />
+    <PackageVersion Include="xunit.runner.visualstudio" Version="4.0.0" />
+  </ItemGroup>
+</Project>

@@ -4,6 +4,9 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Threading;
 using System.IO;
+using System.Threading;
+using System.Threading.Tasks;
+using PowerAudioManager.Commands;
 
 namespace PowerAudioManager
 {
@@ -40,53 +43,57 @@ namespace PowerAudioManager
 
         void HandleImageTranslateHotkey()
         {
-            byte[] png = null;
-            try { png = RegionCaptureService.CaptureRegion(); }
-            catch (Exception ex) { AppLog.Log("ImageTranslate capture", ex); ImageTranslateWindow.Show(this, null, null, "框选截图失败: " + ex.Message); return; }
-            if (png == null) return; // cancelled or empty
-            string from = AppPrefs.GetString("Translate.From", "auto");
-            string to = AppPrefs.GetString("Translate.To", "zh");
-            byte[] pngCaptured = png;
-            System.Threading.ThreadPool.QueueUserWorkItem(_ =>
-            {
-                ImageTranslateService.ImageResult res = null;
-                try { res = ImageTranslateService.Translate(pngCaptured, from, to); }
-                catch (Exception ex) { res = new ImageTranslateService.ImageResult { Error = ex.Message }; }
-                Dispatcher.BeginInvoke(new Action(() =>
-                {
-                    ImageTranslateWindow.Show(this, res.PasteImage, res.Dst, res.Error);
-                }));
-            });
+            _ = ExecuteCommandAsync(AppCommandId.TranslateImageRegion, CommandSource.Hotkey);
         }
 
         public void TranslateClipboardImage()
         {
+            _ = ExecuteCommandAsync(AppCommandId.TranslateImageClipboard, CommandSource.MainWindow);
+        }
+
+        internal async Task<CommandResult> TranslateImageRegionAsync(CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            byte[] png = RegionCaptureService.CaptureRegion();
+            if (png == null) return CommandResult.Cancelled();
+            cancellationToken.ThrowIfCancellationRequested();
+            return await TranslateImageBytesAsync(png, cancellationToken);
+        }
+
+        internal async Task<CommandResult> TranslateClipboardImageAsync(CancellationToken cancellationToken)
+        {
             try
             {
-                if (!System.Windows.Forms.Clipboard.ContainsImage()) { ImageTranslateWindow.Show(this, null, null, "剪贴板里没有图片"); return; }
+                if (!System.Windows.Forms.Clipboard.ContainsImage())
+                    return CommandResult.Fail(CommandErrorCode.NotAvailable, "剪贴板里没有图片。");
                 using (var img = System.Windows.Forms.Clipboard.GetImage())
                 {
-                    if (img == null) { ImageTranslateWindow.Show(this, null, null, "剪贴板里没有图片"); return; }
+                    if (img == null) return CommandResult.Fail(CommandErrorCode.NotAvailable, "剪贴板里没有图片。");
                     using (var ms = new System.IO.MemoryStream())
                     {
                         img.Save(ms, System.Drawing.Imaging.ImageFormat.Png);
-                        byte[] png = ms.ToArray();
-                        string from = AppPrefs.GetString("Translate.From", "auto");
-                        string to = AppPrefs.GetString("Translate.To", "zh");
-                        System.Threading.ThreadPool.QueueUserWorkItem(_ =>
-                        {
-                            ImageTranslateService.ImageResult res = null;
-                            try { res = ImageTranslateService.Translate(png, from, to); }
-                            catch (Exception ex) { res = new ImageTranslateService.ImageResult { Error = ex.Message }; }
-                            Dispatcher.BeginInvoke(new Action(() =>
-                            {
-                                ImageTranslateWindow.Show(this, res.PasteImage, res.Dst, res.Error);
-                            }));
-                        });
+                        return await TranslateImageBytesAsync(ms.ToArray(), cancellationToken);
                     }
                 }
             }
-            catch (Exception ex) { AppLog.Log("ImageTranslate clipboard", ex); }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                AppLog.Log("ImageTranslate clipboard", ex);
+                return CommandResult.Fail(CommandErrorCode.Failed, "图片翻译失败：" + ex.Message);
+            }
+        }
+
+        async Task<CommandResult> TranslateImageBytesAsync(byte[] png, CancellationToken cancellationToken)
+        {
+            string from = AppPrefs.Get(PreferenceKeys.Translate.From);
+            string to = AppPrefs.Get(PreferenceKeys.Translate.To);
+            var result = await ImageTranslateService.TranslateAsync(png, from, to, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            ImageTranslateWindow.Show(this, result.PasteImage, result.Dst, result.Error);
+            return string.IsNullOrEmpty(result.Error)
+                ? CommandResult.Ok(result)
+                : CommandResult.Fail(CommandErrorCode.Failed, result.Error, result);
         }
     }
 }

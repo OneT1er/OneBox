@@ -1,14 +1,14 @@
-# ⚡ OneBox
+# OneBox
 
 > 一个 Windows 桌面悬浮工具箱：电源计划、音频控制、内存清理、翻译、快捷启动、剪贴板历史，集成进一个可折叠的悬浮窗 + 系统托盘。
 
-紫影主题、圆角卡片、深色 UI，常驻任务栏，鼠标就近操作。单文件 exe（框架依赖，需安装 .NET 8 桌面运行时）。
+紫影主题、圆角卡片、深色 UI，常驻系统托盘，鼠标就近操作。采用 .NET 10 桌面运行时与完整目录发布。
 
 <!-- 截图占位：把悬浮窗截图放到 docs/ 下并取消注释
 ![OneBox 悬浮窗](docs/screenshot.png)
 -->
 
-## ✨ 功能
+## 功能
 
 ### 悬浮窗
 - **紫影主题**：圆角卡片，深色界面，可自定义系统字体
@@ -43,7 +43,7 @@
 - \* 标记项启用时弹确认框，避免误开导致卡顿
 - **自动清理**：按时间周期 / 按内存占用率触发；默认跳过两个危险项，可在设置里开启"允许自动清理危险项"
 - 实时显示物理内存占用与系统缓存大小
-- 动态托盘图标按内存负载变色（绿 < 60% / 黄 60–80% / 红 > 80%）
+- 托盘固定使用原创 `app.ico`，内存负载与当前状态通过托盘提示文字展示
 
 ### 翻译
 - 百度大模型翻译 API，独立窗口
@@ -67,7 +67,7 @@
 
 
 ### 快捷启动栏
-4 格启动栏，点击空格选择程序（`.exe` / `.lnk`，自动解析快捷方式目标并提取图标）；点击图标启动；右键清空；支持拖拽放入。
+8 格启动栏，点击空槽位选择程序（`.exe` / `.lnk`，自动解析快捷方式目标并提取图标）；点击图标启动；右键清空；支持拖拽放入。
 
 ### 剪贴板历史
 - 记录最近 20 条复制内容（文本 + 图片），文本按内容去重、图片按 SHA256 去重
@@ -76,7 +76,7 @@
 
 ### 设置
 统一设置窗口，标签页：
-- **常规**：界面字体（下拉选系统已安装字体，实时预览）、窗口置顶、锁定位置、自动折叠开关与延时、开机自启（服务读 flag，无 UAC）
+- **常规**：界面字体（下拉选系统已安装字体，实时预览）、窗口置顶、锁定位置、自动折叠开关与延时、开机自启（注册表 / 计划任务 / 服务三种方式，统一状态标志）
 - **板块**：显示 / 隐藏 各功能模块
 - **内存**：清理项勾选、自动清理触发条件、危险项确认
 - **翻译**：百度翻译 API Key / APPID / 翻译指令
@@ -87,10 +87,10 @@
 ### 自动更新
 - 启动时后台静默检查 GitHub Release
 - 托盘菜单"检查更新"手动触发
-- 发现新版本弹窗显示更新内容，支持应用内下载并替换升级
-- 更新临时文件使用随机名，避免本地文件抢占
+- 发现新版本弹窗显示更新内容，使用 Velopack 下载并校验完整版本目录后升级
+- 仅正式安装环境执行应用内更新；开发目录和便携目录显示明确提示
 
-## ⌨️ 快捷键
+## 快捷键
 
 | 快捷键 | 功能 |
 |--------|------|
@@ -102,35 +102,48 @@
 
 音频设备快捷键在设备项上右键设置，支持冲突检测与覆盖。
 
-## 🖱️ 托盘操作
+## 托盘操作
 
 | 操作 | 功能 |
 |------|------|
-| 左键单击托盘图标 | 显示 / 隐藏悬浮窗 |
+| 左键单击托盘图标 | 显示悬浮窗 |
 | 右键单击托盘图标 | 打开菜单 |
 | 中键单击托盘图标 | 立即清理内存 |
 
-## 🚀 下载使用
+## 下载使用
 
-1. 前往 [Releases](../../releases) 下载最新的 `OneBox.exe`
-2. 双击运行，无需安装
+1. 前往 [Releases](../../releases) 下载最新的 Velopack `OneBox-win-Setup.exe`
+2. 运行安装器；自动更新仅支持此正式安装环境
 3. 开机自启可在 设置 → 常规 里开启
 
 > 需要完整内存清理功能（Standby list 等）时，用托盘菜单或设置里的"以管理员身份重启"。
 
-## 🔧 构建
+## 构建
 
-需要 Windows + [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)。
+需要 Windows + [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)。
 
 ```
-cd src
-dotnet build -c Release          # 开发构建
-dotnet publish -c Release -r win-x64 -p:SelfContained=false   # 单文件 exe（框架依赖）
+dotnet restore OneBox.sln
+dotnet build OneBox.sln -c Debug
+dotnet build OneBox.sln -c Release
+dotnet test OneBox.sln -c Release
+
+# PowerShell：先为 RID 还原，再把 GUI / Service / Hardware 发布到同一目录
+dotnet restore OneBox.sln -r win-x64
+$publishDir = "artifacts/publish/win-x64"
+dotnet publish src/OneBox.csproj -c Release -r win-x64 --self-contained false --no-restore -o $publishDir
+dotnet publish src/OneBox.Service/OneBox.Service.csproj -c Release -r win-x64 --self-contained false --no-restore -o $publishDir
+dotnet publish src/OneBox.Hardware/OneBox.Hardware.csproj -c Release -r win-x64 --self-contained false --no-restore -o $publishDir
+
+# 可复现打包：还原固定为 1.2.0 的 vpk，将三个项目发布到同一 staging 目录后生成 Velopack 包
+powershell -ExecutionPolicy Bypass -File scripts/package.ps1
 ```
 
-开发构建输出 `src\bin\Debug\net8.0-windows10.0.19041.0\win-x64\OneBox.exe`；发布输出在 `publish\` 子目录。所有资源（图标）嵌入 exe，无需外部文件。运行需安装 [.NET 8 桌面运行时](https://dotnet.microsoft.com/download/dotnet/8.0)。
+测试使用 xUnit v3 的 VSTest 适配器（`xunit.runner.visualstudio` + `Microsoft.NET.Test.Sdk`）；直接执行上面的 `dotnet test OneBox.sln -c Release` 即可发现并运行测试。
 
-## 📁 项目结构
+开发构建输出 `src\bin\Debug\net10.0-windows10.0.19041.0\OneBox.exe`。完整发布 staging 在 `artifacts\publish\win-x64\`，必须同时包含 `OneBox.exe`、`OneBox.Service.exe`、`OneBox.Hardware.exe`、Contracts 及依赖 DLL，不能只复制单个 exe。`scripts/package.ps1` 从 `Directory.Build.props` 的唯一 `Version` 属性读取版本，生成物写到 `artifacts\packages\win-x64\`。目录 publish 运行需安装 [.NET 10 桌面运行时](https://dotnet.microsoft.com/download/dotnet/10.0)，Velopack Setup 会声明 `net10-x64-desktop` 运行时要求。旧版注册为 `OneBox.exe --service` 的 `OneBoxSvc` 会明确迁移到当前安装目录的 `OneBox.Service.exe`，不会创建并存服务。
+
+## 项目结构
 
 ```
 OneBox/
@@ -138,7 +151,7 @@ OneBox/
 │   ├── App.cs                  # 入口、单实例、全局异常、编码注册、AppLog
 │   ├── MainWindow.cs / MainWindow.*.cs  # 悬浮窗主界面（partial：UI/Data/Hotkeys/Memory/Monitor/Translate/Collapse）
 │   ├── AppResources.cs         # 系统字体 + 嵌入资源 + 共享深色样式
-│   ├── MaterialTheme.cs        # MaterialDesign 深色 + 紫影主题
+│   ├── MaterialTheme.cs / ThemeTokens.cs / IconCatalog.cs  # 本地主题令牌、矢量图标与兼容入口
 │   ├── UiKit.cs                # 公共样式与控件（紫影主题复用）
 │   ├── LauncherBar.cs / LauncherWindow.cs / LauncherHost.cs  # 快捷启动栏（拖拽 / .lnk / UIPI 嵌入）
 │   ├── WindowScaling.cs        # 分辨率缩放 + 固定位置
@@ -154,25 +167,29 @@ OneBox/
 │   ├── ScreenshotService.cs    # 前台截图 + HDR/Game Bar 回退
 │   ├── ScreenshotToast.cs      # 截图 Toast
 │   ├── ClipboardHistory.cs     # 剪贴板历史（DPAPI 加密）
-│   ├── HardwareMonitorService.cs  # 温度/风扇（LibreHardwareMonitor，admin helper 经管道推送）
+│   ├── HardwareMonitorService.cs  # GUI 硬件数据 facade（始终使用 SID 隔离 IPC）
 │   ├── PerfHistory.cs / PerfChart.cs / PerfChartWindow.cs  # 性能趋势图表（后台持续采集 + 时间戳断线）
 │   ├── ForegroundWatcher.cs / ForegroundHistory.cs  # 前台 exe 捕获 / 前台切换历史（图表标注用）
-│   ├── OneBoxService.cs        # Windows 服务（开机自启 / 温度 helper 守护，无 UAC）
-│   ├── TempMonitorHelper.cs    # admin 温度 helper（命名管道推送）
 │   ├── AutoStartService.cs     # 开机自启（服务 / 计划任务 / 注册表）
-│   ├── UpdateChecker.cs        # GitHub Release 自动更新
+│   ├── UpdateChecker.cs / UpdateWorkflow.cs  # Velopack 检查、下载、校验、服务协调与应用
 │   ├── Native.cs / Prefs.cs / AdminUtils.cs / Models.cs  # Win32 / 注册表 / 提权 / 数据模型
-│   ├── OneBox.csproj           # .NET 8 项目文件
+│   ├── OneBox.csproj           # .NET 10 项目文件
+│   ├── OneBox.Contracts/       # 版本化 IPC DTO、帧协议、限长、管道名和重连策略
+│   ├── OneBox.Service/         # 独立 Windows Service：会话启动、内存清理、helper 守护
+│   ├── OneBox.Hardware/        # 独立硬件采集 helper（LibreHardwareMonitor）
+│   ├── Shared/                 # Service/Hardware 共用的 Windows 安全管道基础设施
 │   ├── app.manifest            # UAC / 兼容性（DPI 由 csproj 配）
-│   ├── app.ico / app.png       # 图标资源
-│   └── icon-*.png              # 板块图标
+│   └── app.ico / app.png       # 应用固定原创图标资源
+├── .config/dotnet-tools.json  # 固定 Velopack vpk 1.2.0
+├── scripts/package.ps1        # 三程序目录发布 + Velopack 可复现打包
+├── Directory.Build.props      # .NET/C# 公共属性与唯一应用版本
 ├── .gitignore
 ├── CHANGELOG.md
 ├── LICENSE
 └── README.md
 ```
 
-## ⚙️ 配置与数据
+## 配置与数据
 
 | 内容 | 位置 |
 |------|------|
@@ -182,37 +199,32 @@ OneBox/
 | 剪贴板历史 | `%LocalAppData%\OneBox\`（DPAPI 加密） |
 | 崩溃日志 | `%TEMP%\pam_crash.log` |
 | 运行日志 | exe 同目录 `OneBox.log`（截图/清理/热键/音频/电源/更新等） |
+| 服务 / 硬件日志 | 发布目录 `OneBox.Service.log` / `OneBox.Hardware.log` |
 
-## 🔄 自动更新配置（自建分支）
+## Velopack 自动更新
 
-`src\UpdateChecker.cs` 顶部改成你的 GitHub 仓库：
+更新源固定为 `https://github.com/OneT1er/OneBox`，使用 Velopack 1.2.0 的 `GithubSource`。发布新版只修改 `Directory.Build.props` 中唯一的 `<Version>`，运行 `scripts/package.ps1`，再把 `artifacts\packages\win-x64\` 中的 Setup、Portable、full/delta nupkg、`assets.win.json`、`releases.win.json` 与 `RELEASES` 整体上传到对应 GitHub Release。禁止只上传或替换 `OneBox.exe`。
 
-```csharp
-public const string Owner = "OneT1er";
-public const string Repo = "OneBox";
-public static readonly Version CurrentVersion = new Version(1, 7, 1);
-```
+应用内更新由 Velopack 负责 Check、Download、完整版本目录校验、停止 `OneBoxSvc`（其守护的 Hardware helper 会同步退出）和 Apply；重启后的 Velopack hook 会迁移服务路径并确认重新进入 Running。下载、校验、锁冲突、取消、离线和服务协调错误均返回统一中文错误。直接从 `bin`、目录 publish 或 portable zip 运行时会明确提示“当前为开发/便携环境，不能自动更新”，不会尝试原地替换文件或只替换单个 exe。
 
-发新版时在 GitHub 创建 Release，tag 用 `v1.3.0` 格式（程序解析其中的版本号与 `CurrentVersion` 对比）。若 Release 附带 `OneBox.exe` 资产，支持应用内下载并自动替换升级；否则打开 Release 页面手动下载。预发布版本不进 `releases/latest`，不影响稳定用户。
+## 开发说明
 
-## 🛠️ 开发说明
-
-- **.NET 8 + WPF + WinForms**：用 `dotnet build` 构建，现代 C# 语法。主界面和对话框用 WPF，系统托盘用 WinForms（NotifyIcon）。
-- NuGet 依赖：`Vortice.DXGI`（HDR 检测）、`System.Text.Encoding.CodePages`（GBK 编码，电源计划/升级脚本必需）、`LibreHardwareMonitorLib`（温度/风扇）、`MaterialDesignThemes`（主题）。
-- 音频切换通过 MMDevice API + IPolicyConfig COM 接口实现。
+- **.NET 10 + WPF**：用 `dotnet build` 构建，现代 C# 语法。主界面、设置和对话框使用 WPF，系统托盘使用 `H.NotifyIcon.Wpf 2.4.1`，托盘图标固定使用 `src/app.ico` 的原创图标资源。
+- NuGet 依赖：`Vortice.DXGI`（HDR 检测）、`LibreHardwareMonitorLib`（仅 Hardware helper）、`H.NotifyIcon.Wpf 2.4.1`（WPF 托盘）、`NAudio 3.0.0`（音频枚举、音量和通知）、`Velopack`（安装与目录级更新）。主题与图标由本地 `ThemeTokens` / `IconCatalog` 统一提供；GBK 编码通过 .NET 10 API 注册，包版本统一由根目录 `Directory.Packages.props` 管理。
+- 音频枚举、默认设备读取、音量和通知全部通过 NAudio 3.0.0；Windows 没有公开的默认设备设置 API，因此只在切换默认设备处保留最小 `IPolicyConfig` COM adapter，并为 Console、Multimedia、Communications 三个角色逐一设置和释放 COM 对象。
 - 字体改用系统字体（设置里可选），不再打包字体文件。
 - 内存清理使用 NT Native API（`NtSetSystemInformation`），与 memreduct 同源。
 
-## 📝 致谢
+## 致谢
 
 - [memreduct](https://github.com/henrypp/memreduct) — 内存清理的 NT API 实现参考
 - 百度翻译 API — 翻译服务
 - 紫影主题 #8E8CD8
 
-## 📄 许可证
+## 许可证
 
 本项目代码采用 [MIT 许可证](LICENSE) 开源。
 
-## 🤝 贡献
+## 贡献
 
 欢迎提 Issue 反馈 bug 或建议功能，也欢迎 Pull Request。

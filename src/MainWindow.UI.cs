@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
@@ -9,7 +10,7 @@ using System.Windows.Media.Imaging;
 using System.Windows.Documents;
 using System.Windows.Threading;
 using System.IO;
-using MaterialDesignThemes.Wpf;
+using PowerAudioManager.Commands;
 
 namespace PowerAudioManager
 {
@@ -45,7 +46,13 @@ namespace PowerAudioManager
             _mainBorder.AllowDrop = true;
             _mainBorder.DragEnter += (s, e) => OnWindowDragEnter(e);
             _mainBorder.DragOver += (s, e) => { e.Effects = LauncherBar.HasDropData(e.Data) ? DragDropEffects.Copy : DragDropEffects.None; e.Handled = true; };
-            _mainBorder.Drop += (s, e) => { string d = LauncherBar.ExtractDropped(e); if (!string.IsNullOrEmpty(d)) LauncherBar.AddDropped(d, RebuildUI); e.Handled = true; };
+            _mainBorder.Drop += (s, e) =>
+            {
+                var dropped = LauncherBar.ExtractDroppedItems(e.Data);
+                if (dropped.Count > 0) _ = ExecuteCommandAsync(AppCommandId.LauncherAdd,
+                    CommandSource.MainWindow, new LauncherAddPayload(dropped));
+                e.Handled = true;
+            };
             _root = new StackPanel();
             var titleBar = new DockPanel
             {
@@ -59,20 +66,9 @@ namespace PowerAudioManager
                 VerticalAlignment = VerticalAlignment.Center,
                 Margin = new Thickness(8, 0, 0, 0)
             };
-            var titleIcon = new System.Windows.Controls.Image
-            {
-                Width = 16, Height = 16,
-                Margin = new Thickness(0, 0, 6, 0),
-                VerticalAlignment = VerticalAlignment.Center,
-                Stretch = System.Windows.Media.Stretch.Uniform
-            };
-            try
-            {
-                // 优先使用嵌入资源，回退到外部 app.ico。
-                var icoBmp = LoadAppImage("app.ico");
-                if (icoBmp != null) titleIcon.Source = icoBmp;
-            }
-            catch { }
+            var titleIcon = IconCatalog.CreateElement(IconKey.Brand, 18,
+                UiKit.FrozenBrush(UiKit.AccentColor));
+            titleIcon.Margin = new Thickness(0, 0, 6, 0);
             var titleLabel = new TextBlock
             {
                 Text = "OneBox",
@@ -86,7 +82,7 @@ namespace PowerAudioManager
             _collapsedTempLabel = new TextBlock
             {
                 Foreground = new SolidColorBrush(UiKit.TextSecondary),
-                FontFamily = CompFont,
+                FontFamily = AppFont,
                 FontSize = 10,
                 VerticalAlignment = VerticalAlignment.Center,
                 Margin = new Thickness(12, 0, 0, 0),
@@ -95,49 +91,52 @@ namespace PowerAudioManager
             titleStack.Children.Add(_collapsedTempLabel);
             var pinBtn = new Button
             {
-                Content = UiKit.PinIcon(_lockPosition),
+                Content = UiKit.PinIcon(_lockPosition, UiKit.FrozenBrush(_lockPosition ? UiKit.AccentColor : UiKit.TextSecondary)),
                 Width = 28, Height = 28,
                 Foreground = new SolidColorBrush(_lockPosition ? UiKit.AccentColor : UiKit.TextSecondary),
                 Background = Brushes.Transparent,
                 BorderBrush = Brushes.Transparent,
                 Cursor = Cursors.Hand,
-                VerticalAlignment = VerticalAlignment.Center,
-                ToolTip = "切换锁定窗口位置"
-            };
+             VerticalAlignment = VerticalAlignment.Center,
+             ToolTip = "切换锁定窗口位置"
+             };
+            AutomationProperties.SetName(pinBtn, _lockPosition ? "解除锁定窗口位置" : "锁定窗口位置");
             UiKit.ApplyIconButtonStyle(pinBtn);
             pinBtn.Click += (s, e) =>
             {
-                _lockPosition = !_lockPosition;
-                AppPrefs.SetBool("LockPosition", _lockPosition);
-                pinBtn.Content = UiKit.PinIcon(_lockPosition);
-                pinBtn.Foreground = new SolidColorBrush(_lockPosition ? UiKit.AccentColor : UiKit.TextSecondary);
-                if (_tray != null) _tray.SetLockChecked(_lockPosition);
+                _ = ExecuteCommandAsync(AppCommandId.RuntimeApplyGeneral, CommandSource.MainWindow,
+                    new GeneralRuntimePayload(_topmost, !_lockPosition, false));
             };
             _pinBtn = pinBtn;
             var collapseBtn = new Button
             {
-                Content = new PackIcon { Kind = PackIconKind.ChevronUp, Width = 16, Height = 16 },
+                Content = IconCatalog.CreateElement(IconKey.ChevronUp, 16, UiKit.FrozenBrush(UiKit.TextSecondary)),
                 Width = 28, Height = 28,
                 Foreground = new SolidColorBrush(UiKit.TextSecondary),
                 Background = Brushes.Transparent,
                 BorderBrush = Brushes.Transparent,
                 Cursor = Cursors.Hand,
-                VerticalAlignment = VerticalAlignment.Center
+                VerticalAlignment = VerticalAlignment.Center,
+                ToolTip = "折叠窗口"
             };
+            AutomationProperties.SetName(collapseBtn, "折叠窗口");
             UiKit.ApplyIconButtonStyle(collapseBtn);
-            collapseBtn.Click += ToggleCollapse;
+            collapseBtn.Command = CreateUiCommand(AppCommandId.WindowSetCollapsed, CommandSource.MainWindow,
+                () => new WindowCollapsedPayload(_isExpanded));
             var closeBtn = new Button
             {
-                Content = new PackIcon { Kind = PackIconKind.Close, Width = 16, Height = 16 },
+                Content = IconCatalog.CreateElement(IconKey.Close, 16, UiKit.FrozenBrush(UiKit.TextSecondary)),
                 Width = 28, Height = 28,
                 Foreground = new SolidColorBrush(UiKit.TextSecondary),
                 Background = Brushes.Transparent,
                 BorderBrush = Brushes.Transparent,
                 Cursor = Cursors.Hand,
-                VerticalAlignment = VerticalAlignment.Center
+                VerticalAlignment = VerticalAlignment.Center,
+                ToolTip = "隐藏窗口"
             };
+            AutomationProperties.SetName(closeBtn, "隐藏窗口");
             UiKit.ApplyIconButtonStyle(closeBtn);
-            closeBtn.Click += (s, e) => Hide();
+            closeBtn.Command = CreateUiCommand(AppCommandId.WindowHide, CommandSource.MainWindow);
             DockPanel.SetDock(closeBtn, Dock.Right);
             DockPanel.SetDock(collapseBtn, Dock.Right);
             DockPanel.SetDock(pinBtn, Dock.Right);
@@ -156,7 +155,7 @@ namespace PowerAudioManager
                 try { if (_powerPlans != null) { var p = _powerPlans.Find(x => x.IsActive || x.Guid == _currentPlanId); if (p != null) plan = p.Name; } } catch { }
                 try { if (_audioDevices != null) { var d = _audioDevices.Find(x => x.IsDefault); if (d != null) dev = d.Name; } } catch { }
                 string mem = ""; try { var ms = MemoryCleaner.GetStatus(); if (ms != null) mem = string.Format(System.Environment.NewLine + "内存: {0:0.0}/{1:0.0} GB ({2}%) · 已缓存 {3:0.0}GB", (ms.TotalBytes - ms.AvailableBytes) / 1073741824.0, ms.TotalBytes / 1073741824.0, ms.MemoryLoadPercent, ms.CachedBytes / 1073741824.0); } catch { }
-                tipBlock.Text = "电源计划: " + plan + System.Environment.NewLine + "音频设备: " + dev + mem;
+                tipBlock.Text = "电源计划: " + plan + System.Environment.NewLine + "音频输出: " + dev + mem;
             };
             // 仅位置解锁时可拖动。锁定时位置固定，切换分辨率不移动窗口。
             titleBar.MouseLeftButtonDown += (s, e) => { if (!_lockPosition) try { DragMove(); } catch { } };
@@ -189,9 +188,7 @@ namespace PowerAudioManager
                 // 性能趋势入口（按钮样式同剪贴板历史，点击打开大图）
                 if (AppPrefs.GetBool("Perf.ShowChart", true))
                 {
-                    var cContent = new TextBlock { FontSize = 12, FontFamily = CompFont, Foreground = new SolidColorBrush(UiKit.TextSecondary) };
-                    cContent.Inlines.Add(new Run("📈 "));
-                    cContent.Inlines.Add(new Run(" 性能趋势"));
+                    var cContent = IconLabel(IconKey.Performance, "性能趋势");
                     var cBtn = new Button {
                         Content = cContent,
                         Padding = new Thickness(10, 6, 10, 6),
@@ -200,7 +197,7 @@ namespace PowerAudioManager
                         ToolTip = "查看温度/风扇历史趋势"
                     };
                     StyleButton(cBtn, false);
-                    cBtn.Click += (s, e) => { try { new PerfChartWindow().Show(); } catch { } };
+                    cBtn.Command = CreateUiCommand(AppCommandId.MonitorChartOpen, CommandSource.MainWindow);
                     contentPanel.Children.Add(cBtn);
                     contentPanel.Children.Add(UiKit.MakeDivider());
                 }
@@ -214,7 +211,7 @@ namespace PowerAudioManager
 
             if (showPower)
             {
-            var powerHeader = MakeCollapsibleHeader("电源计划", "icon-power.png", () => _powerSection, AppPrefs.GetBool("UI.PowerCollapsed", false), "⚡");
+            var powerHeader = MakeCollapsibleHeader("电源计划", IconKey.Power, () => _powerSection, AppPrefs.GetBool("UI.PowerCollapsed", false));
             contentPanel.Children.Add(powerHeader);
             _powerSection = new StackPanel { Margin = new Thickness(0, 0, 0, 4) };
             contentPanel.Children.Add(_powerSection);
@@ -224,23 +221,26 @@ namespace PowerAudioManager
             {
             if (contentPanel.Children.Count > 0) contentPanel.Children.Add(UiKit.MakeDivider());
 
-            var audioHeader = MakeCollapsibleHeader("音频输出", "icon-audio.png", () => _audioSection, AppPrefs.GetBool("UI.AudioCollapsed", false), "🔊");
+            var audioHeader = MakeCollapsibleHeader("音频输出", IconKey.Audio, () => _audioSection, AppPrefs.GetBool("UI.AudioCollapsed", false));
             contentPanel.Children.Add(audioHeader);
             _audioSection = new StackPanel();
             contentPanel.Children.Add(_audioSection);
 
             var volRow = new DockPanel { Margin = new Thickness(0, 10, 0, 0), LastChildFill = true };
             _muteBtn = new Button {
-                Content = UiKit.MuteIcon(false),
+                Content = UiKit.MuteIcon(false, UiKit.FrozenBrush(UiKit.TextSecondary)),
                 Width = 28, Height = 28,
                 Background = Brushes.Transparent,
                 Foreground = new SolidColorBrush(UiKit.TextSecondary),
                 BorderBrush = Brushes.Transparent,
                 Cursor = Cursors.Hand,
-                Margin = new Thickness(0, 0, 6, 0)
+                Margin = new Thickness(0, 0, 6, 0),
+                ToolTip = "切换静音"
             };
+            AutomationProperties.SetName(_muteBtn, "切换静音");
             UiKit.ApplyIconButtonStyle(_muteBtn);
-            _muteBtn.Click += (s, e) => { VolumeControl.SetMute(!VolumeControl.GetMute()); UpdateVolumeUI(); };
+            _muteBtn.Command = CreateUiCommand(AppCommandId.AudioSetMute, CommandSource.MainWindow,
+                () => new AudioMutePayload(!VolumeControl.GetMute()));
             DockPanel.SetDock(_muteBtn, Dock.Left);
             volRow.Children.Add(_muteBtn);
             _volLabel = new TextBlock {
@@ -260,12 +260,11 @@ namespace PowerAudioManager
                 VerticalAlignment = VerticalAlignment.Center,
                 Margin = new Thickness(4, 0, 4, 0)
             };
-            // MaterialDesign slider: 紫影滑块与轨道自动来自主题主色。
-            var sliderStyle = Application.Current.TryFindResource("MaterialDesign3.MaterialDesignSlider") as Style;
-            if (sliderStyle != null) _volSlider.Style = sliderStyle;
+            _volSlider.Foreground = new SolidColorBrush(UiKit.AccentColor);
             _volSlider.ValueChanged += (s, e) => {
                 if (_volLabel != null) _volLabel.Text = ((int)_volSlider.Value).ToString() + "%";
-                if (!_volSliderUpdating) VolumeControl.SetVolume((float)(_volSlider.Value / 100.0));
+                if (!_volSliderUpdating) _ = ExecuteCommandAsync(AppCommandId.AudioSetVolume,
+                    CommandSource.MainWindow, new AudioVolumePayload((float)(_volSlider.Value / 100.0)));
             };
             volRow.Children.Add(_volSlider);
             contentPanel.Children.Add(volRow);
@@ -274,14 +273,8 @@ namespace PowerAudioManager
             if (showMem)
             {
             if (contentPanel.Children.Count > 0) contentPanel.Children.Add(UiKit.MakeDivider());
-            var memHeader = new TextBlock {
-                FontFamily = CompFont,
-                Foreground = new SolidColorBrush(UiKit.AccentColor),
-                FontSize = 12,
-                FontWeight = FontWeights.SemiBold,
-                Margin = new Thickness(0, 0, 0, 6)
-            };
-            memHeader.Inlines.Add(new Run("🗑 内存清理"));
+            var memHeader = IconLabel(IconKey.MemoryClean, "内存清理", 12, UiKit.AccentColor);
+            memHeader.Margin = new Thickness(0, 0, 0, 6);
             contentPanel.Children.Add(memHeader);
             _memStatusLabel = new TextBlock {
                 Foreground = new SolidColorBrush(UiKit.TextSecondary),
@@ -290,26 +283,21 @@ namespace PowerAudioManager
             };
             contentPanel.Children.Add(_memStatusLabel);
             var memBtn = new Button {
-                Content = "立即清理内存",
+                Content = "执行内存清理",
                 Padding = new Thickness(10, 6, 10, 6),
                 FontSize = 12,
                 Cursor = Cursors.Hand
             };
             StyleButton(memBtn, false, true);
-            memBtn.Click += (s, e) => CleanMemory();
+            memBtn.Command = CreateUiCommand(AppCommandId.MemoryClean, CommandSource.MainWindow,
+                () => new MemoryCleanPayload(MemoryCleaner.GetSavedFlags()));
             contentPanel.Children.Add(memBtn);
             }
 
             if (showTr)
             {
             if (contentPanel.Children.Count > 0) contentPanel.Children.Add(UiKit.MakeDivider());
-            var trContent = new TextBlock {
-                FontSize = 12,
-                Foreground = new SolidColorBrush(UiKit.TextSecondary)
-            };
-            trContent.FontFamily = CompFont;
-            trContent.Inlines.Add(new Run("\uD83D\uDCDD "));
-            trContent.Inlines.Add(new Run(" 打开翻译窗口"));
+            var trContent = IconLabel(IconKey.Translate, "文本翻译");
             var trBtn = new Button {
                 Content = trContent,
                 Padding = new Thickness(10, 6, 10, 6),
@@ -317,11 +305,12 @@ namespace PowerAudioManager
                 ToolTip = "全局快捷键：Ctrl+Shift+T 自动翻译剪贴板"
             };
             StyleButton(trBtn, false, true);
-            trBtn.Click += (s, e) => OpenTranslateWindow(null);
+            trBtn.Command = CreateUiCommand(AppCommandId.TranslateText, CommandSource.MainWindow,
+                () => new TextTranslatePayload(null));
             contentPanel.Children.Add(trBtn);
             }
 
-            if (ModuleVisible("Launcher")) LauncherBar.Build(contentPanel, RebuildUI);
+            if (ModuleVisible("Launcher")) LauncherBar.Build(contentPanel, RebuildUI, this);
 
             if (ModuleVisible("Clipboard")) BuildClipboardButton(contentPanel);
 
@@ -335,9 +324,7 @@ namespace PowerAudioManager
 
         void BuildClipboardButton(StackPanel contentPanel)
         {
-            var cbContent = new TextBlock { FontSize = 12, FontFamily = CompFont, Foreground = new SolidColorBrush(UiKit.TextSecondary) };
-            cbContent.Inlines.Add(new Run("📋 "));
-            cbContent.Inlines.Add(new Run(" 剪贴板历史"));
+            var cbContent = IconLabel(IconKey.Clipboard, "剪贴板历史");
             var cbBtn = new Button {
                 Content = cbContent,
                 Padding = new Thickness(10, 6, 10, 6),
@@ -346,15 +333,14 @@ namespace PowerAudioManager
                 ToolTip = "查看最近复制的内容"
             };
             StyleButton(cbBtn, false);
-            cbBtn.Click += (s, e) => ClipboardHistoryPanel.Show(this);
+            cbBtn.Command = CreateUiCommand(AppCommandId.ClipboardOpen, CommandSource.MainWindow,
+                () => new ClipboardOpenPayload());
             contentPanel.Children.Add(cbBtn);
         }
 
         void BuildGalleryButton(StackPanel contentPanel)
         {
-            var gContent = new TextBlock { FontSize = 12, FontFamily = CompFont, Foreground = new SolidColorBrush(UiKit.TextSecondary) };
-            gContent.Inlines.Add(new Run("🗂 "));
-            gContent.Inlines.Add(new Run(" 截图文件夹"));
+            var gContent = IconLabel(IconKey.Gallery, "截图文件夹");
             var gBtn = new Button {
                 Content = gContent,
                 Padding = new Thickness(10, 6, 10, 6),
@@ -363,12 +349,21 @@ namespace PowerAudioManager
                 ToolTip = "打开截图保存位置"
             };
             StyleButton(gBtn, false);
-            gBtn.Click += (s, e) => { try { Process.Start("explorer.exe", "\"" + ScreenshotService.RootDir() + "\""); } catch { } };
+            gBtn.Command = CreateUiCommand(AppCommandId.ScreenshotOpenGallery, CommandSource.MainWindow);
             contentPanel.Children.Add(gBtn);
         }
 
-        FrameworkElement MakeCollapsibleHeader(string title, string iconFile, Func<UIElement> sectionGetter, bool initiallyCollapsed,
-            string emoji = null)
+        StackPanel IconLabel(IconKey key, string text, double fontSize = 12, Color? textColor = null)
+        {
+            var row = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+            row.Children.Add(IconCatalog.CreateElement(key, 16, UiKit.FrozenBrush(textColor ?? UiKit.TextSecondary)));
+            row.Children.Add(new TextBlock { Text = text, FontFamily = AppFont, FontSize = fontSize,
+                Foreground = new SolidColorBrush(textColor ?? UiKit.TextSecondary), Margin = new Thickness(6, 0, 0, 0),
+                VerticalAlignment = VerticalAlignment.Center });
+            return row;
+        }
+
+        FrameworkElement MakeCollapsibleHeader(string title, IconKey iconKey, Func<UIElement> sectionGetter, bool initiallyCollapsed)
         {
             var dock = new DockPanel {
                 Margin = new Thickness(0, 0, 0, 6),
@@ -376,45 +371,24 @@ namespace PowerAudioManager
                 Cursor = Cursors.Hand,
                 Background = Brushes.Transparent
             };
-            var arrow = new TextBlock {
-                Text = initiallyCollapsed ? "\u25B6" : "\u25BC",
-                Foreground = new SolidColorBrush(UiKit.AccentColor),
-                FontSize = 10,
-                Margin = new Thickness(0, 0, 6, 0),
-                VerticalAlignment = VerticalAlignment.Center
-            };
+            var arrow = IconCatalog.CreateElement(initiallyCollapsed ? IconKey.ChevronRight : IconKey.ChevronDown,
+                14, UiKit.FrozenBrush(UiKit.AccentColor));
+            arrow.Margin = new Thickness(0, 0, 6, 0);
             DockPanel.SetDock(arrow, Dock.Left);
             dock.Children.Add(arrow);
 
-            // \u6807\u9898\uFF1A\u914D\u7F6E\u4FDD\u5B58 emoji \u5E95\u8272\u8BA9\u5F69\u8272 glyph \u53EF\u6E32\u67D3\uFF0C\u6587\u5B57 Run \u8986\u76D6 AppFont
             var label = new TextBlock {
-                FontFamily = CompFont,
+                FontFamily = AppFont,
                 Foreground = new SolidColorBrush(UiKit.AccentColor),
                 FontSize = 12,
                 FontWeight = FontWeights.SemiBold,
                 VerticalAlignment = VerticalAlignment.Center
             };
-            if (!string.IsNullOrEmpty(emoji))
-            {
-                label.Inlines.Add(new Run(emoji + " " + title));
-            }
-            else
-            {
-                var iconImg = LoadAppImage(iconFile);
-                if (iconImg != null)
-                {
-                    var img = new System.Windows.Controls.Image {
-                        Source = iconImg,
-                        Width = 14, Height = 14,
-                        Margin = new Thickness(0, 0, 6, 0),
-                        VerticalAlignment = VerticalAlignment.Center,
-                        Stretch = System.Windows.Media.Stretch.Uniform
-                    };
-                    DockPanel.SetDock(img, Dock.Left);
-                    dock.Children.Add(img);
-                }
-                label.Text = title;
-            }
+            label.Text = title;
+            var sectionIcon = IconCatalog.CreateElement(iconKey, 16, UiKit.FrozenBrush(UiKit.AccentColor));
+            sectionIcon.Margin = new Thickness(0, 0, 6, 0);
+            DockPanel.SetDock(sectionIcon, Dock.Left);
+            dock.Children.Add(sectionIcon);
             dock.Children.Add(label);
 
             // 异步应用折叠状态，等区块元素创建后再设置可见性。
@@ -430,7 +404,11 @@ namespace PowerAudioManager
                 if (sec == null) return;
                 bool nowCollapsed = sec.Visibility == Visibility.Visible;
                 sec.Visibility = nowCollapsed ? Visibility.Collapsed : Visibility.Visible;
-                arrow.Text = nowCollapsed ? "\u25B6" : "\u25BC";
+                var newArrow = IconCatalog.CreateElement(nowCollapsed ? IconKey.ChevronRight : IconKey.ChevronDown,
+                    14, UiKit.FrozenBrush(UiKit.AccentColor));
+                newArrow.Margin = new Thickness(0, 0, 6, 0);
+                dock.Children.RemoveAt(0);
+                dock.Children.Insert(0, newArrow);
                 AppPrefs.SetBool(prefKey, nowCollapsed);
             };
             return dock;

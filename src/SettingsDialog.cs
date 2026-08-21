@@ -71,13 +71,13 @@ namespace PowerAudioManager
                 BuildTempTab(owner, dlg, fg),
             };
 
-            sideBar.Items.Add(SidebarItem("⚙", "常规"));
-            sideBar.Items.Add(SidebarItem("▣", "板块"));
-            sideBar.Items.Add(SidebarItem("◈", "内存"));
-            sideBar.Items.Add(SidebarItem("↗", "翻译"));
-            sideBar.Items.Add(SidebarItem("◻", "截图"));
-            sideBar.Items.Add(SidebarItem("▤", "剪贴板"));
-            sideBar.Items.Add(SidebarItem("◉", "性能 "));
+            sideBar.Items.Add(SidebarItem(IconKey.Settings, "常规"));
+            sideBar.Items.Add(SidebarItem(IconKey.Modules, "板块"));
+            sideBar.Items.Add(SidebarItem(IconKey.MemoryClean, "内存"));
+            sideBar.Items.Add(SidebarItem(IconKey.Translate, "翻译"));
+            sideBar.Items.Add(SidebarItem(IconKey.Capture, "截图"));
+            sideBar.Items.Add(SidebarItem(IconKey.Clipboard, "剪贴板"));
+            sideBar.Items.Add(SidebarItem(IconKey.Performance, "性能"));
 
             if (openTab >= 0 && openTab < sideBar.Items.Count)
             {
@@ -89,10 +89,10 @@ namespace PowerAudioManager
             dlg.ShowDialog();
         }
 
-        static ListBoxItem SidebarItem(string icon, string text)
+        static ListBoxItem SidebarItem(IconKey icon, string text)
         {
             var row = new StackPanel { Orientation = Orientation.Horizontal };
-            row.Children.Add(new TextBlock { Text = icon, FontFamily = AppResources.AppFont, FontSize = 14, Foreground = new SolidColorBrush(Color.FromRgb(180, 177, 210)), Width = 20, TextAlignment = TextAlignment.Center, VerticalAlignment = VerticalAlignment.Center });
+            row.Children.Add(IconCatalog.CreateElement(icon, 16, UiKit.FrozenBrush(Color.FromRgb(180, 177, 210))));
             row.Children.Add(new TextBlock { Text = text, FontSize = 13, Foreground = new SolidColorBrush(Color.FromRgb(190, 188, 220)), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0, 0, 0) });
             return new ListBoxItem { Content = row, Height = 42, Padding = new Thickness(10, 0, 10, 0) };
         }
@@ -132,6 +132,22 @@ namespace PowerAudioManager
             btns.Children.Add(ok);
             btns.Children.Add(cancel);
             return btns;
+        }
+
+        // Registry writes are best-effort for background telemetry/preferences,
+        // but a settings dialog must not close while the persisted state is
+        // unknown. Callers keep the dialog open and do not continue applying
+        // runtime state when any write in the current page fails.
+        static bool TryPersist(Window dlg, params Func<bool>[] writes)
+        {
+            foreach (var write in writes)
+            {
+                if (write != null && write()) continue;
+                MessageBox.Show(dlg, "设置保存失败，当前运行状态未应用。请检查用户注册表权限后重试。",
+                    "OneBox 设置", MessageBoxButton.OK, MessageBoxImage.Error);
+                return false;
+            }
+            return true;
         }
 
         static CheckBox MakeCb(string label, string key)

@@ -4,6 +4,8 @@ using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using PowerAudioManager.Commands;
+using OneBox.Contracts;
 
 namespace PowerAudioManager
 {
@@ -115,51 +117,56 @@ namespace PowerAudioManager
 
             stack.Children.Add(new Border { Height = 1, Background = new SolidColorBrush(Color.FromRgb(80, 75, 120)), Margin = new Thickness(0, 4, 0, 12) });
 
-            // 开机自启：经 OneBoxSvc 服务实现，勾选/取消写用户注册表 flag，服务启动 GUI 前读取，无需 UAC。
+            // 开机自启：统一状态标志可选择注册表、计划任务或 OneBoxSvc 服务方式。
             stack.Children.Add(new TextBlock { Text = "开机自启", Foreground = Brushes.White, FontWeight = FontWeights.SemiBold, FontSize = 13, Margin = new Thickness(0, 0, 0, 6) });
 
             var autoStartCb = new CheckBox { Content = "开机自启（开机时自动启动）", Foreground = Brushes.White, FontSize = 12, Margin = new Thickness(0, 0, 0, 8) };
             bool svcInstalled = AutoStartService.IsServiceInstalled();
-            autoStartCb.IsChecked = svcInstalled && AppPrefs.GetBool("AutoStart.Enabled", true);
+            autoStartCb.IsChecked = AutoStartService.IsEnabled();
             stack.Children.Add(autoStartCb);
 
             var autoStartStatus = new TextBlock { Foreground = fg, FontSize = 10, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 16) };
             autoStartStatus.Text = svcInstalled
-                ? "经 OneBoxSvc 服务实现，勾选/取消无需 UAC（下次开机生效）。取消勾选后服务仍驻留但不再自动启动主程序。"
-                : "OneBoxSvc 服务未安装，需一次管理员授权安装服务后才能开机自启（勾选仅记录意图）。";
+                ? "OneBoxSvc 已安装；开机自启由注册表、计划任务或服务中的当前方式执行，勾选状态统一保存。"
+                : "OneBoxSvc 未安装；当前可使用注册表方式，选择需要提升权限的方式时会提示一次管理员授权。";
             stack.Children.Add(autoStartStatus);
 
             var btns = MakeButtons();
             var ok = (Button)btns.Children[0];
-            ok.Click += (s, e) =>
+            ok.Click += async (s, e) =>
             {
-                AppPrefs.SetString("App.FontFamily", (fontCombo.SelectedItem as string) ?? "Microsoft YaHei UI");
-                AppPrefs.SetBool("Topmost", topmostCb.IsChecked == true);
-                AppPrefs.SetBool("LockPosition", lockCb.IsChecked == true);
-                AppPrefs.SetBool("AutoCollapse", autoCb.IsChecked == true);
-                AppPrefs.SetBool("AutoExpandAfterManual", expandAfterManualCb.IsChecked == true);
-                AppPrefs.SetBool("AutoStart.Enabled", autoStartCb.IsChecked == true);
-                int d; if (int.TryParse(delayBox.Text, out d) && d >= 0) AppPrefs.SetInt("AutoCollapseDelay", d);
                 var mw = owner as MainWindow;
-                if (scaleAutoCb.IsChecked == true)
-                { try { mw?._scaling?.ResetManualScale(); } catch { } }
-                else
-                { try { mw?._scaling?.ApplyManualScale(scaleSlider.Value / 100.0); } catch { } }
+                int d;
+                if (!int.TryParse(delayBox.Text, out d) || d < 0)
+                {
+                    MessageBox.Show(dlg, "自动折叠延时必须是大于等于 0 的整数。", "OneBox 设置",
+                        MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return;
+                }
+
+                if (!TryPersist(dlg,
+                    () => AppPrefs.SetString("App.FontFamily", (fontCombo.SelectedItem as string) ?? "Microsoft YaHei UI"),
+                    () => AppPrefs.Set(PreferenceKeys.Window.Topmost, topmostCb.IsChecked == true),
+                    () => AppPrefs.Set(PreferenceKeys.Window.LockPosition, lockCb.IsChecked == true),
+                    () => AppPrefs.Set(PreferenceKeys.Window.AutoCollapse, autoCb.IsChecked == true),
+                    () => AppPrefs.SetBool("AutoExpandAfterManual", expandAfterManualCb.IsChecked == true),
+                    () => AppPrefs.Set(PreferenceKeys.Window.AutoCollapseDelay, d))) return;
 
                 if (mw != null)
                 {
-                    mw.Topmost = topmostCb.IsChecked == true;
-                    mw._topmost = topmostCb.IsChecked == true;
-                    mw._lockPosition = lockCb.IsChecked == true;
-                    if (mw._tray != null) mw._tray.SetLockChecked(mw._lockPosition);
-                    if (mw._pinBtn != null)
-                    {
-                        mw._pinBtn.Content = UiKit.PinIcon(mw._lockPosition);
-                        mw._pinBtn.Foreground = new SolidColorBrush(mw._lockPosition ? UiKit.AccentColor : UiKit.TextSecondary);
-                    }
-                    mw.RefreshAutoCollapse();
-                    mw.RefreshHotkeys();
-                    mw.ApplyFont();
+                    var runtimeResult = await mw.ExecuteCommandAsync(AppCommandId.RuntimeApplyGeneral, CommandSource.Settings,
+                        new GeneralRuntimePayload(topmostCb.IsChecked == true, lockCb.IsChecked == true, true,
+                            scaleAutoCb.IsChecked == true,
+                            scaleAutoCb.IsChecked == true ? null : scaleSlider.Value / 100.0));
+                    if (!runtimeResult.Success) return;
+                }
+
+                if (mw != null)
+                {
+                    var autoStartResult = await mw.ExecuteCommandAsync(AppCommandId.AutoStartApply,
+                        CommandSource.Settings, new AutoStartApplyPayload(autoStartCb.IsChecked == true,
+                            AppPrefs.Get(PreferenceKeys.AutoStart.LastMethod)));
+                    if (!autoStartResult.Success) return;
                 }
                 dlg.DialogResult = true; dlg.Close();
             };

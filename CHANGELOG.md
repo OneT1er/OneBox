@@ -1,5 +1,14 @@
 # 更新日志
 
+## 未发布
+
+### 重构
+- 迁移到 .NET 10，并拆分为 GUI、Service、Hardware 多进程目录发布；Service/Hardware 通过版本化、安全命名管道 IPC 隔离权限。
+- 统一 AppCommandCatalog、入口与 typed payload，补齐统一错误、取消、重入和退出生命周期契约。
+- 更新改用 Velopack 完整目录校验与应用；GUI、服务、硬件依赖按职责隔离。
+- 迁移到 NAudio、H.NotifyIcon.Wpf、Hosting.WindowsServices、CommunityToolkit.Mvvm 等库；原创 app.ico/app.png 与本地矢量图标统一主题，不使用 Emoji 图标。
+- 增加协议、命令、配置、生命周期、资源安全、打包与目录依赖回归测试。
+
 ## v1.7.2 (2026-08-10)
 
 ### 优化

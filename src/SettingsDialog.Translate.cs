@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using PowerAudioManager.Commands;
 
 namespace PowerAudioManager
 {
@@ -35,11 +36,21 @@ namespace PowerAudioManager
             stack.Children.Add(itHk.Row);
 
             var btns = MakeButtons();
-            ((Button)btns.Children[0]).Click += (s, e) =>
+            ((Button)btns.Children[0]).Click += async (s, e) =>
             {
-                TranslateService.SetCreds(appIdBox.Text.Trim(), keyBox.Text.Trim(), instBox.Text);
-                AppPrefs.SetInt("Screenshot.ImageTranslateHotkey", itHk.Value);
-                if (owner is MainWindow mw) mw.RefreshHotkeys();
+                if (!TranslateService.SetCreds(appIdBox.Text.Trim(), keyBox.Text.Trim(), instBox.Text))
+                {
+                    string error = TranslateService.GetCredentialError();
+                    MessageBox.Show(dlg, string.IsNullOrEmpty(error) ? "翻译凭据保存失败。" : error,
+                        "翻译设置", MessageBoxButton.OK, MessageBoxImage.Error);
+                    return;
+                }
+                if (!TryPersist(dlg, () => AppPrefs.Set(PreferenceKeys.Hotkeys.ImageTranslate, itHk.Value))) return;
+                if (owner is MainWindow mw)
+                {
+                    var result = await mw.ExecuteCommandAsync(AppCommandId.RuntimeRefreshHotkeys, CommandSource.Settings);
+                    if (!result.Success) return;
+                }
                 dlg.DialogResult = true; dlg.Close();
             };
             ((Button)btns.Children[1]).Click += (s, e) => { dlg.DialogResult = false; dlg.Close(); };

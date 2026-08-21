@@ -2,7 +2,7 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
     <UseWPF>true</UseWPF>
     <UseWindowsForms>true</UseWindowsForms>
     <RootNamespace>PowerAudioManager</RootNamespace>
@@ -16,35 +16,39 @@
     <SatelliteResourceLanguages>en;zh-Hans</SatelliteResourceLanguages>
   </PropertyGroup>
 
-  <!-- Framework-dependent single-file publish: one OneBox.exe, requires the
-       .NET 8 Desktop Runtime on the user's machine. Build with:
-         dotnet publish -c Release -r win-x64 -p:SelfContained=false -->
+  <!-- Framework-dependent folder publish. The output intentionally contains
+       the application executable, managed dependencies and resources as a
+       complete multi-process directory. -->
   <PropertyGroup>
-    <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>false</SelfContained>
-    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
-    <!-- 必须为 true：把 native 依赖（Vortice、LibreHardwareMonitorLib 等）打包进单文件 exe，
-         启动时解压到 %TEMP%\.net\OneBox\<hash>\。否则只发 OneBox.exe 的自动更新会缺 DLL。 -->
-    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
-    <IncludeAllContentForSelfExtract>false</IncludeAllContentForSelfExtract>
-    <!-- ReadyToRun precompiles IL to native, cutting cold-start JIT.
-         Only costs ~3 MB on a 37 MB exe, worth keeping. -->
-    <PublishReadyToRun>true</PublishReadyToRun>
   </PropertyGroup>
 
   <ItemGroup>
     <EmbeddedResource Include="app.ico" />
     <EmbeddedResource Include="app.png" />
-    <EmbeddedResource Include="icon-power.png" />
-    <EmbeddedResource Include="icon-audio.png" />
+    <!-- H.NotifyIcon.Wpf reopens BitmapImage.UriSource at runtime. Keep the
+         authored icon beside every framework-dependent executable, while the
+         same file remains the ApplicationIcon and embedded fallback. -->
+    <None Update="app.ico" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="Always" />
+  </ItemGroup>
+
+  <!-- SDK default globs must not compile sources or generated obj files that
+       belong to the sibling executable/class-library projects under src. -->
+  <ItemGroup>
+    <Compile Remove="OneBox.Contracts\**\*;OneBox.Service\**\*;OneBox.Hardware\**\*;Shared\**\*" />
+    <EmbeddedResource Remove="OneBox.Contracts\**\*;OneBox.Service\**\*;OneBox.Hardware\**\*;Shared\**\*" />
+    <None Remove="OneBox.Contracts\**\*;OneBox.Service\**\*;OneBox.Hardware\**\*;Shared\**\*" />
+    <Content Remove="OneBox.Contracts\**\*;OneBox.Service\**\*;OneBox.Hardware\**\*;Shared\**\*" />
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="LibreHardwareMonitorLib" Version="0.9.6" />
-    <PackageReference Include="System.Text.Encoding.CodePages" Version="10.0.9" />
-    <PackageReference Include="Vortice.DXGI" Version="3.8.3" />
-    <PackageReference Include="MaterialDesignThemes" Version="5.1.0" />
-    <PackageReference Include="System.ServiceProcess.ServiceController" Version="8.0.0" />
+    <ProjectReference Include="OneBox.Contracts\OneBox.Contracts.csproj" />
+    <PackageReference Include="CommunityToolkit.Mvvm" />
+    <PackageReference Include="NAudio" />
+    <PackageReference Include="Vortice.DXGI" />
+    <PackageReference Include="H.NotifyIcon.Wpf" />
+    <PackageReference Include="System.ServiceProcess.ServiceController" />
+    <PackageReference Include="Velopack" />
   </ItemGroup>
 
 </Project>

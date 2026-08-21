@@ -128,7 +128,7 @@ namespace PowerAudioManager
 
         // 已缓存内存 — 匹配任务管理器的 Cached 值。复用长期 PerformanceCounter 实例
         // （按需创建会泄漏内核性能计数器映射，缓存则不会）。
-        // 性能陷阱：.NET 8 冷启动时创建这 4 个计数器约需 5s（WMI/COM 初始化 + JIT），
+        // 性能陷阱：.NET 10 冷启动时创建这 4 个计数器约需 5s（WMI/COM 初始化 + JIT），
         // 严禁在 UI 线程创建。GetStatus() 在 LoadData 同步序中调用，懒加载首次创建
         // 会冻结悬浮窗约 5s。用 WarmupCounters 在后台预热，就绪前 ReadCachedBytes 返回 0。
         static System.Diagnostics.PerformanceCounter _standbyCore, _standbyNormal, _standbyReserve, _modified;
@@ -207,6 +207,9 @@ namespace PowerAudioManager
 
         public static CleanResult CleanAll(CleanFlags flags)
         {
+            // None 是用户明确的选择，不得提升为默认清理，也不应触发权限、休眠或工作集操作。
+            if (!HasSelectedAreas(flags)) return new CleanResult();
+
             var before = GetStatus();
             ulong availBefore = before == null ? 0 : before.AvailableBytes;
             var r = new CleanResult();
@@ -311,19 +314,47 @@ namespace PowerAudioManager
             return r;
         }
 
+        public static bool HasSelectedAreas(CleanFlags flags)
+        {
+            const CleanFlags all = CleanFlags.WorkingSet | CleanFlags.SystemFileCache |
+                CleanFlags.ModifiedPageList | CleanFlags.StandbyList | CleanFlags.StandbyListNoPrio |
+                CleanFlags.ModifiedFileCache | CleanFlags.RegistryCache | CleanFlags.CombineMemoryLists;
+            return (flags & all) != CleanFlags.None;
+        }
+
+        public static CleanFlags ComposeFlags(
+            bool workingSet,
+            bool systemFileCache,
+            bool modifiedPageList,
+            bool standbyList,
+            bool standbyListNoPriority,
+            bool modifiedFileCache,
+            bool registryCache,
+            bool combineMemoryLists)
+        {
+            var flags = CleanFlags.None;
+            if (workingSet) flags |= CleanFlags.WorkingSet;
+            if (systemFileCache) flags |= CleanFlags.SystemFileCache;
+            if (modifiedPageList) flags |= CleanFlags.ModifiedPageList;
+            if (standbyList) flags |= CleanFlags.StandbyList;
+            if (standbyListNoPriority) flags |= CleanFlags.StandbyListNoPrio;
+            if (modifiedFileCache) flags |= CleanFlags.ModifiedFileCache;
+            if (registryCache) flags |= CleanFlags.RegistryCache;
+            if (combineMemoryLists) flags |= CleanFlags.CombineMemoryLists;
+            return flags;
+        }
+
         public static CleanFlags GetSavedFlags()
         {
-            var f = CleanFlags.None;
-            if (AppPrefs.GetBool("Clean.WorkingSet", true)) f |= CleanFlags.WorkingSet;
-            if (AppPrefs.GetBool("Clean.SystemFileCache", true)) f |= CleanFlags.SystemFileCache;
-            if (AppPrefs.GetBool("Clean.ModifiedPageList", false)) f |= CleanFlags.ModifiedPageList;
-            if (AppPrefs.GetBool("Clean.StandbyList", false)) f |= CleanFlags.StandbyList;
-            if (AppPrefs.GetBool("Clean.StandbyListNoPrio", true)) f |= CleanFlags.StandbyListNoPrio;
-            if (AppPrefs.GetBool("Clean.ModifiedFileCache", true)) f |= CleanFlags.ModifiedFileCache;
-            if (AppPrefs.GetBool("Clean.RegistryCache", true)) f |= CleanFlags.RegistryCache;
-            if (AppPrefs.GetBool("Clean.CombineMemoryLists", true)) f |= CleanFlags.CombineMemoryLists;
-            if (f == CleanFlags.None) f = CleanFlags.Default;
-            return f;
+            return ComposeFlags(
+                AppPrefs.GetBool("Clean.WorkingSet", true),
+                AppPrefs.GetBool("Clean.SystemFileCache", true),
+                AppPrefs.GetBool("Clean.ModifiedPageList", false),
+                AppPrefs.GetBool("Clean.StandbyList", false),
+                AppPrefs.GetBool("Clean.StandbyListNoPrio", true),
+                AppPrefs.GetBool("Clean.ModifiedFileCache", true),
+                AppPrefs.GetBool("Clean.RegistryCache", true),
+                AppPrefs.GetBool("Clean.CombineMemoryLists", true));
         }
     }
 

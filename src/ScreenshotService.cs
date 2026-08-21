@@ -6,11 +6,84 @@ using System.Drawing.Imaging;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Threading;
+using System.Threading.Tasks;
+using System.Linq;
 using System.Windows;
 using System.Windows.Media.Imaging;
 
 namespace PowerAudioManager
 {
+    public sealed class ScreenshotConcurrencyGate
+    {
+        readonly SemaphoreSlim _semaphore = new SemaphoreSlim(1, 1);
+
+        public async Task<T> RunAsync<T>(
+            Func<CancellationToken, Task<T>> action,
+            TimeSpan timeout,
+            CancellationToken cancellationToken)
+        {
+            if (action == null) throw new ArgumentNullException(nameof(action));
+            using var timeoutSource = new CancellationTokenSource(timeout);
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutSource.Token);
+            bool entered = false;
+            try
+            {
+                await _semaphore.WaitAsync(linked.Token).ConfigureAwait(false);
+                entered = true;
+                return await action(linked.Token).ConfigureAwait(false);
+            }
+            finally
+            {
+                if (entered) _semaphore.Release();
+            }
+        }
+    }
+
+    public sealed class CaptureFileCandidate
+    {
+        public string Path { get; set; }
+        public DateTime LastWriteUtc { get; set; }
+    }
+
+    public sealed class GameBarCaptureMatch
+    {
+        public string PngPath { get; set; }
+        public string JxrPath { get; set; }
+    }
+
+    public static class GameBarCaptureMatcher
+    {
+        public static GameBarCaptureMatch Select(
+            IEnumerable<CaptureFileCandidate> candidates,
+            ISet<string> filesBeforeTrigger,
+            DateTime triggerUtc)
+        {
+            var fresh = (candidates ?? Array.Empty<CaptureFileCandidate>())
+                .Where(candidate => candidate != null && !string.IsNullOrWhiteSpace(candidate.Path))
+                .Where(candidate => filesBeforeTrigger == null || !filesBeforeTrigger.Contains(candidate.Path))
+                .Where(candidate => candidate.LastWriteUtc >= triggerUtc.AddSeconds(-1))
+                .Where(candidate => candidate.Path.EndsWith(".png", StringComparison.OrdinalIgnoreCase) ||
+                                    candidate.Path.EndsWith(".jxr", StringComparison.OrdinalIgnoreCase))
+                .OrderBy(candidate => candidate.LastWriteUtc)
+                .ToList();
+            if (fresh.Count == 0) return new GameBarCaptureMatch();
+
+            var anchor = fresh[0];
+            string baseName = System.IO.Path.GetFileNameWithoutExtension(anchor.Path);
+            var match = new GameBarCaptureMatch();
+            foreach (var candidate in fresh)
+            {
+                if (!string.Equals(System.IO.Path.GetFileNameWithoutExtension(candidate.Path), baseName, StringComparison.OrdinalIgnoreCase))
+                    continue;
+                if (candidate.Path.EndsWith(".png", StringComparison.OrdinalIgnoreCase)) match.PngPath ??= candidate.Path;
+                if (candidate.Path.EndsWith(".jxr", StringComparison.OrdinalIgnoreCase)) match.JxrPath ??= candidate.Path;
+            }
+            if (match.PngPath == null && anchor.Path.EndsWith(".png", StringComparison.OrdinalIgnoreCase)) match.PngPath = anchor.Path;
+            if (match.JxrPath == null && anchor.Path.EndsWith(".jxr", StringComparison.OrdinalIgnoreCase)) match.JxrPath = anchor.Path;
+            return match;
+        }
+    }
+
     // 前台窗口截图服务。
     // 策略：
     //  1. Graphics.CopyFromScreen 截取前台窗口客户区（Per-Monitor V2 下为物理像素）。
@@ -22,6 +95,8 @@ namespace PowerAudioManager
     // 在 ThreadPool 上运行（从 WM_HOTKEY 触发），保证热键循环不阻塞。Toast 通过 UI 线程回调。
     internal static class ScreenshotService
     {
+        static readonly ScreenshotConcurrencyGate CaptureGate = new ScreenshotConcurrencyGate();
+        static readonly CancellationTokenSource LifetimeCancellation = new CancellationTokenSource();
         const string RootPrefKey = "Screenshot.RootDir";
         const string GameBarDirPrefKey = "Screenshot.GameBarDir";
         const string GameBarHotkeyPrefKey = "Screenshot.GameBarHotkey";
@@ -149,7 +224,44 @@ namespace PowerAudioManager
         // 截图保存后在 UI 线程触发，供图库面板刷新。
         public static event Action Captured;
 
+        static void ShowError(string message)
+        {
+            var app = Application.Current;
+            if (app == null || app.Dispatcher.HasShutdownStarted) return;
+            try { app.Dispatcher.BeginInvoke(new Action(() => ScreenshotToast.ShowError(message))); }
+            catch (Exception ex) { AppLog.Log("Screenshot error dispatch", ex); }
+        }
+
         public static void CaptureForeground()
+        {
+            try { CaptureForegroundAsync(CancellationToken.None).GetAwaiter().GetResult(); }
+            catch (OperationCanceledException)
+            {
+                if (!LifetimeCancellation.IsCancellationRequested) ShowError("截图请求已取消或超时");
+            }
+            catch (Exception ex)
+            {
+                AppLog.Log("ScreenshotService", ex);
+                ShowError("截图失败: " + ex.Message);
+            }
+        }
+
+        public static async Task CaptureForegroundAsync(CancellationToken cancellationToken)
+        {
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, LifetimeCancellation.Token);
+            await CaptureGate.RunAsync(async token =>
+            {
+                await Task.Run(() => CaptureForegroundCore(token), token).ConfigureAwait(false);
+                return true;
+            }, TimeSpan.FromSeconds(40), linked.Token).ConfigureAwait(false);
+        }
+
+        public static void Shutdown()
+        {
+            try { LifetimeCancellation.Cancel(); } catch { }
+        }
+
+        static void CaptureForegroundCore(CancellationToken cancellationToken)
         {
             string exeName = null;
             string savedPath = null;
@@ -157,6 +269,7 @@ namespace PowerAudioManager
             string source = null;
             try
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 var hwnd = GetForegroundWindow();
                 if (hwnd == IntPtr.Zero) { error = "无可截取的前台窗口"; AppLog.Log("Screenshot", "fail: no foreground window"); goto done; }
 
@@ -201,7 +314,7 @@ namespace PowerAudioManager
                 {
                     // HDR 表面 GDI CopyFromScreen 无法读取（返回黑色/泛白），直接跳过进入 Game Bar——
                     // 其 HDR 感知，可色调映射为正确的 SDR .png，若用户启用"HDR 捕获"还会生成 .jxr 予以保留。这是务实的 HDR 路径。
-                    savedPath = CaptureViaGameBar(exeName);
+                    savedPath = CaptureViaGameBar(exeName, cancellationToken);
                     if (savedPath != null)
                     {
                         source = "Game Bar (HDR)";
@@ -250,48 +363,68 @@ namespace PowerAudioManager
                     bad = black || flat;
                     AppLog.Log("Screenshot", $"quality blackPct={blackPct} stdDev={stdDev:0.0} mean={mean:0} bad={bad} app={exeName}");
                 }
-                catch (Exception ex) { AppLog.Log("Screenshot capture", ex); error = $"截图失败: {ex.Message}"; if (bmp != null) bmp.Dispose(); goto done; }
-
-                if (gameBarOn && bad)
+                catch (Exception ex)
                 {
-                    // GDI 无法读取的表面（全屏游戏 / HDR 内容）。回退到 HDR 感知的 Game Bar；
-                    // 若用户开启"HDR 捕获"，还会生成 .jxr 与 SDR .png 预览一同保留。
-                    AppLog.Log("Screenshot", $"CopyFromScreen unreadable (black/flat{(hdr ? "/HDR" : "")}), falling back to Game Bar, app={exeName}");
-                    bmp.Dispose();
-                    savedPath = CaptureViaGameBar(exeName);
-                    if (savedPath == null)
+                    bmp?.Dispose();
+                    bmp = null;
+                    AppLog.Log("Screenshot capture", ex);
+                    error = $"截图失败: {ex.Message}";
+                    goto done;
+                }
+
+                try
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (gameBarOn && bad)
                     {
-                        error = "截图不可读（可能是全屏游戏或 HDR 内容），且 Game Bar 未生成文件。请在系统设置→游戏中启用 Game Bar 捕获，并在 OneBox 设置里配好 Game Bar 截图快捷键。";
-                        AppLog.Log("Screenshot", $"fail: unreadable + Game Bar produced no file, app={exeName}");
+                        // Game Bar 等待期间不继续持有 GDI 位图。
+                        bmp.Dispose();
+                        bmp = null;
+                        AppLog.Log("Screenshot", $"CopyFromScreen unreadable (black/flat{(hdr ? "/HDR" : "")}), falling back to Game Bar, app={exeName}");
+                        savedPath = CaptureViaGameBar(exeName, cancellationToken);
+                        if (savedPath == null)
+                        {
+                            error = "截图不可读（可能是全屏游戏或 HDR 内容），且 Game Bar 未生成文件。请在系统设置→游戏中启用 Game Bar 捕获，并在 OneBox 设置里配好 Game Bar 截图快捷键。";
+                            AppLog.Log("Screenshot", $"fail: unreadable + Game Bar produced no file, app={exeName}");
+                        }
+                        else
+                        {
+                            source = "Game Bar";
+                            AppLog.Log("Screenshot", $"ok source=GameBar app={exeName} saved={savedPath}");
+                        }
                     }
                     else
                     {
-                        source = "Game Bar";
-                        AppLog.Log("Screenshot", $"ok source=GameBar app={exeName} saved={savedPath}");
+                        savedPath = SaveBitmap(bmp, exeName);
+                        source = "CopyFromScreen";
+                        AppLog.Log("Screenshot", $"ok source=CopyFromScreen app={exeName} saved={savedPath}");
                     }
                 }
-                else
+                finally
                 {
-                    savedPath = SaveBitmap(bmp, exeName);
-                    source = "CopyFromScreen";
-                    AppLog.Log("Screenshot", $"ok source=CopyFromScreen app={exeName} saved={savedPath}");
-                    bmp.Dispose();
+                    bmp?.Dispose();
                 }
             }
+            catch (OperationCanceledException) { throw; }
             catch (Exception ex) { AppLog.Log("ScreenshotService", ex); error = $"截图失败: {ex.Message}"; }
 
         done:
             // Show toast on the UI thread.
             string toastSource = source;
-            Application.Current.Dispatcher.BeginInvoke(new Action(() =>
+            if (Application.Current == null || Application.Current.Dispatcher.HasShutdownStarted) return;
+            try
             {
-                if (savedPath != null)
+                Application.Current.Dispatcher.BeginInvoke(new Action(() =>
                 {
-                    ScreenshotToast.Show(exeName ?? "截图", savedPath, toastSource);
-                    if (Captured != null) Captured();
-                }
-                else if (error != null) ScreenshotToast.ShowError(error);
-            }));
+                    if (savedPath != null)
+                    {
+                        ScreenshotToast.Show(exeName ?? "截图", savedPath, toastSource);
+                        if (Captured != null) Captured();
+                    }
+                    else if (error != null) ScreenshotToast.ShowError(error);
+                }));
+            }
+            catch (Exception ex) { AppLog.Log("Screenshot toast dispatch", ex); }
         }
 
         // 采样位图提取两个质量指标：
@@ -372,8 +505,9 @@ namespace PowerAudioManager
         // 触发 Game Bar 截图（Win+Alt+PrtScn），然后监听 Captures 文件夹中的新文件，复制到对应应用子目录。
         // Game Bar HDR 感知：始终生成 SDR .png，若用户启用"HDR 捕获"还会生成 .jxr。
         // 保留 .png 作为 toast/图库预览，同时保留 .jxr。返回预览路径（.png，若仅生成 .jxr 则返回 .jxr）。
-        static string CaptureViaGameBar(string exeName)
+        static string CaptureViaGameBar(string exeName, CancellationToken cancellationToken)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             string capturesDir = GameBarDir();
             if (!Directory.Exists(capturesDir)) { AppLog.Log("Screenshot", $"GameBar fallback: Captures dir not found: {capturesDir}"); return null; }
             AppLog.Log("Screenshot", $"GameBar fallback: dir={capturesDir}");
@@ -382,6 +516,7 @@ namespace PowerAudioManager
             var before = new HashSet<string>();
             foreach (var f in Directory.GetFiles(capturesDir)) before.Add(f);
             AppLog.Log("Screenshot", $"GameBar fallback: before={before.Count} files");
+            DateTime triggerUtc = DateTime.UtcNow;
 
             // 触发 Game Bar 截图快捷键。默认为 Win+Alt+PrtScn，
             // 但游戏前台时 Win 键被吞（游戏模式/低级钩子过滤注入的 Win 键事件——已验证：注入的 VK_LWIN 在 GetAsyncKeyState 中读不到）。
@@ -404,8 +539,10 @@ namespace PowerAudioManager
             int waited = 0;
             while (waited < GameBarWaitMs)
             {
-                Thread.Sleep(200); waited += 200;
-                ScanNewCaptures(capturesDir, before, ref png, ref jxr);
+                WaitOrCancel(cancellationToken, 200); waited += 200;
+                var match = ScanNewCaptures(capturesDir, before, triggerUtc);
+                png = match.PngPath;
+                jxr = match.JxrPath;
                 if (png != null || jxr != null) break;
             }
             // Phase 2: if we already have a .png, give Game Bar a moment more to emit
@@ -415,8 +552,10 @@ namespace PowerAudioManager
                 int extra = 0;
                 while (extra < 1500)
                 {
-                    Thread.Sleep(200); extra += 200; waited += 200;
-                    ScanNewCaptures(capturesDir, before, ref png, ref jxr);
+                    WaitOrCancel(cancellationToken, 200); extra += 200; waited += 200;
+                    var match = ScanNewCaptures(capturesDir, before, triggerUtc);
+                    png = match.PngPath ?? png;
+                    jxr = match.JxrPath ?? jxr;
                     if (jxr != null) break;
                 }
             }
@@ -432,36 +571,39 @@ namespace PowerAudioManager
                 Directory.CreateDirectory(dir);
                 string ts = DateTime.Now.ToString("yyyyMMdd_HHmmss");
                 string preview = null;
-                if (png != null) preview = CopyInto(png, Path.Combine(dir, ts + ".png"));
+                if (png != null) preview = CopyInto(png, Path.Combine(dir, ts + ".png"), cancellationToken);
                 string jxrDest = null;
-                if (jxr != null) jxrDest = CopyInto(jxr, Path.Combine(dir, ts + "_hdr.jxr"));
+                if (jxr != null) jxrDest = CopyInto(jxr, Path.Combine(dir, ts + "_hdr.jxr"), cancellationToken);
                 AppLog.Log("Screenshot", $"GameBar harvest preview={preview != null} jxr={jxrDest != null} app={exeName}");
                 // If Game Bar only produced a .jxr (HDR capture on, no SDR png), use it
                 // as the preview; WIC may decode JPEG-XR for the toast thumbnail.
                 if (preview == null && jxrDest != null) preview = jxrDest;
                 return preview;
             }
+            catch (OperationCanceledException) { throw; }
             catch (Exception ex) { AppLog.Log("Screenshot GameBar move", ex); return null; }
         }
 
-        static void ScanNewCaptures(string dir, HashSet<string> before, ref string png, ref string jxr)
+        static GameBarCaptureMatch ScanNewCaptures(string dir, HashSet<string> before, DateTime triggerUtc)
         {
+            var candidates = new List<CaptureFileCandidate>();
             foreach (var f in Directory.GetFiles(dir))
             {
-                if (before.Contains(f)) continue;
-                if (f.EndsWith(".png", StringComparison.OrdinalIgnoreCase)) { if (png == null) png = f; }
-                else if (f.EndsWith(".jxr", StringComparison.OrdinalIgnoreCase)) { if (jxr == null) jxr = f; }
+                try { candidates.Add(new CaptureFileCandidate { Path = f, LastWriteUtc = File.GetLastWriteTimeUtc(f) }); }
+                catch { }
             }
+            return GameBarCaptureMatcher.Select(candidates, before, triggerUtc);
         }
 
         // Game Bar 渐进写入——文件在目录中出现时仍在写入中。此时复制/移动会拿到截断文件（实测 14MB 的 .jxr 只复制到 1186 字节）。
         // 等待文件大小在两次间隔约 150ms 的读取中稳定，且可被打开读取（无独占写锁），设置超时防止死等。
-        static bool WaitForFileReady(string path, int timeoutMs)
+        static bool WaitForFileReady(string path, int timeoutMs, CancellationToken cancellationToken)
         {
             long prev = -1;
             int waited = 0;
             while (waited < timeoutMs)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 try
                 {
                     var len = new FileInfo(path).Length;
@@ -474,21 +616,27 @@ namespace PowerAudioManager
                     prev = len;
                 }
                 catch { prev = -1; }
-                Thread.Sleep(150); waited += 150;
+                WaitOrCancel(cancellationToken, 150); waited += 150;
             }
             return false;
         }
 
-        static string CopyInto(string src, string dest)
+        static string CopyInto(string src, string dest, CancellationToken cancellationToken)
         {
-            WaitForFileReady(src, 8000);
+            if (!WaitForFileReady(src, 8000, cancellationToken)) return null;
             for (int i = 0; i < 10; i++)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 try { File.Copy(src, dest, true); return dest; }
-                catch (IOException) { Thread.Sleep(150); }
+                catch (IOException) { WaitOrCancel(cancellationToken, 150); }
                 catch { return null; }
             }
             return null;
+        }
+
+        static void WaitOrCancel(CancellationToken cancellationToken, int milliseconds)
+        {
+            if (cancellationToken.WaitHandle.WaitOne(milliseconds)) cancellationToken.ThrowIfCancellationRequested();
         }
 
         public static BitmapSource LoadThumbnail(string path, int maxW, int maxH)
@@ -500,9 +648,12 @@ namespace PowerAudioManager
                 var bmp = new BitmapImage();
                 bmp.BeginInit();
                 bmp.CacheOption = BitmapCacheOption.OnLoad;
-                bmp.StreamSource = new System.IO.FileStream(path, System.IO.FileMode.Open, System.IO.FileAccess.Read, System.IO.FileShare.Read);
-                bmp.DecodePixelWidth = maxW;
-                bmp.EndInit();
+                using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read))
+                {
+                    bmp.StreamSource = stream;
+                    bmp.DecodePixelWidth = maxW;
+                    bmp.EndInit();
+                }
                 bmp.Freeze();
                 return bmp;
             }

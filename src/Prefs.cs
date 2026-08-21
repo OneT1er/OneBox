@@ -11,6 +11,7 @@ using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using System.IO;
 using Microsoft.Win32;
+using PowerAudioManager.Commands;
 
 namespace PowerAudioManager
 {
@@ -26,10 +27,18 @@ namespace PowerAudioManager
             } } catch { }
             return defaultValue;
         }
-        public static void SetBool(string key, bool v)
+        public static bool SetBool(string key, bool v)
         {
-            try { using (var k = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(KeyPath))
-                k.SetValue(key, v ? "1" : "0"); } catch { }
+            try
+            {
+                using (var k = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(KeyPath))
+                {
+                    if (k == null) return false;
+                    k.SetValue(key, v ? "1" : "0");
+                    return true;
+                }
+            }
+            catch { return false; }
         }
         public static bool GetDouble(string key, out double value)
         {
@@ -41,10 +50,18 @@ namespace PowerAudioManager
                 return double.TryParse(v, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out value);
             } } catch { return false; }
         }
-        public static void SetDouble(string key, double v)
+        public static bool SetDouble(string key, double v)
         {
-            try { using (var k = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(KeyPath))
-                k.SetValue(key, v.ToString(System.Globalization.CultureInfo.InvariantCulture)); } catch { }
+            try
+            {
+                using (var k = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(KeyPath))
+                {
+                    if (k == null) return false;
+                    k.SetValue(key, v.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                    return true;
+                }
+            }
+            catch { return false; }
         }
 
         public static string GetString(string key, string defaultValue)
@@ -61,10 +78,18 @@ namespace PowerAudioManager
             catch { return defaultValue; }
         }
 
-        public static void SetString(string key, string v)
+        public static bool SetString(string key, string v)
         {
-            try { using (var k = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(KeyPath))
-                k.SetValue(key, v ?? ""); } catch { }
+            try
+            {
+                using (var k = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(KeyPath))
+                {
+                    if (k == null) return false;
+                    k.SetValue(key, v ?? "");
+                    return true;
+                }
+            }
+            catch { return false; }
         }
 
         public static int GetInt(string key, int defaultValue)
@@ -81,11 +106,38 @@ namespace PowerAudioManager
             catch { return defaultValue; }
         }
 
-        public static void SetInt(string key, int v)
+        public static bool SetInt(string key, int v)
         {
-            try { using (var k = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(KeyPath))
-                k.SetValue(key, v.ToString()); } catch { }
+            try
+            {
+                using (var k = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(KeyPath))
+                {
+                    if (k == null) return false;
+                    k.SetValue(key, v.ToString());
+                    return true;
+                }
+            }
+            catch { return false; }
         }
+
+        public static bool Get(PreferenceDefinition<bool> definition) =>
+            GetBool(definition.Key, definition.DefaultValue);
+
+        public static int Get(PreferenceDefinition<int> definition) =>
+            GetInt(definition.Key, definition.DefaultValue);
+
+        public static string Get(PreferenceDefinition<string> definition) =>
+            GetString(definition.Key, definition.DefaultValue);
+
+        public static double Get(PreferenceDefinition<double> definition)
+        {
+            return GetDouble(definition.Key, out var value) ? value : definition.DefaultValue;
+        }
+
+        public static bool Set(PreferenceDefinition<bool> definition, bool value) => SetBool(definition.Key, value);
+        public static bool Set(PreferenceDefinition<int> definition, int value) => SetInt(definition.Key, value);
+        public static bool Set(PreferenceDefinition<string> definition, string value) => SetString(definition.Key, value);
+        public static bool Set(PreferenceDefinition<double> definition, double value) => SetDouble(definition.Key, value);
     }
 
     public static class DevicePrefs

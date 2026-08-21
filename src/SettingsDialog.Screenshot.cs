@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using PowerAudioManager.Commands;
 
 namespace PowerAudioManager
 {
@@ -94,14 +95,19 @@ namespace PowerAudioManager
 
 
             var btns = MakeButtons();
-            ((Button)btns.Children[0]).Click += (s, e) =>
+            ((Button)btns.Children[0]).Click += async (s, e) =>
             {
-                AppPrefs.SetString("Screenshot.RootDir", rootBox.Text.Trim());
-                AppPrefs.SetBool("Screenshot.GameBarEnabled", gbToggle.IsChecked == true);
-                AppPrefs.SetString("Screenshot.GameBarDir", gbBox.Text.Trim());
-                AppPrefs.SetInt("Screenshot.GameBarHotkey", gbHk.Value);
-                AppPrefs.SetInt("Screenshot.Hotkey", hk.Value);
-                if (owner is MainWindow) { ((MainWindow)owner).RefreshHotkeys(); ((MainWindow)owner).RebuildUI(); }
+                if (!TryPersist(dlg,
+                    () => AppPrefs.Set(PreferenceKeys.Screenshot.RootDirectory, rootBox.Text.Trim()),
+                    () => AppPrefs.Set(PreferenceKeys.Screenshot.GameBarEnabled, gbToggle.IsChecked == true),
+                    () => AppPrefs.Set(PreferenceKeys.Screenshot.GameBarDirectory, gbBox.Text.Trim()),
+                    () => AppPrefs.Set(PreferenceKeys.Screenshot.GameBarHotkey, gbHk.Value),
+                    () => AppPrefs.Set(PreferenceKeys.Hotkeys.Screenshot, hk.Value))) return;
+                if (owner is MainWindow mw)
+                {
+                    var result = await mw.ExecuteCommandAsync(AppCommandId.RuntimeRebuildModules, CommandSource.Settings);
+                    if (!result.Success) return;
+                }
                 dlg.DialogResult = true; dlg.Close();
             };
             ((Button)btns.Children[1]).Click += (s, e) => { dlg.DialogResult = false; dlg.Close(); };

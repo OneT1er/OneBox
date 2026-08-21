@@ -8,6 +8,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using PowerAudioManager.Commands;
 using System.Windows.Threading;
 
 namespace PowerAudioManager
@@ -42,10 +43,20 @@ namespace PowerAudioManager
 
         public static void Start()
         {
+            Stop();
             Load();
             _poll = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
             _poll.Tick += (s, e) => CaptureIfNew();
             _poll.Start();
+        }
+
+        public static void Stop()
+        {
+            var poll = _poll;
+            _poll = null;
+            if (poll == null) return;
+            try { poll.Stop(); } catch { }
+            try { Save(); } catch { }
         }
 
         static void Load()
@@ -381,7 +392,13 @@ namespace PowerAudioManager
             };
             render();
 
-            clearBtn.Click += (s, e) => { ClipboardHistory.Clear(); render(); };
+            clearBtn.Click += async (s, e) =>
+            {
+                if (owner is MainWindow mainWindow)
+                    await mainWindow.ExecuteCommandAsync(AppCommandId.ClipboardClear, CommandSource.MainWindow);
+                else ClipboardHistory.Clear();
+                render();
+            };
 
             outer.Children.Add(scroller);
 

@@ -1,342 +1,361 @@
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Runtime.InteropServices;
-using System.Text;
-using System.Windows;
-using System.Windows.Controls;
-using System.Windows.Input;
-using System.Windows.Media;
-using System.Windows.Media.Imaging;
 using System.Windows.Threading;
-using System.IO;
-using Microsoft.Win32;
+using NAudio.CoreAudioApi;
 
 namespace PowerAudioManager
 {
-    public static class AudioDevices
+    /// <summary>Pure device projection used by the NAudio adapter and tests.</summary>
+    public sealed class AudioDeviceCandidate
     {
-        [DllImport("winmm.dll")]
-        private static extern int waveOutGetNumDevs();
+        public string Id { get; set; }
+        public string Name { get; set; }
+        public bool IsActive { get; set; }
+    }
 
-        [DllImport("winmm.dll", CharSet = CharSet.Auto)]
-        private static extern int waveOutGetDevCaps(int deviceIndex, ref WAVEOUTCAPS caps, int size);
-
-        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
-        private struct WAVEOUTCAPS
-        {
-            public short wMid; public short wPid; public int vDriverVersion;
-            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
-            public string szPname;
-            public int dwFormats; public short wChannels; public short wReserved1; public int dwSupport;
-        }
-
-        #region PolicyConfig COM
-
-        [ComImport]
-        [Guid("568b9108-44bf-40b4-9006-86afe5b5a620")]
-        [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-        private interface IPolicyConfigVista
-        {
-            int GetMixFormat(string deviceID, IntPtr format);
-            int GetDeviceFormat(string deviceID, int defaultFormat, IntPtr format);
-            int SetDeviceFormat(string deviceID, IntPtr format, IntPtr endpointFormat);
-            int GetProcessingPeriod(string deviceID, int defaultPeriod, out long period, out long minPeriod);
-            int SetProcessingPeriod(string deviceID, ref long period);
-            int GetShareMode(string deviceID, out int mode);
-            int SetShareMode(string deviceID, ref int mode);
-            int GetDevicePeriod(string deviceID, int defaultPeriod, out long period, out long minPeriod);
-            int SetDevicePeriod(string deviceID, ref long period);
-            int SetDefaultEndpoint(string deviceID, int role);
-            int SetEndpointVisibility(string deviceID, int visible);
-        }
-
-        [ComImport]
-        [Guid("294935CE-F637-4E7C-A41B-AB255460B862")]
-        private class CPolicyConfigVistaClient { }
-
-        #endregion
-
-        #region Hot-plug notifications
-
-        [ComImport, Guid("A95664D2-9614-4F35-A746-DE8DB63617E6"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-        public interface IMMDeviceEnumerator2
-        {
-            int EnumAudioEndpoints(int dataFlow, int stateMask, out IntPtr devices);
-            int GetDefaultAudioEndpoint(int dataFlow, int role, out IntPtr device);
-            int GetDevice(string id, out IntPtr device);
-            int RegisterEndpointNotificationCallback(IMMNotificationClient client);
-            int UnregisterEndpointNotificationCallback(IMMNotificationClient client);
-        }
-
-        [ComImport, Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")]
-        public class MMDeviceEnumerator2 { }
-
-        [ComImport, Guid("7991EEC9-7E89-4D85-8390-6C703CEC60C0"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-        public interface IMMNotificationClient
-        {
-            void OnDeviceStateChanged([MarshalAs(UnmanagedType.LPWStr)] string deviceId, int newState);
-            void OnDeviceAdded([MarshalAs(UnmanagedType.LPWStr)] string deviceId);
-            void OnDeviceRemoved([MarshalAs(UnmanagedType.LPWStr)] string deviceId);
-            void OnDefaultDeviceChanged(int dataFlow, int role, [MarshalAs(UnmanagedType.LPWStr)] string defaultDeviceId);
-            void OnPropertyValueChanged([MarshalAs(UnmanagedType.LPWStr)] string deviceId, PROPERTYKEY key);
-        }
-
-        [StructLayout(LayoutKind.Sequential)]
-        public struct PROPERTYKEY { public Guid fmtid; public int pid; }
-
-        public class DeviceWatcher : IMMNotificationClient
-        {
-            public Action OnChange;
-            IMMDeviceEnumerator2 _enumerator;
-            DispatcherTimer _pollTimer;
-            string _lastDefaultId = "";
-            public DeviceWatcher()
-            {
-                try
-                {
-                    _enumerator = (IMMDeviceEnumerator2)new MMDeviceEnumerator2();
-                    _enumerator.RegisterEndpointNotificationCallback(this);
-                }
-                catch { }
-
-                // 双保险：COM 回调在 STA 边界间可能不稳定。
-                // 每秒轮询默认设备 ID，变化时触发 OnChange。
-                _lastDefaultId = GetCurrentDefaultId();
-                _pollTimer = new DispatcherTimer(DispatcherPriority.Background)
-                { Interval = TimeSpan.FromSeconds(1) };
-                _pollTimer.Tick += (s, e) =>
-                {
-                    string cur = GetCurrentDefaultId();
-                    if (cur != _lastDefaultId)
-                    {
-                        _lastDefaultId = cur;
-                        Fire();
-                    }
-                };
-                _pollTimer.Start();
-            }
-            public void Stop()
-            {
-                try { if (_pollTimer != null) _pollTimer.Stop(); } catch { }
-                try { _enumerator.UnregisterEndpointNotificationCallback(this); } catch { }
-                // 释放 COM 枚举器 RCW，避免等到 GC 才回收。
-                try { if (_enumerator != null) { Marshal.ReleaseComObject(_enumerator); _enumerator = null; } } catch { }
-            }
-            public void OnDeviceStateChanged(string deviceId, int newState) { Fire(); }
-            public void OnDeviceAdded(string deviceId) { Fire(); }
-            public void OnDeviceRemoved(string deviceId) { Fire(); }
-            public void OnDefaultDeviceChanged(int dataFlow, int role, string defaultDeviceId) { Fire(); }
-            public void OnPropertyValueChanged(string deviceId, PROPERTYKEY key) { }
-            void Fire() { try { if (OnChange != null) OnChange(); } catch { } }
-
-            static string GetCurrentDefaultId()
-            {
-                object im = null;
-                try
-                {
-                    im = (IMMDeviceEnumerator2)new MMDeviceEnumerator2();
-                    IntPtr pDev;
-                    if (((IMMDeviceEnumerator2)im).GetDefaultAudioEndpoint(0, 0, out pDev) != 0 || pDev == IntPtr.Zero)
-                        return "";
-                    var dev = (IMMDeviceForId)Marshal.GetObjectForIUnknown(pDev);
-                    try
-                    {
-                        string id;
-                        dev.GetId(out id);
-                        return id ?? "";
-                    }
-                    finally
-                    {
-                        Marshal.ReleaseComObject(dev);
-                        Marshal.Release(pDev);
-                    }
-                }
-                catch (Exception ex) { AppLog.Log("GetCurrentDefaultId", ex); return ""; }
-                finally { if (im != null) try { Marshal.ReleaseComObject(im); } catch { } }
-            }
-        }
-
-        #endregion
-
-
-        private const int eConsole = 0;
-        private const int eMultimedia = 1;
-        private const int eCommunications = 2;
-
-        public static List<AudioDeviceInfo> GetOutputDevices()
+    public static class AudioDevicePolicy
+    {
+        public static List<AudioDeviceInfo> Project(
+            IEnumerable<AudioDeviceCandidate> candidates,
+            string defaultId,
+            Func<string, bool> isHidden = null,
+            Func<string, int> hotkey = null)
         {
             var result = new List<AudioDeviceInfo>();
-            string defaultEndpointId = "{0.0.0.00000000}." + (FindDefaultRenderId() ?? "");
-            try
+            if (candidates == null) return result;
+            foreach (var candidate in candidates)
             {
-                using (var key = Registry.LocalMachine.OpenSubKey(
-                    @"SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Render"))
+                if (candidate == null || !candidate.IsActive || string.IsNullOrWhiteSpace(candidate.Id)) continue;
+                string name = string.IsNullOrWhiteSpace(candidate.Name) ? "未命名音频设备" : candidate.Name;
+                result.Add(new AudioDeviceInfo
                 {
-                    if (key == null) return result;
-                    foreach (var subKeyName in key.GetSubKeyNames())
-                    {
-                        using (var subKey = key.OpenSubKey(subKeyName))
-                        {
-                            if (subKey == null) continue;
-                            int state = 0;
-                            try { state = (int)subKey.GetValue("DeviceState", 0); } catch { }
-                            if (state != 1) continue;
-                            using (var propsKey = subKey.OpenSubKey("Properties"))
-                            {
-                                if (propsKey == null) continue;
-                                var desc = propsKey.GetValue("{a45c254e-df1c-4efd-8020-67d146a850e0},2") as string;
-                                var ifName = propsKey.GetValue("{b3f8fa53-0004-438e-9003-51a46e139bfc},6") as string;
-                                if (string.IsNullOrEmpty(desc) && string.IsNullOrEmpty(ifName)) continue;
-                                string name;
-                                if (!string.IsNullOrEmpty(desc) && !string.IsNullOrEmpty(ifName))
-                                    name = desc + " (" + ifName + ")";
-                                else
-                                    name = !string.IsNullOrEmpty(desc) ? desc : ifName;
-                                string fullId = "{0.0.0.00000000}." + subKeyName;
-                                result.Add(new AudioDeviceInfo {
-                                    Id = fullId,
-                                    Name = name,
-                                    IsDefault = fullId.Equals(defaultEndpointId, StringComparison.OrdinalIgnoreCase),
-                                    IsHidden = DevicePrefs.IsHidden(name),
-                                    HotkeyIndex = DevicePrefs.GetHotkey(name)
-                                });
-                            }
-                        }
-                    }
-                }
-            }
-            catch (Exception ex) { AppLog.Log("GetOutputDevices", ex); }
-            if (result.Count == 0)
-            {
-                result.Add(new AudioDeviceInfo { Id = "default", Name = "默认音频输出", IsDefault = true });
+                    Id = candidate.Id,
+                    Name = name,
+                    IsDefault = string.Equals(candidate.Id, defaultId, StringComparison.OrdinalIgnoreCase),
+                    IsHidden = isHidden != null && isHidden(name),
+                    HotkeyIndex = hotkey == null ? 0 : hotkey(name)
+                });
             }
             return result;
         }
+    }
 
-        // 通过 COM MMDeviceEnumerator 获取默认音频渲染端点 GUID（Windows 在默认设备变更时写入注册表）。
-        // 设备位于 \\MMDevices\\Audio\\Render 下，最可靠的方式是直接用 COM 获取并提取 GUID 部分。
-        static string FindDefaultRenderId()
+    public enum AudioDeviceRole
+    {
+        Console = 0,
+        Multimedia = 1,
+        Communications = 2
+    }
+
+    public static class AudioDefaultEndpointPolicy
+    {
+        public static bool Apply(string endpointId, Func<AudioDeviceRole, int> setRole)
         {
-            object im = null;
-            try
-            {
-                im = (IMMDeviceEnumerator2)new MMDeviceEnumerator2();
-                IntPtr pDev;
-                if (((IMMDeviceEnumerator2)im).GetDefaultAudioEndpoint(0, 0, out pDev) != 0) return null;
-                if (pDev == IntPtr.Zero) return null;
-                var dev = (IMMDeviceForId)Marshal.GetObjectForIUnknown(pDev);
-                try
-                {
-                    string id;
-                    dev.GetId(out id);
-                    if (string.IsNullOrEmpty(id)) return null;
-                    // id 格式为 "{0.0.0.00000000}.{guid}"，仅返回 guid 部分
-                    int dot = id.IndexOf("}.");
-                    if (dot >= 0 && dot + 2 < id.Length) return id.Substring(dot + 2);
-                    return id;
-                }
-                finally
-                {
-                    Marshal.ReleaseComObject(dev);
-                    Marshal.Release(pDev);
-                }
-            }
-            catch { return null; }
-            finally { if (im != null) try { Marshal.ReleaseComObject(im); } catch { } }
+            if (string.IsNullOrWhiteSpace(endpointId) || setRole == null) return false;
+            int console = Invoke(setRole, AudioDeviceRole.Console);
+            int multimedia = Invoke(setRole, AudioDeviceRole.Multimedia);
+            int communications = Invoke(setRole, AudioDeviceRole.Communications);
+            return console == 0 && multimedia == 0 && communications == 0;
         }
 
-        [ComImport, Guid("D666063F-1587-4E43-81F1-B948E807363F"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-        interface IMMDeviceForId
+        static int Invoke(Func<AudioDeviceRole, int> setRole, AudioDeviceRole role)
         {
-            int Activate(ref Guid iid, int dwClsCtx, IntPtr ap, [MarshalAs(UnmanagedType.IUnknown)] out object pi);
-            int OpenPropertyStore(int access, out IntPtr props);
-            int GetId([MarshalAs(UnmanagedType.LPWStr)] out string id);
-            int GetState(out int state);
-        }
-
-        public static bool SetDefaultDevice(string deviceNameOrId)
-        {
-            try
-            {
-                string endpointId;
-                if (deviceNameOrId != null && deviceNameOrId.StartsWith("{0.0.0.00000000}."))
-                    endpointId = deviceNameOrId;
-                else
-                    endpointId = FindEndpointIdByName(deviceNameOrId);
-                if (string.IsNullOrEmpty(endpointId)) return false;
-                var config = (IPolicyConfigVista)new CPolicyConfigVistaClient();
-                config.SetDefaultEndpoint(endpointId, eConsole);
-                config.SetDefaultEndpoint(endpointId, eMultimedia);
-                config.SetDefaultEndpoint(endpointId, eCommunications);
-                Marshal.ReleaseComObject(config);
-                return true;
-            }
-            catch (Exception ex) { AppLog.Log("SetDefaultDevice(" + (deviceNameOrId ?? "") + ")", ex); }
-            return false;
-        }
-
-        private static string FindEndpointIdByName(string deviceName)
-        {
-            if (string.IsNullOrEmpty(deviceName))
-                return null;
-
-            try
-            {
-                using (var key = Registry.LocalMachine.OpenSubKey(
-                    @"SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Render"))
-                {
-                    if (key == null) return null;
-
-                    string bestMatchId = null;
-                    int bestScore = 0;
-
-                    foreach (var subKeyName in key.GetSubKeyNames())
-                    {
-                        using (var subKey = key.OpenSubKey(subKeyName))
-                        {
-                            if (subKey == null) continue;
-                            using (var propsKey = subKey.OpenSubKey("Properties"))
-                            {
-                                if (propsKey == null) continue;
-
-                                string regName = propsKey.GetValue("{a45c254e-df1c-4efd-8020-67d146a850e0},2") as string;
-                                if (string.IsNullOrEmpty(regName))
-                                    regName = propsKey.GetValue("{a45c254e-df1c-4efd-8020-67d146a850e0},14") as string;
-
-                                string ifName = propsKey.GetValue("{b3f8fa53-0004-438e-9003-51a46e139bfc},6") as string;
-
-                                if (string.IsNullOrEmpty(regName) && string.IsNullOrEmpty(ifName))
-                                    continue;
-
-                                int score = 0;
-
-                                if (!string.IsNullOrEmpty(ifName) &&
-                                    deviceName.IndexOf(ifName, StringComparison.OrdinalIgnoreCase) >= 0)
-                                    score += 100;
-
-                                if (!string.IsNullOrEmpty(regName) &&
-                                    deviceName.IndexOf(regName, StringComparison.OrdinalIgnoreCase) >= 0)
-                                    score += 10;
-
-                                if (!string.IsNullOrEmpty(regName) &&
-                                    regName.IndexOf(deviceName, StringComparison.OrdinalIgnoreCase) >= 0)
-                                    score += 5;
-
-                                if (score > 0 && score > bestScore)
-                                {
-                                    bestScore = score;
-                                    bestMatchId = "{0.0.0.00000000}." + subKeyName;
-                                }
-                            }
-                        }
-                    }
-                    return bestMatchId;
-                }
-            }
-            catch (Exception ex) { AppLog.Log("FindEndpointIdByName(" + (deviceName ?? "") + ")", ex); }
-            return null;
+            try { return setRole(role); }
+            catch (Exception ex) { AppLog.Log("Set default audio role " + role, ex); return int.MinValue; }
         }
     }
 
+    /// <summary>
+    /// Coalesces bursts from the Core Audio notification client. The callback is
+    /// always drained by the WPF dispatcher, never by the COM callback thread.
+    /// </summary>
+    public sealed class AudioNotificationGate : IDisposable
+    {
+        readonly Action _callback;
+        int _queued;
+        int _stopped;
+
+        public AudioNotificationGate(Action callback) { _callback = callback; }
+
+        public bool TryQueue()
+        {
+            if (System.Threading.Volatile.Read(ref _stopped) != 0) return false;
+            return System.Threading.Interlocked.Exchange(ref _queued, 1) == 0;
+        }
+
+        public void Drain()
+        {
+            if (System.Threading.Volatile.Read(ref _stopped) != 0) return;
+            if (System.Threading.Interlocked.Exchange(ref _queued, 0) == 1)
+            {
+                try { _callback?.Invoke(); }
+                catch (Exception ex) { AppLog.Log("Audio notification callback", ex); }
+            }
+        }
+
+        public void Dispose()
+        {
+            System.Threading.Interlocked.Exchange(ref _stopped, 1);
+            System.Threading.Interlocked.Exchange(ref _queued, 0);
+        }
+    }
+
+    public static class AudioDevices
+    {
+        public sealed class DeviceWatcher : IDisposable
+        {
+            readonly Dispatcher _dispatcher;
+            readonly DispatcherTimer _debounceTimer;
+            readonly AudioNotificationGate _gate;
+            MMDeviceEnumerator _enumerator;
+            MMDeviceNotificationClient _notificationClient;
+            bool _stopped;
+
+            public Action OnChange;
+
+            public DeviceWatcher()
+            {
+                _dispatcher = Dispatcher.CurrentDispatcher;
+                _gate = new AudioNotificationGate(() => OnChange?.Invoke());
+                _debounceTimer = new DispatcherTimer(DispatcherPriority.Background, _dispatcher)
+                { Interval = TimeSpan.FromMilliseconds(150) };
+                _debounceTimer.Tick += OnDebounceTick;
+                try
+                {
+                    _enumerator = new MMDeviceEnumerator();
+                    // NAudio owns the Core Audio notification adapter and unregisters
+                    // it when the returned client is disposed.
+                    _notificationClient = _enumerator.CreateNotificationClient(true);
+                    _notificationClient.DeviceStateChanged += OnDeviceChanged;
+                    _notificationClient.DeviceAdded += OnDeviceChanged;
+                    _notificationClient.DeviceRemoved += OnDeviceChanged;
+                    _notificationClient.DefaultDeviceChanged += OnDefaultDeviceChanged;
+                    _notificationClient.PropertyValueChanged += OnDeviceChanged;
+                }
+                catch (Exception ex)
+                {
+                    AppLog.Log("Audio watcher create", ex);
+                    Dispose();
+                }
+            }
+
+            void OnDeviceChanged(object sender, EventArgs args) => QueueChange();
+            void OnDefaultDeviceChanged(object sender, DefaultDeviceChangedEventArgs args) => QueueChange();
+
+            void QueueChange()
+            {
+                if (_stopped || !_gate.TryQueue()) return;
+                try
+                {
+                    if (_dispatcher.CheckAccess())
+                    {
+                        _debounceTimer.Stop();
+                        _debounceTimer.Start();
+                    }
+                    else
+                    {
+                        _dispatcher.BeginInvoke(new Action(() =>
+                        {
+                            if (_stopped) return;
+                            _debounceTimer.Stop();
+                            _debounceTimer.Start();
+                        }));
+                    }
+                }
+                catch (Exception ex) { AppLog.Log("Audio watcher schedule", ex); }
+            }
+
+            void OnDebounceTick(object sender, EventArgs e)
+            {
+                _debounceTimer.Stop();
+                _gate.Drain();
+            }
+
+            public void Stop() => Dispose();
+
+            public void Dispose()
+            {
+                if (_stopped) return;
+                _stopped = true;
+                try { _debounceTimer.Stop(); } catch { }
+                _gate.Dispose();
+                if (_notificationClient != null)
+                {
+                    try
+                    {
+                        _notificationClient.DeviceStateChanged -= OnDeviceChanged;
+                        _notificationClient.DeviceAdded -= OnDeviceChanged;
+                        _notificationClient.DeviceRemoved -= OnDeviceChanged;
+                        _notificationClient.DefaultDeviceChanged -= OnDefaultDeviceChanged;
+                        _notificationClient.PropertyValueChanged -= OnDeviceChanged;
+                    }
+                    catch (Exception ex) { AppLog.Log("Audio watcher unsubscribe", ex); }
+                    try { _notificationClient.Dispose(); } catch (Exception ex) { AppLog.Log("Audio watcher dispose", ex); }
+                    _notificationClient = null;
+                }
+                if (_enumerator != null)
+                {
+                    try { _enumerator.Dispose(); } catch (Exception ex) { AppLog.Log("Audio enumerator dispose", ex); }
+                    _enumerator = null;
+                }
+            }
+        }
+
+        public static List<AudioDeviceInfo> GetOutputDevices()
+        {
+            try
+            {
+                using (var enumerator = new MMDeviceEnumerator())
+                using (var endpoints = enumerator.EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active))
+                {
+                    string defaultId = null;
+                    try
+                    {
+                        if (enumerator.TryGetDefaultAudioEndpoint(DataFlow.Render, Role.Console, out var endpoint))
+                        {
+                            using (endpoint) defaultId = endpoint.ID;
+                        }
+                    }
+                    catch (Exception ex) { AppLog.Log("Get default audio endpoint", ex); }
+
+                    var candidates = new List<AudioDeviceCandidate>();
+                    foreach (var endpoint in endpoints)
+                    {
+                        using (endpoint)
+                        {
+                            candidates.Add(new AudioDeviceCandidate
+                            {
+                                Id = endpoint.ID,
+                                Name = endpoint.FriendlyName,
+                                IsActive = endpoint.State == DeviceState.Active
+                            });
+                        }
+                    }
+                    var result = AudioDevicePolicy.Project(candidates, defaultId,
+                        DevicePrefs.IsHidden, DevicePrefs.GetHotkey);
+                    if (result.Count > 0) return result;
+                }
+            }
+            catch (Exception ex) { AppLog.Log("GetOutputDevices", ex); }
+
+            // An empty list is the real no-device state; the UI renders its
+            // existing empty-state text and commands can return NotAvailable.
+            return new List<AudioDeviceInfo>();
+        }
+
+        /// <summary>
+        /// Windows exposes no supported managed API for changing the default
+        /// endpoint. This isolated adapter is the only remaining PolicyConfig COM
+        /// interop; enumeration and volume control are entirely NAudio-based.
+        /// </summary>
+        public static bool SetDefaultDevice(string deviceNameOrId)
+        {
+            MMDevice device = null;
+            try
+            {
+                device = FindDevice(deviceNameOrId);
+                if (device == null) return false;
+                object policyObject = null;
+                try
+                {
+                    policyObject = new CPolicyConfigClient();
+                    var policy = (IPolicyConfig)policyObject;
+                    return AudioDefaultEndpointPolicy.Apply(device.ID,
+                        role => policy.SetDefaultEndpoint(device.ID, (int)role));
+                }
+                finally
+                {
+                    if (policyObject != null)
+                        try { Marshal.ReleaseComObject(policyObject); } catch (Exception ex) { AppLog.Log("PolicyConfig release", ex); }
+                }
+            }
+            catch (Exception ex)
+            {
+                AppLog.Log("SetDefaultDevice(" + (deviceNameOrId ?? "") + ")", ex);
+                return false;
+            }
+            finally { device?.Dispose(); }
+        }
+
+        static MMDevice FindDevice(string deviceNameOrId)
+        {
+            if (string.IsNullOrWhiteSpace(deviceNameOrId) || deviceNameOrId == "default") return null;
+            var enumerator = new MMDeviceEnumerator();
+            try
+            {
+                if (deviceNameOrId.StartsWith("{", StringComparison.Ordinal))
+                {
+                    try
+                    {
+                        var exact = enumerator.GetDevice(deviceNameOrId);
+                        enumerator.Dispose();
+                        return exact;
+                    }
+                    catch { }
+                }
+                using (enumerator)
+                using (var endpoints = enumerator.EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active))
+                {
+                    string bestId = null;
+                    int bestScore = 0;
+                    foreach (var endpoint in endpoints)
+                    {
+                        using (endpoint)
+                        {
+                            int score = string.Equals(endpoint.ID, deviceNameOrId, StringComparison.OrdinalIgnoreCase)
+                                ? 1000
+                                : endpoint.FriendlyName?.IndexOf(deviceNameOrId, StringComparison.OrdinalIgnoreCase) >= 0 ? 100 : 0;
+                            if (score > bestScore)
+                            {
+                                bestId = endpoint.ID;
+                                bestScore = score;
+                            }
+                        }
+                    }
+                    // Re-open after the collection and its temporary endpoint
+                    // wrappers are disposed; the caller owns this independent RCW.
+                    return bestId == null ? null : enumerator.GetDevice(bestId);
+                }
+            }
+            catch (Exception ex)
+            {
+                enumerator.Dispose();
+                AppLog.Log("Find audio endpoint", ex);
+                return null;
+            }
+        }
+
+        // Minimal undocumented PolicyConfig COM boundary; no endpoint enumeration
+        // or volume operations belong here.
+        [ComImport, Guid("568b9108-44bf-40b4-9006-86afe5b5a620"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        interface IPolicyConfig
+        {
+            [PreserveSig]
+            int GetMixFormat(string deviceID, IntPtr format);
+            [PreserveSig]
+            int GetDeviceFormat(string deviceID, int defaultFormat, IntPtr format);
+            [PreserveSig]
+            int SetDeviceFormat(string deviceID, IntPtr format, IntPtr endpointFormat);
+            [PreserveSig]
+            int GetProcessingPeriod(string deviceID, int defaultPeriod, out long period, out long minPeriod);
+            [PreserveSig]
+            int SetProcessingPeriod(string deviceID, ref long period);
+            [PreserveSig]
+            int GetShareMode(string deviceID, out int mode);
+            [PreserveSig]
+            int SetShareMode(string deviceID, ref int mode);
+            [PreserveSig]
+            int GetDevicePeriod(string deviceID, int defaultPeriod, out long period, out long minPeriod);
+            [PreserveSig]
+            int SetDevicePeriod(string deviceID, ref long period);
+            [PreserveSig]
+            int SetDefaultEndpoint(string deviceID, int role);
+            [PreserveSig]
+            int SetEndpointVisibility(string deviceID, int visible);
+        }
+
+        [ComImport, Guid("294935CE-F637-4E7C-A41B-AB255460B862")]
+        class CPolicyConfigClient { }
+    }
 }

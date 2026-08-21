@@ -4,6 +4,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
 using System.Windows.Media;
+using PowerAudioManager.Commands;
 using System.Windows.Shapes;
 
 namespace PowerAudioManager
@@ -16,10 +17,10 @@ namespace PowerAudioManager
             var hw = HardwareMonitorService.Instance;
 
             // 标题
-            var title = new TextBlock { FontSize = 14, FontWeight = FontWeights.SemiBold, Foreground = Brushes.White, Margin = new Thickness(0, 0, 0, 12) };
-            title.Inlines.Add(new Run("◉ ") { Foreground = new SolidColorBrush(Color.FromRgb(142, 140, 216)) });
-            title.Inlines.Add(new Run("性能监控"));
-            stack.Children.Add(title);
+            var titleRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 12) };
+            titleRow.Children.Add(IconCatalog.CreateElement(IconKey.Performance, 18, UiKit.FrozenBrush(UiKit.AccentColor)));
+            titleRow.Children.Add(new TextBlock { Text = "性能监控", FontSize = 14, FontWeight = FontWeights.SemiBold, Foreground = Brushes.White, Margin = new Thickness(6, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center });
+            stack.Children.Add(titleRow);
 
             // 传感器统计
             var stats = new TextBlock { Foreground = fg, FontSize = 10, Margin = new Thickness(0, 0, 0, 10) };
@@ -60,14 +61,24 @@ namespace PowerAudioManager
             stack.Children.Add(setCard);
 
             var btns = MakeButtons();
-            ((Button)btns.Children[0]).Click += (_, _) =>
+            ((Button)btns.Children[0]).Click += async (_, _) =>
             {
-                int iv; if (int.TryParse(ivBox.Text, out iv) && iv >= 500 && iv <= 60000) AppPrefs.SetInt("Temp.IntervalMs", iv);
-                int w;  if (int.TryParse(warnBox.Text, out w) && w > 0) AppPrefs.SetInt("Temp.WarnC", w);
-                int c;  if (int.TryParse(critBox.Text, out c) && c > 0) AppPrefs.SetInt("Temp.CriticalC", c);
+                if (!int.TryParse(ivBox.Text, out int iv) || iv < 500 || iv > 60000 ||
+                    !int.TryParse(warnBox.Text, out int w) || w <= 0 ||
+                    !int.TryParse(critBox.Text, out int c) || c <= 0)
+                {
+                    MessageBox.Show(dlg, "刷新间隔必须在 500 到 60000 毫秒之间，温度阈值必须为正整数。",
+                        "OneBox 设置", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return;
+                }
+                if (!TryPersist(dlg,
+                    () => AppPrefs.Set(PreferenceKeys.Monitor.IntervalMs, iv),
+                    () => AppPrefs.Set(PreferenceKeys.Monitor.WarningC, w),
+                    () => AppPrefs.Set(PreferenceKeys.Monitor.CriticalC, c))) return;
                 if (owner is MainWindow mw)
                 {
-                    mw.RestartTempTimer();
+                    var result = await mw.ExecuteCommandAsync(AppCommandId.MonitorStart, CommandSource.Settings);
+                    if (!result.Success) return;
                 }
                 dlg.DialogResult = true; dlg.Close();
             };

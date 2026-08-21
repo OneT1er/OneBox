@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using PowerAudioManager.Commands;
 
 namespace PowerAudioManager
 {
@@ -51,6 +52,7 @@ namespace PowerAudioManager
             stack.Children.Add(thRow);
 
             stack.Children.Add(new TextBlock { Text = "要清理的内存区域", Foreground = Brushes.White, FontWeight = FontWeights.SemiBold, FontSize = 13, Margin = new Thickness(0, 8, 0, 4) });
+            stack.Children.Add(new TextBlock { Text = "可以全部取消；未选择任何项目时，手动与自动清理都不会执行。", Foreground = fg, FontSize = 10, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 6) });
             var cbWS = MakeAreaCb("Working set", "释放各进程的工作集（已加载到物理内存的代码与数据），把未使用的页面交还系统。", "Clean.WorkingSet", true, fg, true);
             var cbSFC = MakeAreaCb("System file cache", "归还系统文件缓存：Windows 用来加速文件读取的内存被释放回可用池。", "Clean.SystemFileCache", true, fg, true);
             var cbMPL = MakeAreaCb("Modified page list", "把已修改但尚未写回磁盘的脏页刷盘后转入可用列表。", "Clean.ModifiedPageList", false, fg, true);
@@ -78,23 +80,35 @@ namespace PowerAudioManager
             stack.Children.Add(new TextBlock { Text = "默认自动清理会跳过这两项以避免后台卡顿；勾选后自动清理也执行它们。", Foreground = fg, FontSize = 10, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 0) });
 
             var btns = MakeButtons();
-            ((Button)btns.Children[0]).Click += (s, e) =>
+            ((Button)btns.Children[0]).Click += async (s, e) =>
             {
-                AppPrefs.SetBool("AutoCleanEnabled", enableCb.IsChecked == true);
-                AppPrefs.SetBool("AutoCleanByTime", byTimeCb.IsChecked == true);
-                AppPrefs.SetBool("AutoCleanByThreshold", byThCb.IsChecked == true);
-                int n; if (int.TryParse(timeBox.Text, out n) && n > 0) AppPrefs.SetDouble("AutoCleanMinutes", n);
-                int t; if (int.TryParse(thBox.Text, out t) && t > 0 && t <= 100) AppPrefs.SetDouble("AutoCleanThreshold", t);
-                AppPrefs.SetBool("AutoCleanAllowFreezes", allowFreezeCb.IsChecked == true);
-                AppPrefs.SetBool("Clean.WorkingSet", cbWS.IsChecked == true);
-                AppPrefs.SetBool("Clean.SystemFileCache", cbSFC.IsChecked == true);
-                AppPrefs.SetBool("Clean.ModifiedPageList", cbMPL.IsChecked == true);
-                AppPrefs.SetBool("Clean.StandbyList", cbSL.IsChecked == true);
-                AppPrefs.SetBool("Clean.StandbyListNoPrio", cbSLNP.IsChecked == true);
-                AppPrefs.SetBool("Clean.ModifiedFileCache", cbMFC.IsChecked == true);
-                AppPrefs.SetBool("Clean.RegistryCache", cbReg.IsChecked == true);
-                AppPrefs.SetBool("Clean.CombineMemoryLists", cbCML.IsChecked == true);
-                if (owner is MainWindow) ((MainWindow)owner).RestartAutoCleanTimer();
+                if (!int.TryParse(timeBox.Text, out int n) || n <= 0 ||
+                    !int.TryParse(thBox.Text, out int t) || t <= 0 || t > 100)
+                {
+                    MessageBox.Show(dlg, "自动清理周期必须为正整数，内存阈值必须在 1 到 100 之间。", "OneBox 设置",
+                        MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return;
+                }
+                if (!TryPersist(dlg,
+                    () => AppPrefs.Set(PreferenceKeys.Memory.AutoEnabled, enableCb.IsChecked == true),
+                    () => AppPrefs.Set(PreferenceKeys.Memory.AutoByTime, byTimeCb.IsChecked == true),
+                    () => AppPrefs.Set(PreferenceKeys.Memory.AutoByThreshold, byThCb.IsChecked == true),
+                    () => AppPrefs.Set(PreferenceKeys.Memory.AutoMinutes, n),
+                    () => AppPrefs.Set(PreferenceKeys.Memory.AutoThreshold, t),
+                    () => AppPrefs.Set(PreferenceKeys.Memory.AllowFreezes, allowFreezeCb.IsChecked == true),
+                    () => AppPrefs.Set(PreferenceKeys.Memory.WorkingSet, cbWS.IsChecked == true),
+                    () => AppPrefs.Set(PreferenceKeys.Memory.SystemFileCache, cbSFC.IsChecked == true),
+                    () => AppPrefs.Set(PreferenceKeys.Memory.ModifiedPageList, cbMPL.IsChecked == true),
+                    () => AppPrefs.Set(PreferenceKeys.Memory.StandbyList, cbSL.IsChecked == true),
+                    () => AppPrefs.Set(PreferenceKeys.Memory.StandbyListNoPriority, cbSLNP.IsChecked == true),
+                    () => AppPrefs.Set(PreferenceKeys.Memory.ModifiedFileCache, cbMFC.IsChecked == true),
+                    () => AppPrefs.Set(PreferenceKeys.Memory.RegistryCache, cbReg.IsChecked == true),
+                    () => AppPrefs.Set(PreferenceKeys.Memory.CombineMemoryLists, cbCML.IsChecked == true))) return;
+                if (owner is MainWindow mw)
+                {
+                    var result = await mw.ExecuteCommandAsync(AppCommandId.RuntimeRestartAutoClean, CommandSource.Settings);
+                    if (!result.Success) return;
+                }
                 dlg.DialogResult = true; dlg.Close();
             };
             ((Button)btns.Children[1]).Click += (s, e) => { dlg.DialogResult = false; dlg.Close(); };

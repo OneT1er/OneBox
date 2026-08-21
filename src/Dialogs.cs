@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
@@ -12,7 +13,6 @@ using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using System.IO;
 using Microsoft.Win32;
-using MaterialDesignThemes.Wpf;
 
 namespace PowerAudioManager
 {
@@ -94,6 +94,9 @@ namespace PowerAudioManager
         ComboBox _fromBox, _toBox;
         TextBlock _statusBlock;
         Button _btnGo, _btnCopy, _btnSwap, _btnSettings;
+        readonly RequestGenerationGate _translationGeneration = new RequestGenerationGate();
+        System.Threading.CancellationTokenSource _translationCancellation;
+        bool _isClosed;
 
         public TranslateWindow()
         {
@@ -121,6 +124,15 @@ namespace PowerAudioManager
             Microsoft.Win32.SystemEvents.DisplaySettingsChanged += displayHandler;
             this.Closed += (s, e) =>
             {
+                _isClosed = true;
+                _translationGeneration.Invalidate();
+                var cancellation = _translationCancellation;
+                _translationCancellation = null;
+                if (cancellation != null)
+                {
+                    cancellation.Cancel();
+                    cancellation.Dispose();
+                }
                 try { Microsoft.Win32.SystemEvents.DisplaySettingsChanged -= displayHandler; } catch { }
             };
             this.Loaded += (s, e) => ClampToWorkArea();
@@ -171,14 +183,14 @@ namespace PowerAudioManager
                 LastChildFill = true
             };
             var titleText = new TextBlock {
-                Text = "  \uD83D\uDCDD  OneBox · 翻译",
+                Text = "OneBox · 翻译",
                 Foreground = Brushes.White,
                 FontSize = 13,
                 FontWeight = FontWeights.SemiBold,
                 VerticalAlignment = VerticalAlignment.Center
             };
             var closeBtn = new Button {
-                Content = new PackIcon { Kind = PackIconKind.Close, Width = 16, Height = 16 },
+                Content = IconCatalog.CreateElement(IconKey.Close, 16, UiKit.FrozenBrush(UiKit.TextSecondary)),
                 Width = 36, Height = 36,
                 Foreground = new SolidColorBrush(Color.FromRgb(190, 188, 220)),
                 Background = Brushes.Transparent,
@@ -186,6 +198,7 @@ namespace PowerAudioManager
                 Cursor = Cursors.Hand,
                 ToolTip = "关闭"
             };
+            AutomationProperties.SetName(closeBtn, "关闭");
             UiKit.ApplyIconButtonStyle(closeBtn);
             closeBtn.Click += (s, e) => Close();
             DockPanel.SetDock(closeBtn, Dock.Right);
@@ -205,7 +218,8 @@ namespace PowerAudioManager
             var bar = new DockPanel { Margin = new Thickness(0, 0, 0, 8), LastChildFill = false };
             _fromBox = MakeLangBox(true);
             _toBox = MakeLangBox(false);
-            _btnSwap = new Button { Content = new PackIcon { Kind = PackIconKind.SwapHorizontal, Width = 16, Height = 16 }, Width = 32, Height = 28, Margin = new Thickness(4, 0, 4, 0), ToolTip = "交换源/目标语言", Foreground = new SolidColorBrush(Color.FromRgb(190, 188, 220)) };
+            _btnSwap = new Button { Content = IconCatalog.CreateElement(IconKey.Translate, 16, UiKit.FrozenBrush(UiKit.TextSecondary)), Width = 32, Height = 28, Margin = new Thickness(4, 0, 4, 0), ToolTip = "交换源/目标语言", Foreground = new SolidColorBrush(Color.FromRgb(190, 188, 220)) };
+            AutomationProperties.SetName(_btnSwap, "交换源/目标语言");
             UiKit.ApplyIconButtonStyle(_btnSwap);
             _btnSwap.Click += (s, e) => SwapLanguages();
             DockPanel.SetDock(_fromBox, Dock.Left);
@@ -219,12 +233,15 @@ namespace PowerAudioManager
             _btnGo.Click += (s, e) => RunTranslation(_input.Text);
             DockPanel.SetDock(_btnGo, Dock.Right);
             bar.Children.Add(_btnGo);
-            _btnSettings = new Button { Content = new PackIcon { Kind = PackIconKind.Cog, Width = 16, Height = 16 }, Width = 32, Height = 28, Margin = new Thickness(0, 0, 4, 0), ToolTip = "翻译 API 设置", Foreground = new SolidColorBrush(Color.FromRgb(190, 188, 220)) };
+            _btnSettings = new Button { Content = IconCatalog.CreateElement(IconKey.Settings, 16, UiKit.FrozenBrush(UiKit.TextSecondary)), Width = 32, Height = 28, Margin = new Thickness(0, 0, 4, 0), ToolTip = "翻译 API 设置", Foreground = new SolidColorBrush(Color.FromRgb(190, 188, 220)) };
+            AutomationProperties.SetName(_btnSettings, "翻译 API 设置");
             UiKit.ApplyIconButtonStyle(_btnSettings);
             _btnSettings.Click += (s, e) =>
             {
                 SettingsDialog.Show(this, 3);
-                if (_statusBlock != null) _statusBlock.Text = "已保存设置";
+                string credentialError = TranslateService.GetCredentialError();
+                if (_statusBlock != null)
+                    _statusBlock.Text = string.IsNullOrEmpty(credentialError) ? "已保存设置" : "失败: " + credentialError;
             };
             DockPanel.SetDock(_btnSettings, Dock.Right);
             bar.Children.Add(_btnSettings);
@@ -337,9 +354,31 @@ namespace PowerAudioManager
 
         public void RunTranslation(string text)
         {
+            _ = RunTranslationAsync(text);
+        }
+
+        public async System.Threading.Tasks.Task RunTranslationAsync(string text)
+        {
             if (text == null) text = "";
             _input.Text = text;
-            if (string.IsNullOrEmpty(text)) { _output.Text = ""; return; }
+            var previousCancellation = _translationCancellation;
+            var cancellation = new System.Threading.CancellationTokenSource();
+            _translationCancellation = cancellation;
+            int generation = _translationGeneration.Begin();
+            if (previousCancellation != null)
+            {
+                previousCancellation.Cancel();
+                previousCancellation.Dispose();
+            }
+            if (string.IsNullOrEmpty(text))
+            {
+                _output.Text = "";
+                _statusBlock.Text = "";
+                _btnGo.IsEnabled = true;
+                if (ReferenceEquals(_translationCancellation, cancellation)) _translationCancellation = null;
+                cancellation.Dispose();
+                return;
+            }
             var fItem = _fromBox.SelectedItem as ComboBoxItem;
             var tItem = _toBox.SelectedItem as ComboBoxItem;
             string from = fItem == null ? "auto" : fItem.Tag.ToString();
@@ -347,20 +386,29 @@ namespace PowerAudioManager
             _statusBlock.Text = "翻译中...";
             _btnGo.IsEnabled = false;
             _output.Text = "";
-            System.Threading.ThreadPool.QueueUserWorkItem(state =>
+            TranslateService.Result result;
+            try
             {
-                TranslateService.Result r = null;
-                Exception err = null;
-                try { r = TranslateService.Translate(text, from, to); }
-                catch (Exception ex) { err = ex; }
-                Dispatcher.BeginInvoke(new Action(() =>
-                {
-                    _btnGo.IsEnabled = true;
-                    if (err != null) { _output.Text = ""; _statusBlock.Text = "失败: " + err.Message; return; }
-                    if (r != null && !string.IsNullOrEmpty(r.Error)) { _output.Text = ""; _statusBlock.Text = "失败: " + r.Error; }
-                    else { _output.Text = r == null ? "" : (r.Translation ?? ""); _statusBlock.Text = "完成" + (r == null || string.IsNullOrEmpty(r.DetectedFrom) ? "" : " · 检测到 " + r.DetectedFrom); }
-                }));
-            });
+                result = await TranslateService.TranslateAsync(text, from, to, cancellation.Token);
+            }
+            catch (Exception ex)
+            {
+                AppLog.Log("TranslateWindow", ex);
+                result = new TranslateService.Result { Error = "翻译失败：" + ex.Message };
+            }
+
+            if (_isClosed || !_translationGeneration.IsCurrent(generation)) return;
+            if (ReferenceEquals(_translationCancellation, cancellation)) _translationCancellation = null;
+            cancellation.Dispose();
+            _btnGo.IsEnabled = true;
+            if (!string.IsNullOrEmpty(result?.Error))
+            {
+                _output.Text = "";
+                _statusBlock.Text = "失败: " + result.Error;
+                return;
+            }
+            _output.Text = result?.Translation ?? "";
+            _statusBlock.Text = "完成" + (string.IsNullOrEmpty(result?.DetectedFrom) ? "" : " · 检测到 " + result.DetectedFrom);
         }
     }
 
@@ -401,11 +449,12 @@ namespace PowerAudioManager
                 VerticalAlignment = VerticalAlignment.Center
             };
             var closeBtn = new Button {
-                Content = new PackIcon { Kind = PackIconKind.Close, Width = 16, Height = 16 },
+                Content = IconCatalog.CreateElement(IconKey.Close, 16, fg),
                 Width = 36, Height = 36,
                 Foreground = fg, Background = Brushes.Transparent,
                 BorderBrush = Brushes.Transparent, Cursor = Cursors.Hand, ToolTip = "关闭"
             };
+            AutomationProperties.SetName(closeBtn, "关闭");
             // MD 按钮样式的 MinWidth/MinHeight 会裁剪此 36x36 槽位中的图标；ApplyIconButtonStyle 禁用这些限制
             UiKit.ApplyIconButtonStyle(closeBtn);
             closeBtn.Click += (s, e) => dlg.Close();

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Windows;
@@ -11,10 +12,22 @@ using System.Windows.Documents;
 using System.Windows.Threading;
 using System.IO;
 using Microsoft.Win32;
-using MaterialDesignThemes.Wpf;
+using PowerAudioManager.Commands;
 
 namespace PowerAudioManager
 {
+    public sealed class ExitLifecycleGate
+    {
+        int _started;
+
+        public bool TryBegin()
+        {
+            return System.Threading.Interlocked.CompareExchange(ref _started, 1, 0) == 0;
+        }
+
+        public bool IsStarted => System.Threading.Volatile.Read(ref _started) != 0;
+    }
+
     // 悬浮窗主窗口。按职责拆分到 partial 文件：
     //   MainWindow.UI / Data / Memory / Monitor / Translate / Hotkeys / Collapse
     public partial class MainWindow : Window
@@ -63,18 +76,20 @@ namespace PowerAudioManager
         Dictionary<int, string> _hotkeyMap = new Dictionary<int, string>();
         IntPtr _hotkeyHwnd = IntPtr.Zero;
         DispatcherTimer _autoCollapseTimer;
+        volatile bool _isExiting;
+        readonly ExitLifecycleGate _exitLifecycle = new ExitLifecycleGate();
+        System.Windows.Interop.HwndSource _hwndSource;
 
-        // 字体与图片加载统一走 AppResources（单文件发布时 Assembly.Location 为空，不能直接读文件）。
+        // 字体与图片加载统一走 AppResources，避免依赖当前工作目录。
         static FontFamily AppFont { get { return AppResources.AppFont; } }
-        static FontFamily EmojiFont { get { return AppResources.EmojiFont; } }
-        static FontFamily CompFont { get { return AppResources.CompositeFont; } }
         static BitmapImage LoadAppImage(string fileName) { return AppResources.LoadAppImage(fileName); }
 
         public MainWindow()
         {
             var sw = System.Diagnostics.Stopwatch.StartNew();
-            _topmost = AppPrefs.GetBool("Topmost", false);
-            _lockPosition = AppPrefs.GetBool("LockPosition", false);
+            InitializeCommands();
+            _topmost = AppPrefs.Get(PreferenceKeys.Window.Topmost);
+            _lockPosition = AppPrefs.Get(PreferenceKeys.Window.LockPosition);
             Title = "OneBox";
             FontFamily = AppFont;
             Width = 280;
@@ -111,7 +126,9 @@ namespace PowerAudioManager
             }
             else { Left = screen.Right - Width - 20; Top = screen.Bottom - 200 - 20; }
             BuildUI();
-            MouseWheel += (s, e) => { VolumeControl.SetVolume(VolumeControl.GetVolume() + (e.Delta > 0 ? 0.02f : -0.02f)); UpdateVolumeUI(); };
+            MouseWheel += (s, e) => _ = ExecuteCommandAsync(AppCommandId.AudioSetVolume,
+                CommandSource.MainWindow, new AudioVolumePayload(Math.Clamp(
+                    VolumeControl.GetVolume() + (e.Delta > 0 ? 0.02f : -0.02f), 0, 1)));
             // LoadData() 推迟到 OnLoaded 异步执行，避免 GetStatus() 首次创建 PerformanceCounter（~300ms）阻塞构造函数。
             AppLog.Log("Startup", "ctor done " + sw.ElapsedMilliseconds + "ms");
             _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(30) };
@@ -121,7 +138,7 @@ namespace PowerAudioManager
             _screenPoll = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
             _screenPoll.Tick += (s, e) => { try { if (_scaling != null) _scaling.ApplyScaling(); } catch { } };
             _screenPoll.Start();
-            Closing += (s, ev) => { ev.Cancel = true; Hide(); };
+            Closing += OnWindowClosing;
             Loaded += OnLoaded;
             LocationChanged += (s, e) => { if (IsLoaded) SavePosition(); };
         }
@@ -195,14 +212,23 @@ namespace PowerAudioManager
                 Dispatcher.BeginInvoke(new Action(() => { try { if (_tray != null) _tray.UpdateIcon(); } catch { } }),
                     System.Windows.Threading.DispatcherPriority.ApplicationIdle);
                 try { ClipboardHistory.Start(); } catch { }
-                try { UpdateChecker.CheckAsync(this, false); } catch { }
+                _ = RunStartupUpdateCheckAsync();
                 try { RestartAutoCleanTimer(); } catch { }
                 try { StartAutoCollapse(); } catch { }
                 _hotkeyHwnd = hwnd;
-                System.Windows.Interop.HwndSource.FromHwnd(hwnd).AddHook(WndProc);
+                _hwndSource = System.Windows.Interop.HwndSource.FromHwnd(hwnd);
+                _hwndSource?.AddHook(WndProc);
                 RefreshHotkeys();
                 _deviceWatcher = new AudioDevices.DeviceWatcher();
-                _deviceWatcher.OnChange = () => Dispatcher.BeginInvoke(new Action(() => { VolumeControl.Invalidate(); LoadData(); ScheduleVolumeRefresh(); }));
+                _deviceWatcher.OnChange = () =>
+                {
+                    if (_isExiting || Dispatcher.HasShutdownStarted) return;
+                    Dispatcher.BeginInvoke(new Action(() =>
+                    {
+                        if (_isExiting) return;
+                        VolumeControl.Invalidate(); LoadData(); ScheduleVolumeRefresh();
+                    }));
+                };
                 Dispatcher.BeginInvoke(new Action(() => { try { TrimWorkingSet(); } catch { } }),
                     System.Windows.Threading.DispatcherPriority.ApplicationIdle);
                 _scaling = new WindowScaling(this, () => _mainBorder);
@@ -213,11 +239,19 @@ namespace PowerAudioManager
                 // 首次布局后夹回屏幕内（仅启动时，后续分辨率变化遵守固定位置）。
                 Dispatcher.BeginInvoke(new Action(EnsureFullyVisible), DispatcherPriority.Loaded);
                 // 窗口显示后延迟加载电源计划/设备/内存，避免 PerformanceCounter 初始化（~300ms）阻塞首帧。
-                // 原先用 ApplicationIdle，但 .NET 8 冷启动时派发器数秒不进入 Idle，导致 ~6s 延迟。
+                // 原先用 ApplicationIdle，但 .NET 10 冷启动时派发器数秒不进入 Idle，导致 ~6s 延迟。
                 // 改用 threading timer 确定性地 50ms 后触发，通过 BeginInvoke 回到 UI 线程。
                 _initLoadTimer = new System.Threading.Timer(_ =>
                 {
-                    Dispatcher.BeginInvoke(new Action(() => { try { LoadData(); } catch (Exception ex) { AppLog.Log("Startup LoadData", ex); } }));
+                    if (_isExiting || Dispatcher.HasShutdownStarted) return;
+                    try
+                    {
+                        Dispatcher.BeginInvoke(new Action(() =>
+                        {
+                            try { LoadData(); } catch (Exception ex) { AppLog.Log("Startup LoadData", ex); }
+                        }));
+                    }
+                    catch (Exception ex) { AppLog.Log("Startup LoadData dispatch", ex); }
                 }, null, 50, System.Threading.Timeout.Infinite);
                 // 确保服务运行（温度/内存 helper），未运行则提权启动一次（UAC 一次，之后服务常驻无 UAC）
                 try { EnsureServiceRunning(); } catch { }
@@ -230,20 +264,18 @@ namespace PowerAudioManager
 
         public static bool ModuleVisible(string module)
         {
-            try
+            switch (module)
             {
-                using (var k = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\PowerAudioManager\App"))
-                {
-                    if (k != null)
-                    {
-                        var s = k.GetValue("UI.Show" + module) as string;
-                        if (s == "0") return false;
-                        if (s == "1") return true;
-                    }
-                }
+                case "Power": return AppPrefs.Get(PreferenceKeys.Modules.Power);
+                case "Audio": return AppPrefs.Get(PreferenceKeys.Modules.Audio);
+                case "Mem": return AppPrefs.Get(PreferenceKeys.Modules.Memory);
+                case "Translate": return AppPrefs.Get(PreferenceKeys.Modules.Translate);
+                case "Launcher": return AppPrefs.Get(PreferenceKeys.Modules.Launcher);
+                case "Clipboard": return AppPrefs.Get(PreferenceKeys.Modules.Clipboard);
+                case "Gallery": return AppPrefs.Get(PreferenceKeys.Modules.Gallery);
+                case "Temp": return AppPrefs.Get(PreferenceKeys.Modules.Monitor);
+                default: return true;
             }
-            catch { }
-            return true;
         }
 
         public void RebuildUI()
@@ -258,6 +290,7 @@ namespace PowerAudioManager
             BuildUI();
             if (_scaling != null) _scaling.ApplyScaling(); // re-apply scale to the freshly built _mainBorder
             LoadData();
+            if (IsLoaded) RestartTempTimer();
             Left = left; Top = top;
         }
 
@@ -278,15 +311,48 @@ namespace PowerAudioManager
 
         internal void ExitApp()
         {
-            try { _tempTimer?.Dispose(); } catch { }
+            if (!_exitLifecycle.TryBegin()) return;
+            _isExiting = true;
+            try { _refreshTimer?.Stop(); } catch { }
+            try { _screenPoll?.Stop(); } catch { }
+            try { _autoCleanTimer?.Stop(); } catch { }
+            try { _autoCollapseTimer?.Stop(); } catch { }
+            var initTimer = System.Threading.Interlocked.Exchange(ref _initLoadTimer, null);
+            try { initTimer?.Dispose(); } catch { }
+            try { StopTempMonitor(); } catch { }
+            try { ScreenshotService.Shutdown(); } catch { }
+            try { ClipboardHistory.Stop(); } catch { }
+            try { UnregisterAllHotkeys(); } catch { }
+            try { _hwndSource?.RemoveHook(WndProc); } catch { }
+            _hwndSource = null;
+            _hotkeyHwnd = IntPtr.Zero;
             try { PerfHistory.Save(); } catch { }
             try { ForegroundHistory.Save(); } catch { }
-            try { HardwareMonitorService.Instance.Stop(); ForegroundHistory.Stop(); } catch { }
-            if (_deviceWatcher != null) _deviceWatcher.Stop();
-            try { Microsoft.Win32.SystemEvents.DisplaySettingsChanged -= _scaling.OnDisplaySettingsChanged; } catch { }
-            try { Microsoft.Win32.SystemEvents.UserPreferenceChanged -= _scaling.OnUserPreferenceChanged; } catch { }
-            if (_tray != null) _tray.Dispose();
-            Application.Current.Shutdown();
+            try { ForegroundHistory.Stop(); } catch { }
+            try { _deviceWatcher?.Stop(); } catch { }
+            _deviceWatcher = null;
+            try { VolumeControl.Shutdown(); } catch { }
+            if (_scaling != null)
+            {
+                try { Microsoft.Win32.SystemEvents.DisplaySettingsChanged -= _scaling.OnDisplaySettingsChanged; } catch { }
+                try { Microsoft.Win32.SystemEvents.UserPreferenceChanged -= _scaling.OnUserPreferenceChanged; } catch { }
+            }
+            try { _translateWindow?.Close(); } catch { }
+            _translateWindow = null;
+            try { _tray?.Dispose(); } catch { }
+            _tray = null;
+            Application.Current?.Shutdown();
+        }
+
+        void OnWindowClosing(object sender, CancelEventArgs e)
+        {
+            if (_isExiting)
+            {
+                e.Cancel = false;
+                return;
+            }
+            e.Cancel = true;
+            Hide();
         }
 
         void TrimWorkingSet()

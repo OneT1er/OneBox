@@ -1,11 +1,11 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
 using System.IO.Pipes;
 using System.Linq;
-using System.Text;
-using System.Text.Json;
-using LibreHardwareMonitor.Hardware;
+using System.Security.Principal;
+using System.Threading;
+using System.Threading.Tasks;
+using OneBox.Contracts;
 
 namespace PowerAudioManager
 {
@@ -13,9 +13,6 @@ namespace PowerAudioManager
     {
         public string HardwareName { get; set; }
         public string SensorName { get; set; }
-        // 用字符串存 LibreHardwareMonitor 枚举名（"Cpu"/"GpuNvidia"/"Memory"... 与 "Temperature"/"Fan"/"Control"），
-        // 而非 HardwareType/SensorType 枚举：这样非管理员 GUI（温度走管道，从不碰 Computer）不会因 SensorInfo
-        // 字段类型而加载 LibreHardwareMonitorLib.dll（省几 MB）。admin helper 仍用枚举，在边界 .ToString() 转字符串。
         public string HwType { get; set; }
         public string SensorType { get; set; }
         public override string ToString() => $"{HardwareName} - {SensorName}";
@@ -24,602 +21,360 @@ namespace PowerAudioManager
     public class MetricValue
     {
         public string DisplayName;
-        public string IconKey;      // "cpu","gpu","hot","vram","fan","ctrl","def"
+        public string IconKey;
         public float? Value;
-        public string Unit;         // "°C", "RPM", "%"
+        public string Unit;
         public bool IsTemp => Unit == "°C";
         public string ConfigKey;
-        // true=本次读数失败、用 _lastMetrics 兜底的旧值。UI 可照常显示（避免闪烁），
-        // 但 PerfHistory 不应存入历史（否则图表在没采到数据的地方填旧值）。
         public bool Cached;
     }
 
-    public class HardwareMonitorService : IDisposable
+    /// <summary>
+    /// GUI-side hardware facade. Hardware access is always isolated in
+    /// OneBox.Hardware; this type only consumes authenticated pipe snapshots.
+    /// </summary>
+    public sealed class HardwareMonitorService : IDisposable
     {
-        public static readonly HardwareMonitorService Instance = new HardwareMonitorService();
+        public static readonly HardwareMonitorService Instance = new();
 
-        // 仅 admin 路径（StartAdmin/UpdateAdmin/DiscoverSensors/ReadAllMetrics/ReadSensorValue/StopAdmin）访问。
-        // 非管理员 GUI 从不调用这些方法 -> 不 JIT -> 不加载 LibreHardwareMonitorLib。字段类型本身不会在类型加载时解析程序集。
-        private Computer _computer;
-        private bool _started, _hwReady;
-        private readonly object _lock = new object();
+        private readonly object _gate = new();
+        private readonly Dictionary<string, MetricValue> _lastMetrics = new();
+        private readonly List<MetricValue> _allPipeMetrics = new();
+        private CancellationTokenSource _pipeCancellation;
+        private Task _pipeTask;
+        private NamedPipeClientStream _activePipe;
+        private bool _started;
 
         public bool IsAvailable { get; private set; }
         public float? CpuTemperature { get; private set; }
         public float? GpuTemperature { get; private set; }
         public List<SensorInfo> AllTempSensors { get; } = new();
-        public List<SensorInfo> AllFanSensors { get; } = new();      // Fan (RPM)
-        public List<SensorInfo> AllControlSensors { get; } = new();   // Control (%)
-
-        // 用户配置的指标（注册表持久化）
+        public List<SensorInfo> AllFanSensors { get; } = new();
+        public List<SensorInfo> AllControlSensors { get; } = new();
         public List<string> EnabledMetrics { get; private set; } = new();
-
-        // 轮询后产生的值
         public List<MetricValue> ActiveMetrics { get; } = new();
-
-        // 上次成功读到的值（按 ConfigKey 缓存）：传感器偶发失配/SMBus 抖动时保留，避免 UI 闪烁或消失
-        private readonly Dictionary<string, MetricValue> _lastMetrics = new();
-        // 已记录过的传感器重映射，避免每秒轮询刷日志
-        private readonly HashSet<string> _loggedRemaps = new();
-        private List<MetricValue> _allPipeMetrics = new List<MetricValue>();
-
-        // 字符串枚举名比较（SensorInfo 已字符串化）
-        static bool HwIs(string hw, string name) => string.Equals(hw, name, StringComparison.OrdinalIgnoreCase);
-        static bool IsGpuHw(string hw) => HwIs(hw, "GpuNvidia") || HwIs(hw, "GpuAmd") || HwIs(hw, "GpuIntel");
-        static bool StIs(string st, string name) => string.Equals(st, name, StringComparison.OrdinalIgnoreCase);
 
         private HardwareMonitorService() { }
 
+        private static bool IsType(string value, string expected) =>
+            string.Equals(value, expected, StringComparison.OrdinalIgnoreCase);
+
+        private static bool IsGpuType(string value) =>
+            IsType(value, "GpuNvidia") || IsType(value, "GpuAmd") || IsType(value, "GpuIntel");
+
         public void Start()
         {
-            if (_started) return;
-            lock (_lock) { if (_started) return; _started = true; }
-
-            // 非管理员：温度由服务（OneBoxSvc）的 --temp-monitor helper 经 Global 管道推送，无 UAC，不加载 LibreHardwareMonitorLib
-            if (!AdminUtils.IsAdmin())
+            lock (_gate)
             {
-                LoadEnabledMetrics();  // 加载用户配的指标（UpdateFromPipe 过滤用），否则重启后指标为空
-                StartPipeClient();
-                return;
+                if (_started) return;
+                _started = true;
             }
-
-            StartAdmin();
+            LoadEnabledMetrics();
+            _pipeCancellation = new CancellationTokenSource();
+            _pipeTask = RunPipeClientAsync(_pipeCancellation.Token);
         }
 
-        // admin 专属：创建 Computer 并枚举传感器。独立方法使非管理员 GUI 不会 JIT 本方法 -> 不加载 LibreHardwareMonitorLib。
-        void StartAdmin()
+        private async Task RunPipeClientAsync(CancellationToken cancellationToken)
         {
-            System.Threading.ThreadPool.QueueUserWorkItem(_ =>
+            var backoff = new ReconnectBackoff();
+            while (!cancellationToken.IsCancellationRequested)
             {
+                NamedPipeClientStream client = null;
                 try
                 {
-                    _computer = new Computer
-                    {
-                        IsCpuEnabled = true,
-                        IsGpuEnabled = true,
-                        IsMotherboardEnabled = true,
-                        IsMemoryEnabled = true,
-                        IsStorageEnabled = true,
-                    };
-                    _computer.Open();
-                    _computer.Accept(new UpdateVisitor());
-                    DiscoverSensors();
-                    LoadEnabledMetrics();
-                    _hwReady = true;
-                    IsAvailable = true;
-                    AppLog.Log("Temp", $"ready: temp={AllTempSensors.Count} fan={AllFanSensors.Count} enabled={EnabledMetrics.Count} admin={AdminUtils.IsAdmin()}");
-                }
-                catch (Exception ex) { AppLog.Log("Temp", "init fail: " + ex.Message); _hwReady = false; }
-            });
-        }
+                    using var identity = WindowsIdentity.GetCurrent(TokenAccessLevels.Query);
+                    string userSid = identity.User?.Value ?? throw new InvalidOperationException("Current user SID is unavailable.");
+                    client = new NamedPipeClientStream(".", PipeNames.ForHardware(userSid), PipeDirection.InOut,
+                        PipeOptions.Asynchronous, TokenImpersonationLevel.Impersonation);
+                    lock (_gate) _activePipe = client;
+                    await client.ConnectAsync((int)IpcProtocol.ConnectTimeout.TotalMilliseconds, cancellationToken).ConfigureAwait(false);
+                    PipeServerIdentityVerifier.EnsureLocalSystemServer(client);
 
-        // ---- 非管理员：通过 admin helper（OneBox.exe --temp-monitor）命名管道读温度 ----
-        void StartPipeClient()
-        {
-            System.Threading.ThreadPool.QueueUserWorkItem(_ =>
-            {
-                // 重试连 Global 管道，等服务（OneBoxSvc）的 --temp-monitor 就绪（最多 ~25s）
-                NamedPipeClientStream client = null;
-                for (int i = 0; i < 25; i++)
-                {
-                    try
+                    IpcRequest request = IpcRequest.Create(IpcCommand.SubscribeHardware,
+                        new HardwareSubscribePayload { MinimumIntervalMilliseconds = 500 });
+                    await IpcFraming.WriteAsync(client, request, cancellationToken).ConfigureAwait(false);
+                    backoff.Reset();
+                    AppLog.Log("Temp", "authenticated hardware pipe connected");
+
+                    while (client.IsConnected && !cancellationToken.IsCancellationRequested)
                     {
-                        client = new NamedPipeClientStream(".", "Global\\OneBox\\TempMonitor", PipeDirection.In);
-                        client.Connect(1000);
-                        break;
+                        IpcResponse response = await IpcFraming.ReadAsync<IpcResponse>(client, cancellationToken,
+                            TimeSpan.FromSeconds(75)).ConfigureAwait(false);
+                        if (!response.Success)
+                            throw new IpcProtocolException(response.ErrorCode, response.ErrorMessage ?? "Hardware helper rejected the request.");
+                        if (response.Version != IpcProtocol.Version || response.RequestId != request.RequestId || response.Command != IpcCommand.HardwareSnapshot)
+                            throw new IpcProtocolException(IpcErrorCode.InvalidMessage, "Hardware response envelope is invalid.");
+                        HardwareSnapshot snapshot = response.ReadResult<HardwareSnapshot>();
+                        if (snapshot != null) ApplySnapshot(snapshot);
                     }
-                    catch { try { client?.Dispose(); } catch { } client = null; System.Threading.Thread.Sleep(1000); }
                 }
-                if (client == null || !client.IsConnected)
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { break; }
+                catch (Exception ex) { AppLog.Log("Temp", "hardware pipe rejected/disconnected: " + ex.Message); }
+                finally
                 {
-                    AppLog.Log("Temp", "pipe connect fail (service not running?)");
+                    lock (_gate)
+                    {
+                        if (ReferenceEquals(_activePipe, client)) _activePipe = null;
+                        IsAvailable = false;
+                    }
                     try { client?.Dispose(); } catch { }
-                    return;
                 }
-                AppLog.Log("Temp", "pipe connected");
-                ReadPipeLoop(client);
-            });
+
+                try { await Task.Delay(backoff.NextDelay(), cancellationToken).ConfigureAwait(false); }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { break; }
+            }
         }
 
-        void ReadPipeLoop(NamedPipeClientStream client)
+        private void ApplySnapshot(HardwareSnapshot snapshot)
         {
-            if (client == null) return;
-            try
+            bool createDefaults;
+            lock (_gate)
             {
-                using (var sr = new StreamReader(client, System.Text.Encoding.UTF8))
+                CpuTemperature = snapshot.CpuTemperature;
+                GpuTemperature = snapshot.GpuTemperature;
+                IsAvailable = snapshot.Ready;
+
+                _allPipeMetrics.Clear();
+                foreach (HardwareMetric metric in snapshot.Metrics ?? new List<HardwareMetric>())
                 {
-                    while (client.IsConnected)
+                    _allPipeMetrics.Add(new MetricValue
                     {
-                        string line = sr.ReadLine();
-                        if (line == null) break;
-                        try { ParseAndFill(line); } catch { }
-                    }
+                        DisplayName = metric.Name,
+                        IconKey = metric.Icon,
+                        Value = metric.Value,
+                        Unit = metric.Unit,
+                        ConfigKey = metric.Key,
+                    });
                 }
-            }
-            catch (Exception ex) { AppLog.Log("Temp", "pipe read err: " + ex.Message); }
-            AppLog.Log("Temp", "pipe disconnected");
-        }
 
-        void ParseAndFill(string json)
-        {
-            try
-            {
-                var p = JsonSerializer.Deserialize<TempPayload>(json);
-                if (p == null) return;
-                lock (_lock)
+                AllTempSensors.Clear();
+                AllFanSensors.Clear();
+                AllControlSensors.Clear();
+                foreach (HardwareSensor sensor in snapshot.Sensors ?? new List<HardwareSensor>())
                 {
-                    CpuTemperature = p.cpu;
-                    GpuTemperature = p.gpu;
-                    IsAvailable = p.ready;
-                    // 所有传感器值（helper 推送，OneBox 用用户 EnabledMetrics 过滤）
-                    _allPipeMetrics.Clear();
-                    if (p.allMetrics != null)
-                        foreach (var m in p.allMetrics)
-                            _allPipeMetrics.Add(new MetricValue { DisplayName = m.name, IconKey = m.icon, Value = m.value, Unit = m.unit, ConfigKey = m.key });
-                    AllTempSensors.Clear();
-                    if (p.sensors != null) foreach (var s in p.sensors) AllTempSensors.Add(new SensorInfo { HardwareName = s.hw, SensorName = s.name, HwType = s.hwtype, SensorType = string.IsNullOrEmpty(s.stype) ? "Temperature" : s.stype });
-                    AllFanSensors.Clear();
-                    if (p.fans != null) foreach (var s in p.fans) AllFanSensors.Add(new SensorInfo { HardwareName = s.hw, SensorName = s.name, HwType = s.hwtype, SensorType = string.IsNullOrEmpty(s.stype) ? "Fan" : s.stype });
-                    AllControlSensors.Clear();
-                    if (p.controls != null) foreach (var s in p.controls) AllControlSensors.Add(new SensorInfo { HardwareName = s.hw, SensorName = s.name, HwType = s.hwtype, SensorType = string.IsNullOrEmpty(s.stype) ? "Control" : s.stype });
+                    var info = new SensorInfo
+                    {
+                        HardwareName = sensor.HardwareName,
+                        SensorName = sensor.SensorName,
+                        HwType = sensor.HardwareType,
+                        SensorType = sensor.SensorType,
+                    };
+                    if (IsType(sensor.SensorType, "Fan")) AllFanSensors.Add(info);
+                    else if (IsType(sensor.SensorType, "Control")) AllControlSensors.Add(info);
+                    else AllTempSensors.Add(info);
                 }
+                createDefaults = EnabledMetrics.Count == 0 && string.IsNullOrWhiteSpace(AppPrefs.GetString("Monitor.Metrics", ""));
             }
-            catch { }
+
+            if (createDefaults) CreateDefaultMetrics();
+            UpdateFromSnapshot();
         }
 
-        class TempPayload { public float? cpu { get; set; } public float? gpu { get; set; } public bool ready { get; set; } public List<TempMetric> metrics { get; set; } public List<TempMetric> allMetrics { get; set; } public List<TempSensor> sensors { get; set; } public List<TempSensor> fans { get; set; } public List<TempSensor> controls { get; set; } }
-        class TempMetric { public string name { get; set; } public string icon { get; set; } public float? value { get; set; } public string unit { get; set; } public string key { get; set; } }
-        class TempSensor { public string hw { get; set; } public string name { get; set; } public string hwtype { get; set; } public string stype { get; set; } }
-
-        // admin 专属：枚举 LibreHardwareMonitor 传感器。非管理员不调用 -> 不加载 lib。
-        void DiscoverSensors()
+        private void LoadEnabledMetrics()
         {
-            AllTempSensors.Clear(); AllFanSensors.Clear();
-            var seen = new HashSet<string>();
+            string raw = AppPrefs.GetString("Monitor.Metrics", "");
+            EnabledMetrics = raw.Split(';', StringSplitOptions.RemoveEmptyEntries)
+                .Select(value => value.Trim()).Where(value => value.Length > 0).ToList();
+        }
 
-            void Scan(IHardware hw)
+        private void CreateDefaultMetrics()
+        {
+            List<string> defaults;
+            lock (_gate)
             {
-                foreach (var s in hw.Sensors)
-                {
-                    var key = $"{hw.Name}|{s.Name}|{s.SensorType}";
-                    if (!seen.Add(key)) continue; // 去重：不同层级可能有同名传感器
-
-                    var info = new SensorInfo { HardwareName = hw.Name, SensorName = s.Name, HwType = hw.HardwareType.ToString(), SensorType = s.SensorType.ToString() };
-                    if (s.SensorType == SensorType.Temperature)
-                    {
-                        // 过滤阈值/元数据传感器（值恒为 0 或固定阈值，非实时温度）：内存 SPD 的
-                        // Thermal Sensor Low/High/Critical Limit、Temperature Sensor Resolution，
-                        // 以及 SSD 的 Warning/Critical Temperature。避免污染选择列表与误选。
-                        string sn = (s.Name ?? "").ToLower();
-                        if (sn.Contains("resolution") || sn.Contains("limit") || sn.Contains("warning") || sn.Contains("critical"))
-                            continue;
-                        AllTempSensors.Add(info);
-                        AppLog.Log("Temp", $"  [T] {info} ({s.Value?.ToString("0") ?? "null"})");
-                    }
-                    if (s.SensorType == SensorType.Fan)
-                    {
-                        AllFanSensors.Add(info);
-                        AppLog.Log("Temp", $"  [FAN] {info} val={s.Value?.ToString("0") ?? "null"} RPM");
-                    }
-                    if (s.SensorType == SensorType.Control)
-                    {
-                        AllControlSensors.Add(info);
-                        AppLog.Log("Temp", $"  [CTRL] {info} val={s.Value?.ToString("0") ?? "null"} %");
-                    }
-                }
-                foreach (var sub in hw.SubHardware) Scan(sub);
+                SensorInfo cpu = AllTempSensors.FirstOrDefault(sensor => IsType(sensor.HwType, "Cpu"));
+                SensorInfo gpu = AllTempSensors.FirstOrDefault(sensor => IsGpuType(sensor.HwType));
+                defaults = new List<string>();
+                if (cpu != null) defaults.Add(EncodeConfig(cpu, "CPU"));
+                if (gpu != null) defaults.Add(EncodeConfig(gpu, "GPU"));
+                if (EnabledMetrics.Count != 0 || defaults.Count == 0) return;
+                EnabledMetrics = defaults;
             }
-            if (_computer != null) foreach (var hw in _computer.Hardware) Scan(hw);
-        }
-
-        void LoadEnabledMetrics()
-        {
-            var raw = AppPrefs.GetString("Monitor.Metrics", "");
-            if (string.IsNullOrWhiteSpace(raw))
+            if (!AppPrefs.SetString("Monitor.Metrics", string.Join(";", defaults)))
             {
-                // 首次运行：自动添加 CPU + GPU 温度
-                var cpuSensor = AllTempSensors.FirstOrDefault(s => HwIs(s.HwType, "Cpu"));
-                var gpuSensor = AllTempSensors.FirstOrDefault(s => IsGpuHw(s.HwType));
-                var list = new List<string>();
-                if (cpuSensor != null)
-                    list.Add(EncodeConfig(cpuSensor, "CPU"));
-                if (gpuSensor != null)
-                    list.Add(EncodeConfig(gpuSensor, "GPU"));
-                raw = string.Join(";", list);
-                if (list.Count > 0) AppPrefs.SetString("Monitor.Metrics", raw);
+                lock (_gate) EnabledMetrics.Clear();
             }
-            EnabledMetrics = raw.Split(';', StringSplitOptions.RemoveEmptyEntries).Select(s => s.Trim()).Where(s => s.Length > 0).ToList();
         }
-
-        public static string EncodeConfig(SensorInfo s, string displayName) => EncodeConfig(s, displayName, AutoIconKey(displayName, s));
-
-        public static string EncodeConfig(SensorInfo s, string displayName, string iconKey)
-        {
-            string type = s.SensorType;   // 已是字符串
-            return $"{type}|{s.HardwareName}|{s.SensorName}|{displayName}|{iconKey}";
-        }
-
-        public static SensorInfo DecodeConfig(string key, out string displayName, out string iconKey)
-        {
-            displayName = ""; iconKey = "def";
-            var parts = key.Split('|');
-            if (parts.Length < 3) return null;
-            string st = parts[0];
-            if (string.IsNullOrEmpty(st)) st = "Temperature";
-            displayName = parts.Length >= 4 ? parts[3] : DefaultDisplayName(parts[1], parts[2], st);
-            iconKey = parts.Length >= 5 ? parts[4] : AutoIconKey(displayName, null);
-            return new SensorInfo { SensorType = st, HardwareName = parts[1], SensorName = parts[2] };
-        }
-
-        // 从 displayName + sensorInfo 推断默认图标 key
-        public static string AutoIconKey(string displayName, SensorInfo s)
-        {
-            string dn = (displayName ?? "").ToLower();
-            string hw = (s?.HardwareName ?? "").ToLower();
-            string sn = (s?.SensorName ?? "").ToLower();
-
-            if (s != null)
-            {
-                if (StIs(s.SensorType, "Fan")) return "fan";
-                if (StIs(s.SensorType, "Control")) return "ctrl";
-                if (sn.Contains("hot spot")) return "hot";
-                if (sn.Contains("memory") || sn.Contains("junction")) return "vram";
-                // 硬件名推断
-                if (hw.Contains("memory") || hw.Contains("dram") || hw.Contains("dim") || hw.Contains("ram")) return "dram";
-                if (hw.Contains("ssd") || hw.Contains("hdd") || hw.Contains("nvme") || hw.Contains("disk") || hw.Contains("stor")) return "disk";
-                if (hw.Contains("motherboard") || hw.Contains("super") || hw.Contains("nuvoton") || hw.Contains("ite ")) return "mb";
-            }
-            if (dn.Contains("cpu") && !dn.Contains("fan")) return "cpu";
-            if (dn.Contains("gpu") && !dn.Contains("hot") && !dn.Contains("vram") && !dn.Contains("mem") && !dn.Contains("fan")) return "gpu";
-            if (dn.Contains("hot")) return "hot";
-            if (dn.Contains("vram") || dn.Contains("显存")) return "vram";
-            if (dn.Contains("内存") || dn.Contains("dram") || dn.Contains("ram")) return "dram";
-            if (dn.Contains("硬盘") || dn.Contains("磁盘") || dn.Contains("ssd") || dn.Contains("disk")) return "disk";
-            if (dn.Contains("主板") || dn.Contains("mb")) return "mb";
-            if (dn.Contains("fan") && !dn.Contains("control") && !dn.Contains("%")) return "fan";
-            if (dn.Contains("%") || dn.Contains("control")) return "ctrl";
-            return "def";
-        }
-
-        public static string DefaultDisplayName(string hwName, string sensorName, string st)
-        {
-            bool isCpu = hwName.ToLower().Contains("cpu") || hwName.ToLower().Contains("ryzen");
-            bool isGpu = hwName.ToLower().Contains("nvidia") || hwName.ToLower().Contains("geforce") || hwName.ToLower().Contains("rtx") || hwName.ToLower().Contains("radeon");
-
-            if (StIs(st, "Temperature"))
-            {
-                if (sensorName.Contains("Hot Spot")) return "GPU HotSpot";
-                if (sensorName.Contains("Memory") || sensorName.Contains("Junction")) return "VRAM";
-                if (isCpu) return "CPU";
-                if (isGpu) return "GPU";
-                return "Temp";
-            }
-            if (StIs(st, "Fan"))
-            {
-                if (isCpu) return "CPU Fan";
-                if (isGpu) return "GPU Fan";
-                return sensorName;
-            }
-            if (StIs(st, "Control"))
-            {
-                if (isCpu) return "CPU Fan%";
-                if (isGpu) return "GPU Fan%";
-                return sensorName;
-            }
-            return sensorName;
-        }
-
-        public void SaveEnabledMetrics(List<string> list)
-        {
-            EnabledMetrics = list;
-            AppPrefs.SetString("Monitor.Metrics", string.Join(";", list));
-        }
-
-        // ---- 轮询 ----
 
         public void Update()
         {
-            if (!IsAvailable) return;
-            if (!_hwReady) { UpdateFromPipe(); return; }
-            UpdateAdmin();
+            if (IsAvailable) UpdateFromSnapshot();
         }
 
-        // admin 专属轮询：读 Computer 传感器。独立方法避免非管理员 GUI JIT 加载 lib。
-        void UpdateAdmin()
+        private void UpdateFromSnapshot()
         {
-            try
+            lock (_gate)
             {
-                _computer.Accept(new UpdateVisitor());
                 var values = new List<MetricValue>();
-
-                // 始终读 CPU / GPU 温度（折叠栏固定显示）
-                CpuTemperature = ReadCpuTemp();
-                GpuTemperature = ReadGpuTemp();
-
-                foreach (var key in EnabledMetrics)
+                foreach (string key in EnabledMetrics)
                 {
-                    string displayName, iconKey;
-                    var cfg = DecodeConfig(key, out displayName, out iconKey);
-                    if (cfg == null) continue;
+                    SensorInfo config = DecodeConfig(key, out string displayName, out string iconKey);
+                    if (config == null) continue;
 
-                    var sensor = FindSensor(cfg);
-                    float? val = sensor != null ? ReadSensorValue(sensor) : null;
-
-                    if (val.HasValue)
+                    MetricValue metric = FindSnapshotMetric(config, key);
+                    if (metric?.Value != null)
                     {
-                        string unit = StIs(cfg.SensorType, "Temperature") ? "°C" :
-                                      StIs(cfg.SensorType, "Control") ? "%" : "RPM";
-                        var mv = new MetricValue { DisplayName = displayName, IconKey = iconKey, Value = val, Unit = unit, ConfigKey = key };
-                        lock (_lock) { _lastMetrics[key] = mv; }
-                        values.Add(mv);
-                    }
-                    else
-                    {
-                        // 读数失败：用上次值兜底供 UI 显示，但标记 Cached 让 PerfHistory 跳过（不污染历史图表）
-                        lock (_lock) { if (_lastMetrics.TryGetValue(key, out var last)) values.Add(new MetricValue { DisplayName = last.DisplayName, IconKey = last.IconKey, Value = last.Value, Unit = last.Unit, ConfigKey = last.ConfigKey, Cached = true }); }
-                    }
-                }
-
-                lock (_lock) { ActiveMetrics.Clear(); ActiveMetrics.AddRange(values); }
-            }
-            catch { }
-        }
-
-        // 非管理员：用用户 EnabledMetrics 过滤服务 helper 推送的所有传感器值
-        void UpdateFromPipe()
-        {
-            var values = new List<MetricValue>();
-            List<MetricValue> all;
-            lock (_lock) all = new List<MetricValue>(_allPipeMetrics);
-            foreach (var key in EnabledMetrics)
-            {
-                string displayName, iconKey;
-                var cfg = DecodeConfig(key, out displayName, out iconKey);
-                if (cfg == null) continue;
-                var m = all.FirstOrDefault(x => x.ConfigKey == key);
-                if (m == null)
-                {
-                    // fallback：按 SensorName+SensorType 匹配（DDR5 名字漂移），仅当唯一避免串台
-                    var nm = all.Where(x => { var p = x.ConfigKey.Split('|'); return p.Length >= 3 && p[2] == cfg.SensorName && p[0] == cfg.SensorType; }).ToList();
-                    if (nm.Count == 1) m = nm[0];
-                }
-                if (m != null && m.Value.HasValue)
-                {
-                    var mv = new MetricValue { DisplayName = displayName, IconKey = iconKey, Value = m.Value, Unit = m.Unit, ConfigKey = key };
-                    lock (_lock) { _lastMetrics[key] = mv; }
-                    values.Add(mv);
-                }
-                else { lock (_lock) { if (_lastMetrics.TryGetValue(key, out var last)) values.Add(new MetricValue { DisplayName = last.DisplayName, IconKey = last.IconKey, Value = last.Value, Unit = last.Unit, ConfigKey = last.ConfigKey, Cached = true }); } }
-            }
-            lock (_lock) { ActiveMetrics.Clear(); ActiveMetrics.AddRange(values); }
-        }
-
-        // 设置中预览传感器实时值（读取缓存值，不触发硬件刷新）
-        public float? ReadSensorPreview(SensorInfo cfg)
-        {
-            if (_hwReady) return ReadSensorPreviewAdmin(cfg);
-            // 非管理员：从管道推送的所有传感器值找匹配
-            if (cfg == null) return null;
-            try
-            {
-                lock (_lock)
-                {
-                    foreach (var m in _allPipeMetrics)
-                    {
-                        var p = m.ConfigKey.Split('|');
-                        if (p.Length >= 3 && p[0] == cfg.SensorType && p[1] == cfg.HardwareName && p[2] == cfg.SensorName) return m.Value;
-                    }
-                }
-            }
-            catch { }
-            return null;
-        }
-
-        // admin 专属预览。独立方法避免非管理员 JIT 加载 lib。
-        float? ReadSensorPreviewAdmin(SensorInfo cfg)
-        {
-            try
-            {
-                var sensor = FindSensor(cfg) ?? cfg;
-                return ReadSensorValue(sensor);
-            }
-            catch { return null; }
-        }
-
-        // ---- 以下为 admin 专属（引用 LibreHardwareMonitorLib 类型），非管理员 GUI 不调用 -> 不加载 lib ----
-
-        float? ReadCpuTemp()
-        {
-            var sensor = AllTempSensors.FirstOrDefault(s => HwIs(s.HwType, "Cpu"));
-            return sensor != null ? ReadSensorValue(sensor) : null;
-        }
-
-        float? ReadGpuTemp()
-        {
-            var sensor = AllTempSensors.FirstOrDefault(s => IsGpuHw(s.HwType));
-            if (sensor == null) return null;
-            // 优先 GPU Core，排除 Hot Spot
-            var coreSensor = AllTempSensors.FirstOrDefault(s =>
-                s.HardwareName == sensor.HardwareName && s.SensorName.Contains("Core") && !s.SensorName.Contains("Hot"));
-            return ReadSensorValue(coreSensor ?? sensor);
-        }
-
-        // 读取所有温度/风扇/控制传感器的 MetricValue（admin 模式，供 helper 推送给普通 OneBox 过滤）
-        public List<MetricValue> ReadAllMetrics()
-        {
-            var list = new List<MetricValue>();
-            if (!_hwReady) return list;
-            try
-            {
-                void Scan(IList<IHardware> hws)
-                {
-                    foreach (var hw in hws)
-                    {
-                        foreach (var s in hw.Sensors)
+                        var current = new MetricValue
                         {
-                            if (s.SensorType != SensorType.Temperature && s.SensorType != SensorType.Fan && s.SensorType != SensorType.Control) continue;
-                            if (!s.Value.HasValue) continue;
-                            float v = s.Value.Value;
-                            if (s.SensorType == SensorType.Temperature && (v <= 0 || v > 150)) continue;
-                            var info = new SensorInfo { HardwareName = hw.Name, SensorName = s.Name, HwType = hw.HardwareType.ToString(), SensorType = s.SensorType.ToString() };
-                            string dn = DefaultDisplayName(hw.Name, s.Name, info.SensorType);
-                            string ik = AutoIconKey(dn, info);
-                            string unit = s.SensorType == SensorType.Temperature ? "°C" : s.SensorType == SensorType.Control ? "%" : "RPM";
-                            list.Add(new MetricValue { DisplayName = dn, IconKey = ik, Value = v, Unit = unit, ConfigKey = EncodeConfig(info, dn, ik) });
-                        }
-                        if (hw.SubHardware != null && hw.SubHardware.Length > 0) Scan(hw.SubHardware);
+                            DisplayName = displayName,
+                            IconKey = iconKey,
+                            Value = metric.Value,
+                            Unit = metric.Unit,
+                            ConfigKey = key,
+                        };
+                        _lastMetrics[key] = current;
+                        values.Add(current);
+                    }
+                    else if (_lastMetrics.TryGetValue(key, out MetricValue last))
+                    {
+                        values.Add(new MetricValue
+                        {
+                            DisplayName = last.DisplayName,
+                            IconKey = last.IconKey,
+                            Value = last.Value,
+                            Unit = last.Unit,
+                            ConfigKey = last.ConfigKey,
+                            Cached = true,
+                        });
                     }
                 }
-                Scan(_computer.Hardware);
+                ActiveMetrics.Clear();
+                ActiveMetrics.AddRange(values);
             }
-            catch { }
-            return list;
         }
 
-        SensorInfo FindSensor(SensorInfo cfg)
+        private MetricValue FindSnapshotMetric(SensorInfo config, string exactKey)
         {
-            List<SensorInfo> pool = StIs(cfg.SensorType, "Fan") ? AllFanSensors
-                                  : StIs(cfg.SensorType, "Control") ? AllControlSensors
-                                  : AllTempSensors;
-            if (pool.Count == 0) return null;
-
-            // L1: 精确匹配 HardwareName + SensorName（CPU/GPU/SSD 名字稳定，走这条）
-            var exact = pool.FirstOrDefault(s => s.HardwareName == cfg.HardwareName && s.SensorName == cfg.SensorName);
+            MetricValue exact = _allPipeMetrics.FirstOrDefault(metric => metric.ConfigKey == exactKey);
             if (exact != null) return exact;
-
-            // L2: DDR5 内存走 SMBus 解析 SPD 型号字符串，硬件名带乱码且每次启动漂移，L1 必然失配。
-            //     若该 SensorName 在当前 pool 里唯一，则忽略 HardwareName 按 SensorName 匹配；
-            //     SensorName 不唯一（如多盘 Temperature #1）则跳过，避免串台。
-            var nameMatches = pool.Where(s => s.SensorName == cfg.SensorName).ToList();
-            if (nameMatches.Count == 1)
-            {
-                LogRemap(cfg, nameMatches[0]);
-                return nameMatches[0];
-            }
-
-            // L3: 内存 DIMM 编号也会漂移（#1<->#3，且有时只枚举到一条），兜底取任意一条内存温度。
-            string sn = (cfg.SensorName ?? "").ToLower();
-            if (sn.Contains("dimm") || sn.Contains("memory"))
-            {
-                var anyMem = pool.FirstOrDefault(s => HwIs(s.HwType, "Memory"));
-                if (anyMem != null)
-                {
-                    LogRemap(cfg, anyMem);
-                    return anyMem;
-                }
-            }
-
-            return null;
+            List<MetricValue> matches = _allPipeMetrics.Where(metric => MetricMatches(metric, config)).ToList();
+            return matches.Count == 1 ? matches[0] : null;
         }
 
-        // 记录传感器重映射（每条配置只记一次，避免每秒轮询刷日志）
-        void LogRemap(SensorInfo cfg, SensorInfo actual)
+        private static bool MetricMatches(MetricValue metric, SensorInfo config)
         {
-            lock (_lock)
+            string[] parts = (metric.ConfigKey ?? "").Split('|');
+            return parts.Length >= 3
+                && string.Equals(parts[0], config.SensorType, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(parts[2], config.SensorName, StringComparison.Ordinal)
+                && string.Equals(parts[1], config.HardwareName, StringComparison.Ordinal);
+        }
+
+        public float? ReadSensorPreview(SensorInfo config)
+        {
+            if (config == null) return null;
+            lock (_gate)
             {
-                if (_loggedRemaps.Add(cfg.SensorName + "|" + cfg.HardwareName))
-                    AppLog.Log("Temp", $"sensor remap: '{cfg.HardwareName} | {cfg.SensorName}' -> '{actual.HardwareName} | {actual.SensorName}'");
+                List<MetricValue> matches = _allPipeMetrics.Where(metric => MetricMatches(metric, config)).ToList();
+                return matches.Count == 1 ? matches[0].Value : null;
             }
         }
 
-        float? ReadSensorValue(SensorInfo cfg)
+        public bool SaveEnabledMetrics(List<string> list)
         {
-            if (_computer == null) return null;
-            return ReadSensorValueIn(_computer.Hardware, cfg);
+            var next = list?.ToList() ?? new List<string>();
+            if (!AppPrefs.SetString("Monitor.Metrics", string.Join(";", next))) return false;
+            lock (_gate) EnabledMetrics = next;
+            UpdateFromSnapshot();
+            return true;
         }
 
-        float? ReadSensorValueIn(IList<IHardware> hardwareList, SensorInfo cfg)
+        public static string EncodeConfig(SensorInfo sensor, string displayName) =>
+            EncodeConfig(sensor, displayName, AutoIconKey(displayName, sensor));
+
+        public static string EncodeConfig(SensorInfo sensor, string displayName, string iconKey) =>
+            $"{sensor.SensorType}|{sensor.HardwareName}|{sensor.SensorName}|{displayName}|{iconKey}";
+
+        public static SensorInfo DecodeConfig(string key, out string displayName, out string iconKey)
         {
-            foreach (var hw in hardwareList)
-            {
-                if (hw.Name == cfg.HardwareName)
-                {
-                    foreach (var s in hw.Sensors)
-                    {
-                        if (s.Name == cfg.SensorName && string.Equals(s.SensorType.ToString(), cfg.SensorType, StringComparison.OrdinalIgnoreCase))
-                        {
-                            float v = s.Value ?? float.NaN;
-                            if (float.IsNaN(v)) return null;
-                            if (StIs(cfg.SensorType, "Temperature") && (v <= 0 || v > 150)) return null;
-                            if (StIs(cfg.SensorType, "Control") && (v < 0 || v > 100)) return null;
-                            if (StIs(cfg.SensorType, "Fan") && (v < 0 || v > 10000)) return null;
-                            return v;
-                        }
-                    }
-                }
-                // 也搜子硬件
-                if (hw.SubHardware != null && hw.SubHardware.Length > 0)
-                {
-                    var subResult = ReadSensorValueIn(hw.SubHardware, cfg);
-                    if (subResult.HasValue) return subResult;
-                }
-            }
-            return null;
+            displayName = "";
+            iconKey = "def";
+            string[] parts = (key ?? "").Split('|');
+            if (parts.Length < 3) return null;
+            string type = string.IsNullOrEmpty(parts[0]) ? "Temperature" : parts[0];
+            displayName = parts.Length >= 4 ? parts[3] : DefaultDisplayName(parts[1], parts[2], type);
+            iconKey = parts.Length >= 5 ? parts[4] : AutoIconKey(displayName, null);
+            return new SensorInfo { SensorType = type, HardwareName = parts[1], SensorName = parts[2] };
         }
 
-        public static string AutoIcon(SensorInfo cfg)
+        public static string AutoIconKey(string displayName, SensorInfo sensor)
         {
-            bool isCpu = cfg.HardwareName.ToLower().Contains("cpu") || cfg.HardwareName.ToLower().Contains("ryzen") || cfg.HardwareName.ToLower().Contains("intel");
-            bool isGpu = cfg.HardwareName.ToLower().Contains("nvidia") || cfg.HardwareName.ToLower().Contains("amd radeon") || cfg.HardwareName.ToLower().Contains("geforce") || cfg.HardwareName.ToLower().Contains("rtx");
-            string name = cfg.SensorName.ToLower();
-
-            if (StIs(cfg.SensorType, "Temperature"))
+            string name = (displayName ?? "").ToLowerInvariant();
+            string hardware = (sensor?.HardwareName ?? "").ToLowerInvariant();
+            string sensorName = (sensor?.SensorName ?? "").ToLowerInvariant();
+            if (sensor != null)
             {
-                if (name.Contains("hot spot")) return "\U0001F525";
-                if (name.Contains("memory") || name.Contains("junction")) return "\U0001F4BE";
-                if (isCpu) return "\U0001F321";
-                if (isGpu) return "\U0001F3AE";
-                return "\U0001F321";
+                if (IsType(sensor.SensorType, "Fan")) return "fan";
+                if (IsType(sensor.SensorType, "Control")) return "ctrl";
+                if (sensorName.Contains("hot spot")) return "hot";
+                if (sensorName.Contains("memory") || sensorName.Contains("junction")) return "vram";
+                if (hardware.Contains("memory") || hardware.Contains("dram") || hardware.Contains("dimm") || hardware.Contains("ram")) return "dram";
+                if (hardware.Contains("ssd") || hardware.Contains("hdd") || hardware.Contains("nvme") || hardware.Contains("disk")) return "disk";
+                if (hardware.Contains("motherboard") || hardware.Contains("nuvoton") || hardware.Contains("ite ")) return "mb";
             }
-            // Fan
-            if (isCpu) return "\U0001F300";
-            if (isGpu) return "\U0001F32A";
-            return "\U0001F300";
+            if (name.Contains("cpu") && !name.Contains("fan")) return "cpu";
+            if (name.Contains("gpu") && !name.Contains("hot") && !name.Contains("vram") && !name.Contains("mem") && !name.Contains("fan")) return "gpu";
+            if (name.Contains("hot")) return "hot";
+            if (name.Contains("vram") || name.Contains("显存")) return "vram";
+            if (name.Contains("内存") || name.Contains("dram") || name.Contains("ram")) return "dram";
+            if (name.Contains("硬盘") || name.Contains("磁盘") || name.Contains("ssd") || name.Contains("disk")) return "disk";
+            if (name.Contains("主板") || name.Contains("mb")) return "mb";
+            if (name.Contains("fan") && !name.Contains("control") && !name.Contains("%")) return "fan";
+            if (name.Contains("%") || name.Contains("control")) return "ctrl";
+            return "def";
+        }
+
+        public static string DefaultDisplayName(string hardwareName, string sensorName, string sensorType)
+        {
+            string hardware = (hardwareName ?? "").ToLowerInvariant();
+            string name = sensorName ?? "";
+            bool cpu = hardware.Contains("cpu") || hardware.Contains("ryzen");
+            bool gpu = hardware.Contains("nvidia") || hardware.Contains("geforce") || hardware.Contains("rtx") || hardware.Contains("radeon");
+            if (IsType(sensorType, "Temperature"))
+            {
+                if (name.Contains("Hot Spot", StringComparison.OrdinalIgnoreCase)) return "GPU HotSpot";
+                if (name.Contains("Memory", StringComparison.OrdinalIgnoreCase) || name.Contains("Junction", StringComparison.OrdinalIgnoreCase)) return "VRAM";
+                if (cpu) return "CPU";
+                if (gpu) return "GPU";
+                return "Temp";
+            }
+            if (IsType(sensorType, "Fan")) return cpu ? "CPU Fan" : gpu ? "GPU Fan" : name;
+            if (IsType(sensorType, "Control")) return cpu ? "CPU Fan%" : gpu ? "GPU Fan%" : name;
+            return name;
         }
 
         public void Stop()
         {
-            if (_hwReady) StopAdmin();   // 非管理员 _hwReady=false，不调用 StopAdmin -> 不加载 lib
-            _started = false; _hwReady = false; IsAvailable = false;
-            AllTempSensors.Clear(); AllFanSensors.Clear(); AllControlSensors.Clear();
-            lock (_lock) { ActiveMetrics.Clear(); _lastMetrics.Clear(); _loggedRemaps.Clear(); }
-        }
-
-        // admin 专属：关闭 Computer。独立方法避免非管理员 GUI JIT 加载 lib。
-        void StopAdmin()
-        {
-            try { _computer?.Close(); } catch { }
-            _computer = null;
+            CancellationTokenSource cancellation;
+            Task task;
+            lock (_gate)
+            {
+                if (!_started) return;
+                _started = false;
+                cancellation = _pipeCancellation;
+                task = _pipeTask;
+                _pipeCancellation = null;
+                _pipeTask = null;
+                try { _activePipe?.Dispose(); } catch { }
+                _activePipe = null;
+            }
+            try { cancellation?.Cancel(); } catch { }
+            try { task?.Wait(2000); } catch { }
+            cancellation?.Dispose();
+            lock (_gate)
+            {
+                IsAvailable = false;
+                CpuTemperature = null;
+                GpuTemperature = null;
+                AllTempSensors.Clear();
+                AllFanSensors.Clear();
+                AllControlSensors.Clear();
+                ActiveMetrics.Clear();
+                _allPipeMetrics.Clear();
+                _lastMetrics.Clear();
+            }
         }
 
         public void Dispose() => Stop();
-
-        private class UpdateVisitor : IVisitor
-        {
-            public void VisitComputer(IComputer c) { c.Traverse(this); }
-            public void VisitHardware(IHardware h) { h.Update(); foreach (var s in h.SubHardware) s.Accept(this); }
-            public void VisitSensor(ISensor _) { }
-            public void VisitParameter(IParameter _) { }
-        }
     }
 }

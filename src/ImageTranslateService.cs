@@ -1,126 +1,136 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
-using System.Net;
-using System.Text;
+using System.Net.Http;
+using System.Net.Http.Headers;
 using System.Text.Json;
-using System.Windows;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace PowerAudioManager
 {
-    // 百度图片翻译 API。OCR 识别图中文字，返回 paste=1 整图贴合图（原文擦除、译文覆叠）
-    // 及完整译文。复用 TranslateService 的 AppId/Key，已验证 Bearer token 同样有效。
+    // 百度图片翻译 API。OCR 识别图中文字，返回 paste=1 整图贴合图及完整译文。
     public static class ImageTranslateService
     {
         const string Endpoint = "https://fanyi-api.baidu.com/ait/api/picture/translate";
 
         public class ImageResult
         {
-            public byte[] PasteImage;      // 整图贴合 PNG (paste=1)，失败为 null
-            public string Dst;              // full translated text
-            public string Src;              // full source OCR text
-            public string Error;            // non-null on failure
+            public byte[] PasteImage;
+            public string Dst;
+            public string Src;
+            public string Error;
         }
 
-        // Translate an in-memory image. `imageBytes` should be PNG/JPG (Baidu accepts both;
-        // we send as-is). from/to reuse the text translator's language settings.
         public static ImageResult Translate(byte[] imageBytes, string from, string to)
         {
-            var r = new ImageResult();
-            if (imageBytes == null || imageBytes.Length == 0) { r.Error = "无图片"; return r; }
-            if (imageBytes.Length > 5 * 1024 * 1024) { r.Error = "图片超过 5MB 上限"; return r; }
+            return TranslateAsync(imageBytes, from, to, CancellationToken.None).GetAwaiter().GetResult();
+        }
+
+        public static async Task<ImageResult> TranslateAsync(
+            byte[] imageBytes, string from, string to, CancellationToken cancellationToken)
+        {
+            string appId = TranslateService.GetAppId();
+            string key = TranslateService.GetKey();
+            string credentialError = TranslateService.GetCredentialError();
+            if (!string.IsNullOrEmpty(credentialError)) return new ImageResult { Error = credentialError };
+            return await TranslateAsync(
+                imageBytes, from, to, appId, key, OneBoxHttp.Client, cancellationToken).ConfigureAwait(false);
+        }
+
+        // 可注入 HttpClient 的无联网测试入口；AppId 可选，API Key 必填。
+        public static async Task<ImageResult> TranslateAsync(
+            byte[] imageBytes,
+            string from,
+            string to,
+            string appId,
+            string apiKey,
+            HttpClient httpClient,
+            CancellationToken cancellationToken)
+        {
+            var result = new ImageResult();
+            if (imageBytes == null || imageBytes.Length == 0) return new ImageResult { Error = "无图片" };
+            if (imageBytes.Length > 5 * 1024 * 1024) return new ImageResult { Error = "图片超过 5MB 上限" };
+            if (string.IsNullOrEmpty(apiKey))
+                return new ImageResult { Error = "未设置 API Key（点击翻译窗口的设置按钮配置）" };
+
             try
             {
-                string appId = TranslateService.GetAppId();
-                string key = TranslateService.GetKey();
-                if (string.IsNullOrEmpty(appId) || string.IsNullOrEmpty(key))
-                {
-                    r.Error = "未配置百度翻译 AppId/Key，请先在设置→翻译里填写。";
-                    return r;
-                }
-
-                ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12 | ServicePointManager.SecurityProtocol;
-                var req = (HttpWebRequest)WebRequest.Create(Endpoint);
-                req.Method = "POST";
-                req.ContentType = "application/json";
-                req.Headers["Authorization"] = "Bearer " + key;
-                req.Timeout = 30000; // 图片 OCR 比文本翻译慢
-                req.ReadWriteTimeout = 30000;
-
                 string fromArg = string.IsNullOrEmpty(from) ? "auto" : from;
                 string toArg = string.IsNullOrEmpty(to) ? "zh" : to;
                 var payload = new Dictionary<string, object>
                 {
                     ["from"] = fromArg,
                     ["to"] = toArg,
-                    ["appid"] = appId,
                     ["content"] = Convert.ToBase64String(imageBytes),
-                    ["paste"] = 1,          // 整图贴合
+                    ["paste"] = 1,
                     ["need_intervene"] = 0,
-                    ["view_type"] = 0,       // 通用擦除
+                    ["view_type"] = 0,
                     ["model_type"] = "nmt"
                 };
-                var body = JsonSerializer.SerializeToUtf8Bytes(payload);
-                req.ContentLength = body.Length;
-                using (var s = req.GetRequestStream()) s.Write(body, 0, body.Length);
+                if (!string.IsNullOrEmpty(appId)) payload["appid"] = appId;
 
-                string json;
-                using (var resp = (HttpWebResponse)req.GetResponse())
-                using (var rs = resp.GetResponseStream())
-                using (var rd = new StreamReader(rs, Encoding.UTF8))
-                    json = rd.ReadToEnd();
+                using var request = new HttpRequestMessage(HttpMethod.Post, Endpoint);
+                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+                request.Headers.UserAgent.ParseAdd("OneBox/1.7.2");
+                request.Headers.Accept.ParseAdd("application/json");
+                request.Content = new ByteArrayContent(JsonSerializer.SerializeToUtf8Bytes(payload));
+                request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
+                string json = await OneBoxHttp.SendForTextAsync(
+                    httpClient, request, TimeSpan.FromSeconds(30), cancellationToken).ConfigureAwait(false);
 
-                using (var doc = JsonDocument.Parse(json))
-                {
-                    var root = doc.RootElement;
-                    if (root.ValueKind == JsonValueKind.Object && root.TryGetProperty("error_code", out var ec) &&
-                        ec.ValueKind == JsonValueKind.String)
-                    {
-                        string code = ec.GetString();
-                        if (!string.IsNullOrEmpty(code) && code != "0" && code != "52000")
-                        {
-                            string msg = root.TryGetProperty("error_msg", out var em) && em.ValueKind == JsonValueKind.String ? em.GetString() : "";
-                            r.Error = $"百度: {code} {msg}";
-                            return r;
-                        }
-                    }
-                    r.Src = root.TryGetProperty("src", out var src) && src.ValueKind == JsonValueKind.String ? src.GetString() : "";
-                    r.Dst = root.TryGetProperty("dst", out var dst) && dst.ValueKind == JsonValueKind.String ? dst.GetString() : "";
-                    if (root.TryGetProperty("paste_img", out var pi) && pi.ValueKind == JsonValueKind.String)
-                    {
-                        string b64 = pi.GetString();
-                        if (!string.IsNullOrEmpty(b64))
-                        {
-                            try { r.PasteImage = Convert.FromBase64String(b64); } catch { }
-                        }
-                    }
-                }
-                if (r.PasteImage == null && string.IsNullOrEmpty(r.Dst))
-                    r.Error = "未返回翻译结果（图片可能无文字或识别失败）";
-                return r;
-            }
-            catch (WebException webEx)
-            {
                 try
                 {
-                    using (var resp = webEx.Response as HttpWebResponse)
+                    using var document = JsonDocument.Parse(json);
+                    JsonElement root = document.RootElement;
+                    string errorCode = ReadString(root, "error_code");
+                    if (!string.IsNullOrEmpty(errorCode) && errorCode != "0" && errorCode != "52000")
                     {
-                        if (resp != null)
+                        result.Error = $"百度: {errorCode} {ReadString(root, "error_msg")}";
+                        return result;
+                    }
+
+                    result.Src = ReadString(root, "src") ?? "";
+                    result.Dst = ReadString(root, "dst") ?? "";
+                    string base64Image = ReadString(root, "paste_img");
+                    if (!string.IsNullOrEmpty(base64Image))
+                    {
+                        try { result.PasteImage = Convert.FromBase64String(base64Image); }
+                        catch (FormatException ex)
                         {
-                            using (var rd = new StreamReader(resp.GetResponseStream(), Encoding.UTF8))
-                            {
-                                var b = rd.ReadToEnd();
-                                r.Error = $"HTTP {(int)resp.StatusCode}: {(b.Length > 200 ? b.Substring(0, 200) : b)}";
-                                return r;
-                            }
+                            result.Error = "服务返回的贴合图片格式无效：" + ex.Message;
+                            return result;
                         }
                     }
                 }
-                catch { }
-                r.Error = $"网络错误: {webEx.Message}";
-                return r;
+                catch (JsonException ex)
+                {
+                    result.Error = "服务响应格式无效：" + ex.Message;
+                    return result;
+                }
+
+                if (result.PasteImage == null && string.IsNullOrEmpty(result.Dst))
+                    result.Error = "未返回翻译结果（图片可能无文字或识别失败）";
+                return result;
             }
-            catch (Exception ex) { r.Error = ex.Message; return r; }
+            catch (OneBoxHttpException ex)
+            {
+                result.Error = ex.Message;
+                return result;
+            }
+            catch (Exception ex)
+            {
+                AppLog.Log("ImageTranslateService", ex);
+                result.Error = "图片翻译失败：" + ex.Message;
+                return result;
+            }
+        }
+
+        static string ReadString(JsonElement root, string propertyName)
+        {
+            if (root.ValueKind != JsonValueKind.Object || !root.TryGetProperty(propertyName, out var value)) return null;
+            if (value.ValueKind == JsonValueKind.String) return value.GetString();
+            if (value.ValueKind == JsonValueKind.Number) return value.ToString();
+            return null;
         }
     }
 }

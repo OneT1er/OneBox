@@ -1,8 +1,8 @@
+using System;
 using System.Collections.Generic;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
-using MaterialDesignThemes.Wpf;
 
 namespace PowerAudioManager
 {
@@ -11,13 +11,13 @@ namespace PowerAudioManager
     internal static class UiKit
     {
         // 共享调色板：按 Material 层级排列，越底层表面越浅，叠层卡片有视觉深度。
-        internal static readonly Color AccentColor = Color.FromRgb(142, 140, 216);   // 紫影 #8E8CD8
-        internal static readonly Color BgColor = Color.FromRgb(28, 26, 40);          // 深底
-        internal static readonly Color CardColor = Color.FromRgb(42, 39, 60);        // 卡片
-        internal static readonly Color TextPrimary = Colors.White;
-        internal static readonly Color TextSecondary = Color.FromRgb(190, 188, 220); // 次要文字
-        internal static readonly Color ActiveBg = Color.FromRgb(110, 105, 200);      // 激活态
-        internal static readonly Color BorderColor = Color.FromRgb(80, 75, 120);     // 边框
+        internal static readonly Color AccentColor = ThemeTokens.Accent;
+        internal static readonly Color BgColor = ThemeTokens.Background;
+        internal static readonly Color CardColor = ThemeTokens.Card;
+        internal static readonly Color TextPrimary = ThemeTokens.PrimaryText;
+        internal static readonly Color TextSecondary = ThemeTokens.SecondaryText;
+        internal static readonly Color ActiveBg = ThemeTokens.Active;
+        internal static readonly Color BorderColor = ThemeTokens.Border;
 
         // 按颜色缓存冻结画笔：温度行每秒刷新频繁，复用冻结 SolidColorBrush 避免每秒 new 一批 Freezable。
         static readonly Dictionary<Color, SolidColorBrush> _frozenBrushes = new Dictionary<Color, SolidColorBrush>();
@@ -39,54 +39,52 @@ namespace PowerAudioManager
             };
         }
 
-        // 给按钮打上 MaterialDesign 扁平样式。通过资源键查找，缺失则回退无样式，避免主题异常时按钮变空。
+        // Apply the shared local button style.  A local style keeps every window
+        // consistent even when the optional visual package is absent.
         internal static void ApplyFlatStyle(Button btn)
         {
-            var style = Application.Current.TryFindResource("MaterialDesignFlatButton") as Style;
+            var style = Application.Current?.TryFindResource(ThemeTokens.FlatButtonKey) as Style;
             if (style != null) btn.Style = style;
+            else
+            {
+                btn.Background = Brushes.Transparent;
+                btn.BorderBrush = Brushes.Transparent;
+            }
         }
 
-        // 紧凑图标按钮（标题栏、静音、启动栏）。MaterialDesign 默认 MinWidth=88/MinHeight=36/大 Padding
-        // 会撑大按钮导致图标"消失"。本地值覆盖样式设置项，强制 MinWidth/MinHeight=0, Padding=0。
+        // Compact icon button (title bar, mute, launcher).  Keep the hit target
+        // at least 28px while the vector itself remains on the 16px grid.
         internal static void ApplyIconButtonStyle(Button btn)
         {
             ApplyFlatStyle(btn);
-            btn.MinWidth = 0;
-            btn.MinHeight = 0;
+            btn.MinWidth = Math.Max(btn.MinWidth, 28);
+            btn.MinHeight = Math.Max(btn.MinHeight, 28);
             btn.Padding = new Thickness(0);
             btn.HorizontalContentAlignment = HorizontalAlignment.Center;
             btn.VerticalContentAlignment = VerticalAlignment.Center;
         }
 
-        // 标题栏锁定按钮图标。矢量图标不受 MaterialDesign 样式覆盖 FontFamily 影响，emoji 字体会被替换导致消失。
-        internal static PackIcon PinIcon(bool locked)
-        {
-            return new PackIcon { Kind = locked ? PackIconKind.Lock : PackIconKind.LockOpen, Width = 16, Height = 16 };
-        }
+        // All app icons come from the compiled vector catalog.
+        internal static FrameworkElement PinIcon(bool locked, Brush brush = null)
+            => IconCatalog.CreateElement(locked ? IconKey.Lock : IconKey.Unlock, 16, brush);
 
-        internal static PackIcon MuteIcon(bool muted)
-        {
-            return new PackIcon { Kind = muted ? PackIconKind.VolumeMute : PackIconKind.VolumeHigh, Width = 16, Height = 16 };
-        }
+        internal static FrameworkElement MuteIcon(bool muted, Brush brush = null)
+            => IconCatalog.CreateElement(muted ? IconKey.Mute : IconKey.Audio, 16, brush);
 
         // 彩色矢量图标（设置对话框与悬浮窗指标行复用）
-        internal static Image MetricIcon(string iconKey, Color c)
+        internal static FrameworkElement MetricIcon(string iconKey, Color c)
         {
-            var brush = new SolidColorBrush(c);
-            Geometry geo = iconKey switch
+            IconKey key = iconKey switch
             {
-                "cpu"  => Geometry.Parse("M5,1 h6 a1,1 0 0,1 1,1 v1 h1 v2 h-1 v1 h1 v2 h-1 v1 a1,1 0 0,1 -1,1 h-6 a1,1 0 0,1 -1,-1 v-1 h-1 v-2 h1 v-1 h-1 v-2 h1 v-1 a1,1 0 0,1 1,-1 z M6,4 h2 v2 h2 v-2 h-2 z"),
-                "gpu"  => Geometry.Parse("M3,2 h10 v6 h-2.5 v1 h-1 v-1 h-1.5 v1 h-1 v-1 h-1.5 z M5,4 h1.5 v2 h-1.5 z M7.5,4 h1.5 v2 h-1.5 z M10,4 h1.5 v2 h-1.5 z"),
-                "hot"  => Geometry.Parse("M8,0 l3,3 l-1.5,1.5 l1.5,2.5 l-1.5,2 l-2,-2.5 l-2,1.5 l1,-3 l-2.5,-0.8 l2.5,-1.5 z M8,5 a0.8,0.8 0 1,0 0,1.6 a0.8,0.8 0 1,0 0,-1.6"),
-                "vram" => Geometry.Parse("M2,4 h12 v5 a1,1 0 0,1 -1,1 h-10 a1,1 0 0,1 -1,-1 z M3,7 h1.5 v-1.5 h1 v1.5 h2 v-1.5 h1 v1.5 h1.5"),
-                "dram" => Geometry.Parse("M2,3 h12 v7 a1,1 0 0,1 -1,1 h-10 a1,1 0 0,1 -1,-1 z M3,5 h2 v-1 h1 v1 h3 v-1 h1 v1 h2"),
-                "disk" => Geometry.Parse("M5,2 a4,4 0 1,0 0,8 a4,4 0 1,0 0,-8 z M7,6 a1,1 0 1,0 0,2 a1,1 0 1,0 0,-2 z M5,5 h3 a2,2 0 0,1 0,1 h-3 z"),
-                "fan"  => Geometry.Parse("M8,2 a3,3 0 1,0 0,4 l0,-2 a1.5,1.5 0 1,1 0,-2 z M8,6 a0.8,0.8 0 1,0 0,1.6 a0.8,0.8 0 1,0 0,-1.6"),
-                "ctrl" => Geometry.Parse("M3,6 h10 v1 h-10 z M7,2 h2 v8 h-2 z M10,4 h3 v1.5 h-3 z"),
-                "mb"   => Geometry.Parse("M2,2 h12 v8 h-12 z M4,4 h3 v2 h-3 z M9,4 h3 v2 h-3 z M4,8 h2 v1 h-2 z M7,8 h2 v1 h-2 z"),
-                _      => Geometry.Parse("M8,3 a4,4 0 1,0 0,6 a4,4 0 1,0 0,-6"),
+                "cpu" => IconKey.Cpu, "gpu" => IconKey.Gpu, "hot" => IconKey.Hot,
+                "vram" => IconKey.Vram, "dram" => IconKey.Dram, "disk" => IconKey.Disk,
+                "fan" => IconKey.Fan, "ctrl" => IconKey.Control, "mb" => IconKey.Motherboard,
+                _ => IconKey.DefaultMetric
             };
-            return new Image { Source = new DrawingImage(new GeometryDrawing(brush, null, geo)), Width = 12, Height = 12, Stretch = Stretch.Uniform, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 1, 0, 0) };
+            var view = IconCatalog.CreateElement(key, 14, new SolidColorBrush(c));
+            view.VerticalAlignment = VerticalAlignment.Center;
+            view.Margin = new Thickness(0, 1, 0, 0);
+            return view;
         }
 
         internal static Color MetricIconColorByKey(string iconKey)

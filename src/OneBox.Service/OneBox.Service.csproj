@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk.Worker">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <AssemblyName>OneBox.Service</AssemblyName>
+    <RootNamespace>OneBox.Service</RootNamespace>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <SelfContained>false</SelfContained>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\OneBox.Contracts\OneBox.Contracts.csproj" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="..\Shared\SecurePipe.cs" Link="Infrastructure\SecurePipe.cs" />
+  </ItemGroup>
+</Project>

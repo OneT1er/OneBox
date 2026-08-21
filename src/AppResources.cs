@@ -61,67 +61,39 @@ namespace PowerAudioManager
             return new FontFamily(DefaultFontName);
         }
 
-        public static readonly FontFamily EmojiFont =
-            new FontFamily("Segoe UI Emoji");
-
-        // 复合字体：文字用用户字体，emoji 自动落到 Segoe UI Emoji（彩色）
-        public static FontFamily CompositeFont
-        {
-            get { return new FontFamily(AppFont.Source + ", Segoe UI Emoji"); }
-        }
-
-        // WinForms 托盘菜单对应的 AppFont：用同一字体名称构建 System.Drawing.Font，保持右键菜单风格一致。
-        static System.Drawing.Font _trayFont;
-        static string _trayFontName;
-        public static System.Drawing.Font TrayFont()
-        {
-            var name = AppPrefs.GetString(FontPrefKey, DefaultFontName);
-            if (_trayFont != null && _trayFontName == name) return _trayFont;
-            if (_trayFont != null) { try { _trayFont.Dispose(); } catch { } _trayFont = null; }
-            try
-            {
-                // 传给 WinForms 前验证字体族是否已安装；未知名称在 WinForms 中也会静默回退，但这里显式处理更安全。
-                bool installed = false;
-                using (var col = new System.Drawing.Text.InstalledFontCollection())
-                    foreach (var f in col.Families)
-                        if (string.Equals(f.Name, name, StringComparison.OrdinalIgnoreCase))
-                        { installed = true; break; }
-                _trayFont = new System.Drawing.Font(installed ? name : DefaultFontName, 9f);
-            }
-            catch { _trayFont = new System.Drawing.Font(DefaultFontName, 9f); }
-            _trayFontName = name;
-            return _trayFont;
-        }
-
-        // 按文件名加载内嵌图片（png/ico）：优先使用嵌入式清单资源（无需外部文件），
-        // 回退到 exe 旁的外部文件。返回已冻结的 BitmapSource，不可用时返回 null。
+        // 按文件名加载图片（png/ico）。托盘图标必须保留 UriSource：
+        // H.NotifyIcon.Wpf 通过 BitmapImage.UriSource 重新打开图标流，
+        // 因此不能把 app.ico 只读成 StreamSource（那会让 UriSource 为空）。
+        // 发布目录始终携带 app.ico；清单资源仍作为其他图片的回退。
         public static BitmapImage LoadAppImage(string fileName)
         {
             try
             {
-                var asm = Assembly.GetExecutingAssembly();
-                string resName = "PowerAudioManager." + fileName;
-                using (var stream = asm.GetManifestResourceStream(resName))
-                {
-                    if (stream != null)
-                    {
-                        var bmp = new BitmapImage();
-                        bmp.BeginInit();
-                        bmp.CacheOption = BitmapCacheOption.OnLoad;
-                        bmp.StreamSource = stream;
-                        bmp.EndInit();
-                        bmp.Freeze();
-                        return bmp;
-                    }
-                }
                 var dir = Path.GetDirectoryName(Environment.ProcessPath);
                 var path = Path.Combine(dir, fileName);
                 if (File.Exists(path))
                 {
                     var bmp = new BitmapImage();
                     bmp.BeginInit();
-                    bmp.UriSource = new Uri(path);
                     bmp.CacheOption = BitmapCacheOption.OnLoad;
+                    bmp.UriSource = new Uri(path, UriKind.Absolute);
+                    bmp.EndInit();
+                    bmp.Freeze();
+                    return bmp;
+                }
+
+                var asm = Assembly.GetExecutingAssembly();
+                string resName = "PowerAudioManager." + fileName;
+                using (var stream = asm.GetManifestResourceStream(resName))
+                {
+                    if (stream == null) return null;
+                    var bmp = new BitmapImage();
+                    bmp.BeginInit();
+                    bmp.CacheOption = BitmapCacheOption.OnLoad;
+                    // StreamSource handles non-ASCII install paths consistently;
+                    // BitmapImage.UriSource has historically failed for Chinese
+                    // directory names on some WPF image codecs.
+                    bmp.StreamSource = stream;
                     bmp.EndInit();
                     bmp.Freeze();
                     return bmp;
@@ -132,7 +104,7 @@ namespace PowerAudioManager
         }
 
         // ---- 对话框按钮样式（共享）------------------------------------
-        // 将 MaterialDesign 扁平按钮样式应用到对话框按钮。
+        // Apply the shared flat button style to dialog buttons.
         // 独立窗口（设置/翻译/剪贴板历史/快捷键）与悬浮窗保持统一设计语言。
         //
         // primary = true  → 紫影填充 + 白色文字（主操作，如确定/翻译）
@@ -142,9 +114,9 @@ namespace PowerAudioManager
 
         public static void StyleDialogButton(Button btn, bool primary)
         {
-            // MaterialDesign 扁平按钮：透明填充 + 悬浮波纹，无投影阴影（保持对话框扁平卡片风格）。
+            // Flat button: transparent secondary action with the shared hover state.
             // 主操作按钮用紫影填充以突出显示；次要按钮保持透明，依赖波纹提供可交互暗示。
-            var style = Application.Current.TryFindResource("MaterialDesignFlatButton") as Style;
+            var style = Application.Current.TryFindResource(ThemeTokens.FlatButtonKey) as Style;
             if (style != null) btn.Style = style;
             if (primary)
             {
@@ -159,7 +131,7 @@ namespace PowerAudioManager
         }
 
         // ---- 深色 TabControl 样式（共享）----------------------------------
-        // 现在是空操作：MaterialDesign 的隐式 TabControl/TabItem 样式（来自全局 MaterialDesign3 默认值）
+        // Shared tab surface defaults.
         // 已自动渲染深色紫影标签外观。保留为空方法以便迁移期间现有调用点编译通过。
         public static void StyleDarkTabControl(TabControl tc)
         {
@@ -168,7 +140,7 @@ namespace PowerAudioManager
             tc.Padding = new Thickness(0);
         }
 
-        // 现在是空操作：MaterialDesign 的隐式 ComboBox 样式（来自全局 MaterialDesign3 默认值）
+        // Shared combo surface defaults.
         // 已自动渲染深色紫影下拉框。保留为空方法以便迁移期间现有调用点编译通过。
         public static void StyleDarkComboBox(ComboBox cb)
         {

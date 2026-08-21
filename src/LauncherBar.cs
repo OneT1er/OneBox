@@ -8,28 +8,70 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Automation;
 using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
+using PowerAudioManager.Commands;
 
 namespace PowerAudioManager
 {
+    public sealed class LauncherCapacityResult
+    {
+        public List<string> Paths { get; } = new List<string>();
+        public int Added { get; internal set; }
+        public int Rejected { get; internal set; }
+    }
+
+    public static class LauncherPolicy
+    {
+        public const int MaxSlots = 8;
+        internal const int MaxFaviconBytes = 512 * 1024;
+
+        public static LauncherCapacityResult AddWithinLimit(IEnumerable<string> existing, IEnumerable<string> candidates)
+        {
+            var result = new LauncherCapacityResult();
+            if (existing != null)
+            {
+                foreach (string item in existing)
+                {
+                    if (result.Paths.Count >= MaxSlots) break;
+                    if (!string.IsNullOrWhiteSpace(item)) result.Paths.Add(item.Trim());
+                }
+            }
+            if (candidates == null) return result;
+            foreach (string candidate in candidates)
+            {
+                if (string.IsNullOrWhiteSpace(candidate)) continue;
+                if (result.Paths.Count >= MaxSlots) { result.Rejected++; continue; }
+                result.Paths.Add(candidate.Trim());
+                result.Added++;
+            }
+            return result;
+        }
+
+        public static bool IsCurrentSlot(IReadOnlyList<string> paths, int index, string expectedPath)
+        {
+            return paths != null && index >= 0 && index < paths.Count &&
+                string.Equals(paths[index], expectedPath, StringComparison.Ordinal);
+        }
+    }
+
     // 快捷启动栏：最多 8 个槽位（WrapPanel 自动换行），支持 exe/快捷方式/文件夹/URL。
     // 注册表 Launcher.Paths（'|' 分隔）持久化；只显示已填槽位 + 1 个空占位。
     internal static class LauncherBar
     {
-        const int MaxSlots = 8;
+        const int MaxSlots = LauncherPolicy.MaxSlots;
         const string LauncherPrefKey = "Launcher.Paths";
 
         // requestRebuild 在槽位路径变更时回调，宿主据此重新渲染图标
-        public static void Build(StackPanel contentPanel, Action requestRebuild)
+        public static void Build(StackPanel contentPanel, Action requestRebuild, MainWindow commandOwner = null)
         {
             if (contentPanel.Children.Count > 0) contentPanel.Children.Add(UiKit.MakeDivider());
             var header = new TextBlock {
                 Foreground = new SolidColorBrush(UiKit.AccentColor), FontSize = 12,
                 FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 0, 0, 6) };
-            header.Inlines.Add(new Run("🚀") { FontFamily = AppResources.EmojiFont });
-            header.Inlines.Add(new Run(" 快捷启动"));
+            header.Inlines.Add(new Run("快捷启动"));
             contentPanel.Children.Add(header);
             var wrap = new WrapPanel { Margin = new Thickness(0, 0, 0, 2) };
             var paths = LoadLauncherPaths();
@@ -39,7 +81,7 @@ namespace PowerAudioManager
             for (int i = 0; i < shown; i++)
             {
                 string p = i < paths.Count ? paths[i] : null;
-                wrap.Children.Add(MakeLauncherSlot(i, p, paths, requestRebuild));
+                wrap.Children.Add(MakeLauncherSlot(i, p, paths, requestRebuild, commandOwner));
             }
             contentPanel.Children.Add(wrap);
         }
@@ -55,7 +97,11 @@ namespace PowerAudioManager
                     {
                         var s = k.GetValue(LauncherPrefKey) as string;
                         if (!string.IsNullOrEmpty(s))
-                            foreach (var p in s.Split('|')) if (p.Length > 0) list.Add(p);
+                            foreach (var p in s.Split('|'))
+                            {
+                                if (list.Count >= MaxSlots) break;
+                                if (p.Length > 0) list.Add(p);
+                            }
                     }
                 }
             }
@@ -70,7 +116,8 @@ namespace PowerAudioManager
                 using (var k = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(@"Software\PowerAudioManager\App"))
                 {
                     var sb = new StringBuilder();
-                    for (int i = 0; i < paths.Count; i++) { if (i > 0) sb.Append('|'); sb.Append(paths[i]); }
+                    int count = Math.Min(paths.Count, MaxSlots);
+                    for (int i = 0; i < count; i++) { if (i > 0) sb.Append('|'); sb.Append(paths[i]); }
                     k.SetValue(LauncherPrefKey, sb.ToString());
                 }
             }
@@ -95,7 +142,7 @@ namespace PowerAudioManager
             try
             {
                 if (IsUrl(path) || IsFolder(path)) return null;
-                var ico = System.Drawing.Icon.ExtractAssociatedIcon(path);
+                using var ico = System.Drawing.Icon.ExtractAssociatedIcon(path);
                 if (ico != null)
                 {
                     var bmp = System.Windows.Interop.Imaging.CreateBitmapSourceFromHIcon(
@@ -109,7 +156,8 @@ namespace PowerAudioManager
             return null;
         }
 
-        static Button MakeLauncherSlot(int index, string path, List<string> paths, Action requestRebuild)
+        static Button MakeLauncherSlot(int index, string path, List<string> paths, Action requestRebuild,
+            MainWindow commandOwner)
         {
             var btn = new Button {
                 Width = 44, Height = 44,
@@ -118,8 +166,10 @@ namespace PowerAudioManager
                 Background = new SolidColorBrush(UiKit.CardColor),
                 BorderBrush = new SolidColorBrush(UiKit.BorderColor),
                 ToolTip = string.IsNullOrEmpty(path) ? "拖入程序 / 快捷方式 / 文件夹 / URL" : path,
-                AllowDrop = true
+                AllowDrop = true,
+                Tag = path
             };
+            AutomationProperties.SetName(btn, string.IsNullOrEmpty(path) ? "添加快捷项" : path);
             UiKit.ApplyIconButtonStyle(btn);
 
             if (!string.IsNullOrEmpty(path))
@@ -131,26 +181,26 @@ namespace PowerAudioManager
                 }
                 else if (IsUrl(path))
                 {
-                    btn.Content = "🌐";
-                    btn.FontSize = 20;
+                    btn.Content = IconCatalog.CreateElement(IconKey.Url, 20, UiKit.FrozenBrush(UiKit.AccentColor));
                     btn.ToolTip = path;
-                    FetchFavicon(path, btn);
+                    // The fetch is deliberately detached from UI construction, but the
+                    // Task-returning method observes every failure internally so an
+                    // abandoned network request cannot become an unhandled exception.
+                    _ = FetchFaviconAsync(path, index, btn);
                 }
                 else if (IsFolder(path))
                 {
-                    btn.Content = "📁";
-                    btn.FontSize = 20;
+                    btn.Content = IconCatalog.CreateElement(IconKey.Folder, 20, UiKit.FrozenBrush(UiKit.AccentColor));
                     btn.ToolTip = path;
                 }
                 else
                 {
-                    btn.Content = "•";
+                    btn.Content = IconCatalog.CreateElement(IconKey.Warning, 20, UiKit.FrozenBrush(UiKit.TextSecondary));
                 }
             }
             else
             {
-                btn.Content = "+";
-                btn.FontSize = 18;
+                btn.Content = IconCatalog.CreateElement(IconKey.Add, 20, UiKit.FrozenBrush(UiKit.TextSecondary));
                 btn.Foreground = new SolidColorBrush(UiKit.TextSecondary);
             }
 
@@ -163,9 +213,9 @@ namespace PowerAudioManager
                     var miExe = new MenuItem { Header = "程序 / 快捷方式..." };
                     var miFolder = new MenuItem { Header = "文件夹..." };
                     var miUrl = new MenuItem { Header = "网页 (URL)..." };
-                    miExe.Click += (_, _) => AddProgram(paths, requestRebuild);
-                    miFolder.Click += (_, _) => AddFolder(paths, requestRebuild);
-                    miUrl.Click += (_, _) => AddUrl(btn, paths, requestRebuild);
+                    miExe.Click += (_, _) => AddProgram(commandOwner, requestRebuild);
+                    miFolder.Click += (_, _) => AddFolder(commandOwner, requestRebuild);
+                    miUrl.Click += (_, _) => AddUrl(btn, commandOwner, requestRebuild);
                     menu.Items.Add(miExe);
                     menu.Items.Add(miFolder);
                     menu.Items.Add(miUrl);
@@ -175,12 +225,10 @@ namespace PowerAudioManager
                 }
                 else
                 {
-                    try
-                    {
-                        var psi = new ProcessStartInfo(path) { UseShellExecute = true };
-                        Process.Start(psi);
-                    }
-                    catch (Exception ex) { AppLog.Log("Launch " + path, ex); }
+                    if (commandOwner != null)
+                        _ = commandOwner.ExecuteCommandAsync(AppCommandId.LauncherLaunch,
+                            CommandSource.Launcher, new LauncherLaunchPayload(index));
+                    else LaunchAt(index);
                 }
             };
 
@@ -188,9 +236,10 @@ namespace PowerAudioManager
             {
                 if (!string.IsNullOrEmpty(path))
                 {
-                    paths.RemoveAt(index);
-                    SaveLauncherPaths(paths);
-                    requestRebuild();
+                    if (commandOwner != null)
+                        _ = commandOwner.ExecuteCommandAsync(AppCommandId.LauncherRemove,
+                            CommandSource.Launcher, new LauncherRemovePayload(index));
+                    else RemoveAt(index, requestRebuild);
                     e.Handled = true;
                 }
             };
@@ -221,15 +270,21 @@ namespace PowerAudioManager
             {
                 btn.BorderBrush = new SolidColorBrush(UiKit.BorderColor);
                 btn.BorderThickness = new Thickness(1);
-                string dropped = ExtractDropped(e);
-                if (!string.IsNullOrEmpty(dropped)) AddDropped(dropped, requestRebuild);
+                var dropped = ExtractDroppedItems(e.Data);
+                if (dropped.Count > 0)
+                {
+                    if (commandOwner != null)
+                        _ = commandOwner.ExecuteCommandAsync(AppCommandId.LauncherAdd,
+                            CommandSource.Launcher, new LauncherAddPayload(dropped));
+                    else AddDropped(dropped, btn, requestRebuild);
+                }
                 e.Handled = true;
             };
             return btn;
         }
 
         // 抓取网站 favicon（先试 /favicon.ico，再解析 HTML <link rel=icon>），缓存到 %TEMP%\OneBoxFavicons
-        static async void FetchFavicon(string url, Button btn)
+        static async System.Threading.Tasks.Task FetchFaviconAsync(string url, int slotIndex, Button btn)
         {
             try
             {
@@ -238,98 +293,173 @@ namespace PowerAudioManager
                 AppLog.Log("Favicon", "fetch " + url);
                 string cacheDir = Path.Combine(Path.GetTempPath(), "OneBoxFavicons");
                 Directory.CreateDirectory(cacheDir);
-                string cacheFile = Path.Combine(cacheDir, domain + ".ico");
+                string cacheFile = Path.Combine(cacheDir, domain.Replace(':', '_') + ".ico");
 
                 if (!File.Exists(cacheFile))
                 {
-                    using (var client = new HttpClient(new HttpClientHandler { UseProxy = false }, true))
+                    using var cancellation = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(5));
+                    byte[] bytes = null;
+
+                    // 1) 先试标准 /favicon.ico
+                    try { bytes = await DownloadBytesAsync(new Uri($"{uri.Scheme}://{domain}/favicon.ico"), cancellation.Token); }
+                    catch (Exception ex) { AppLog.Log("Favicon direct", ex); }
+
+                    // 2) 再解析 HTML <link rel="icon" href="...">
+                    if (bytes == null || bytes.Length < 100)
                     {
-                        client.Timeout = TimeSpan.FromSeconds(5);
-                        byte[] bytes = null;
-
-                        // 1) 先试标准 /favicon.ico
-                        try { bytes = await client.GetByteArrayAsync($"{uri.Scheme}://{domain}/favicon.ico"); }
-                        catch { }
-
-                        // 2) 再解析 HTML <link rel="icon" href="...">
-                        if (bytes == null || bytes.Length < 100)
+                        try
                         {
-                            try
+                            string html = await DownloadTextAsync(new Uri($"{uri.Scheme}://{domain}/"), cancellation.Token);
+                            var match = System.Text.RegularExpressions.Regex.Match(html,
+                                @"<link[^>]+rel=[""'](?:shortcut\s+)?icon[""'][^>]+href=[""']([^""']+)",
+                                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                            if (match.Success)
                             {
-                                var html = await client.GetStringAsync($"{uri.Scheme}://{domain}/");
-                                var match = System.Text.RegularExpressions.Regex.Match(html,
-                                    @"<link[^>]+rel=[""'](?:shortcut\s+)?icon[""'][^>]+href=[""']([^""']+)",
-                                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-                                if (match.Success)
-                                {
-                                    var href = System.Net.WebUtility.HtmlDecode(match.Groups[1].Value);
-                                    var iconUri = new Uri(new Uri($"{uri.Scheme}://{domain}/"), href);
-                                    try { bytes = await client.GetByteArrayAsync(iconUri); } catch { }
-                                }
+                                var href = System.Net.WebUtility.HtmlDecode(match.Groups[1].Value);
+                                var iconUri = new Uri(new Uri($"{uri.Scheme}://{domain}/"), href);
+                                bytes = await DownloadBytesAsync(iconUri, cancellation.Token);
                             }
-                            catch { }
                         }
-
-                        AppLog.Log("Favicon", "got " + domain + ": " + (bytes?.Length ?? 0) + " bytes");
-                        if (bytes != null && bytes.Length >= 100)
-                        {
-                            File.WriteAllBytes(cacheFile, bytes);
-                            AppLog.Log("Favicon", "saved " + domain + ": " + bytes.Length + " bytes");
-                        }
-                        else
-                            return; // 未找到图标 → 保持 🌐
+                        catch (Exception ex) { AppLog.Log("Favicon html", ex); }
                     }
+
+                    AppLog.Log("Favicon", "got " + domain + ": " + (bytes?.Length ?? 0) + " bytes");
+                    if (bytes != null && bytes.Length >= 100)
+                    {
+                        File.WriteAllBytes(cacheFile, bytes);
+                        AppLog.Log("Favicon", "saved " + domain + ": " + bytes.Length + " bytes");
+                    }
+                    else return;
                 }
 
                 // 回到 UI 线程加载缓存图标
-                btn.Dispatcher.Invoke(() =>
+                _ = btn.Dispatcher.BeginInvoke(new Action(() =>
                 {
                     try
                     {
+                        if (!LauncherPolicy.IsCurrentSlot(LoadLauncherPaths(), slotIndex, url)) return;
+                        if (!string.Equals(btn.Tag as string, url, StringComparison.Ordinal)) return;
                         var bmp = new System.Windows.Media.Imaging.BitmapImage();
                         bmp.BeginInit();
                         bmp.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad;
-                        bmp.StreamSource = new FileStream(cacheFile, FileMode.Open, FileAccess.Read);
-                        bmp.DecodePixelWidth = 24;
-                        bmp.EndInit();
+                        using (var stream = new FileStream(cacheFile, FileMode.Open, FileAccess.Read, FileShare.Read))
+                        {
+                            bmp.StreamSource = stream;
+                            bmp.DecodePixelWidth = 24;
+                            bmp.EndInit();
+                        }
                         bmp.Freeze();
                         btn.Content = new Image { Source = bmp, Width = 24, Height = 24 };
                     }
-                    catch { /* keep 🌐 */ }
-                });
+                    catch (Exception ex) { AppLog.Log("Favicon render", ex); }
+                }));
             }
-            catch { /* network error → keep 🌐 */ }
+            catch (Exception ex) { AppLog.Log("Favicon", ex); }
+        }
+
+        public static CommandResult AddPaths(IReadOnlyList<string> candidates, Action requestRebuild)
+        {
+            if (candidates == null || candidates.Count == 0)
+                return CommandResult.Fail(CommandErrorCode.InvalidPayload, "没有可添加的快捷启动项。");
+            var resolved = new List<string>();
+            foreach (var candidate in candidates)
+                if (!string.IsNullOrWhiteSpace(candidate)) resolved.Add(ResolveShortcut(candidate.Trim()));
+            var capacity = LauncherPolicy.AddWithinLimit(LoadLauncherPaths(), resolved);
+            if (capacity.Added > 0)
+            {
+                SaveLauncherPaths(capacity.Paths);
+                requestRebuild?.Invoke();
+            }
+            if (capacity.Rejected > 0)
+                return CommandResult.Fail(CommandErrorCode.Rejected,
+                    $"快捷启动最多 8 项，有 {capacity.Rejected} 项未添加。", capacity);
+            return capacity.Added > 0
+                ? CommandResult.Ok(capacity)
+                : CommandResult.Fail(CommandErrorCode.Rejected, "快捷启动项未添加。", capacity);
+        }
+
+        public static CommandResult RemoveAt(int index, Action requestRebuild)
+        {
+            var paths = LoadLauncherPaths();
+            if (index < 0 || index >= paths.Count)
+                return CommandResult.Fail(CommandErrorCode.InvalidPayload, "快捷启动位置无效。");
+            paths.RemoveAt(index);
+            SaveLauncherPaths(paths);
+            requestRebuild?.Invoke();
+            return CommandResult.Ok();
+        }
+
+        public static CommandResult LaunchAt(int index)
+        {
+            var paths = LoadLauncherPaths();
+            if (index < 0 || index >= paths.Count)
+                return CommandResult.Fail(CommandErrorCode.InvalidPayload, "快捷启动位置无效。");
+            Process.Start(new ProcessStartInfo(paths[index]) { UseShellExecute = true });
+            return CommandResult.Ok();
+        }
+
+        static async System.Threading.Tasks.Task<byte[]> DownloadBytesAsync(Uri uri, System.Threading.CancellationToken cancellationToken)
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, uri);
+            request.Headers.UserAgent.ParseAdd("OneBox/1.7.2");
+            using var response = await OneBoxHttp.Client.SendAsync(
+                request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+            response.EnsureSuccessStatusCode();
+            return await OneBoxHttp.ReadBoundedBytesAsync(response.Content,
+                LauncherPolicy.MaxFaviconBytes, cancellationToken).ConfigureAwait(false);
+        }
+
+        static async System.Threading.Tasks.Task<string> DownloadTextAsync(Uri uri, System.Threading.CancellationToken cancellationToken)
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, uri);
+            request.Headers.UserAgent.ParseAdd("OneBox/1.7.2");
+            using var response = await OneBoxHttp.Client.SendAsync(
+                request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+            response.EnsureSuccessStatusCode();
+            return await OneBoxHttp.ReadBoundedTextAsync(response.Content,
+                LauncherPolicy.MaxFaviconBytes, cancellationToken).ConfigureAwait(false);
         }
 
         // 解析 .lnk 快捷方式到目标路径；非快捷方式或解析失败回退原路径。
         // 使用反射后期绑定（避免添加 dynamic / Microsoft.CSharp 依赖）
         public static bool HasDropData(IDataObject data)
         {
-            return data.GetDataPresent(DataFormats.FileDrop)
+            return data != null && (data.GetDataPresent(DataFormats.FileDrop)
                 || data.GetDataPresent("UniformResourceLocator")
                 || data.GetDataPresent("text/x-moz-url")
                 || data.GetDataPresent(DataFormats.Text)
-                || data.GetDataPresent(DataFormats.StringFormat);
+                || data.GetDataPresent(DataFormats.StringFormat));
         }
 
         public static string ExtractDropped(DragEventArgs e)
         {
+            var items = e == null ? new List<string>() : ExtractDroppedItems(e.Data);
+            return items.Count == 0 ? null : items[0];
+        }
+
+        public static List<string> ExtractDroppedItems(IDataObject data)
+        {
+            var result = new List<string>();
+            if (data == null) return result;
             try
             {
-                if (e.Data.GetDataPresent(DataFormats.FileDrop))
+                if (data.GetDataPresent(DataFormats.FileDrop))
                 {
-                    var files = (string[])e.Data.GetData(DataFormats.FileDrop);
-                    if (files != null && files.Length > 0 && !string.IsNullOrEmpty(files[0])) return files[0];
+                    var files = data.GetData(DataFormats.FileDrop) as string[];
+                    if (files != null)
+                        foreach (string file in files)
+                            if (!string.IsNullOrWhiteSpace(file)) result.Add(file);
+                    return result;
                 }
                 // 浏览器拖 URL 的几种格式
                 string[] urlFormats = { "UniformResourceLocator", "text/x-moz-url", DataFormats.Text, DataFormats.StringFormat };
                 foreach (var fmt in urlFormats)
                 {
-                    if (!e.Data.GetDataPresent(fmt)) continue;
-                    var data = e.Data.GetData(fmt);
+                    if (!data.GetDataPresent(fmt)) continue;
+                    var value = data.GetData(fmt);
                     string s = null;
-                    if (data is string str) s = str;
-                    else if (data is Stream st)
+                    if (value is string str) s = str;
+                    else if (value is Stream st)
                     {
                         using (st)
                         using (var reader = new StreamReader(st, fmt == "UniformResourceLocator" ? Encoding.Unicode : Encoding.UTF8, true))
@@ -341,51 +471,72 @@ namespace PowerAudioManager
                     if (parts.Length == 0) continue;
                     var line = parts[0].Trim();
                     if (line.StartsWith("http://", StringComparison.OrdinalIgnoreCase) || line.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
-                        return line;
+                    {
+                        result.Add(line);
+                        return result;
+                    }
                 }
             }
-            catch { }
-            return null;
+            catch (Exception ex) { AppLog.Log("Launcher drop", ex); }
+            return result;
         }
 
-        public static void AddDropped(string dropped, Action requestRebuild)
+        public static bool AddDropped(string dropped, Action requestRebuild)
         {
-            if (string.IsNullOrEmpty(dropped)) return;
+            if (string.IsNullOrWhiteSpace(dropped)) return false;
             dropped = dropped.Trim();
             string resolved = ResolveShortcut(dropped);
             var paths = LoadLauncherPaths();
-            paths.Add(resolved);
-            SaveLauncherPaths(paths);
-            requestRebuild();
+            var result = LauncherPolicy.AddWithinLimit(paths, new[] { resolved });
+            if (result.Added == 0) return false;
+            SaveLauncherPaths(result.Paths);
+            requestRebuild?.Invoke();
+            return true;
         }
 
-        static void AddProgram(List<string> paths, Action requestRebuild)
+        static void AddDropped(IEnumerable<string> dropped, Button owner, Action requestRebuild)
+        {
+            var resolved = new List<string>();
+            foreach (string item in dropped)
+                if (!string.IsNullOrWhiteSpace(item)) resolved.Add(ResolveShortcut(item.Trim()));
+            var result = LauncherPolicy.AddWithinLimit(LoadLauncherPaths(), resolved);
+            if (result.Added > 0)
+            {
+                SaveLauncherPaths(result.Paths);
+                requestRebuild?.Invoke();
+            }
+            if (result.Rejected > 0) ShowCapacityMessage(owner, result.Rejected);
+        }
+
+        static void AddProgram(MainWindow commandOwner, Action requestRebuild)
         {
             var dlg = new Microsoft.Win32.OpenFileDialog { Filter = "程序|*.exe;*.lnk|所有文件|*.*", Title = "选择要添加的程序" };
             if (dlg.ShowDialog() == true)
             {
-                paths.Add(ResolveShortcut(dlg.FileName));
-                SaveLauncherPaths(paths);
-                requestRebuild();
+                if (commandOwner != null)
+                    _ = commandOwner.ExecuteCommandAsync(AppCommandId.LauncherAdd, CommandSource.Launcher,
+                        new LauncherAddPayload(new[] { dlg.FileName }));
+                else AddToExisting(LoadLauncherPaths(), ResolveShortcut(dlg.FileName), null, requestRebuild);
             }
         }
 
-        static void AddFolder(List<string> paths, Action requestRebuild)
+        static void AddFolder(MainWindow commandOwner, Action requestRebuild)
         {
             try
             {
                 var dlg = new System.Windows.Forms.FolderBrowserDialog { Description = "选择要添加的文件夹", ShowNewFolderButton = false };
                 if (dlg.ShowDialog() == System.Windows.Forms.DialogResult.OK && !string.IsNullOrEmpty(dlg.SelectedPath))
                 {
-                    paths.Add(dlg.SelectedPath);
-                    SaveLauncherPaths(paths);
-                    requestRebuild();
+                    if (commandOwner != null)
+                        _ = commandOwner.ExecuteCommandAsync(AppCommandId.LauncherAdd, CommandSource.Launcher,
+                            new LauncherAddPayload(new[] { dlg.SelectedPath }));
+                    else AddToExisting(LoadLauncherPaths(), dlg.SelectedPath, null, requestRebuild);
                 }
             }
             catch (Exception ex) { AppLog.Log("AddFolder", ex); }
         }
 
-        static void AddUrl(Button btn, List<string> paths, Action requestRebuild)
+        static void AddUrl(Button btn, MainWindow commandOwner, Action requestRebuild)
         {
             string url = PromptUrl(btn);
             if (!string.IsNullOrEmpty(url))
@@ -393,10 +544,34 @@ namespace PowerAudioManager
                 url = url.Trim();
                 if (!url.StartsWith("http://", StringComparison.OrdinalIgnoreCase) && !url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
                     url = "https://" + url;
-                paths.Add(url);
-                SaveLauncherPaths(paths);
-                requestRebuild();
+                if (commandOwner != null)
+                    _ = commandOwner.ExecuteCommandAsync(AppCommandId.LauncherAdd, CommandSource.Launcher,
+                        new LauncherAddPayload(new[] { url }));
+                else AddToExisting(LoadLauncherPaths(), url, btn, requestRebuild);
             }
+        }
+
+        static void AddToExisting(List<string> paths, string candidate, Button owner, Action requestRebuild)
+        {
+            var result = LauncherPolicy.AddWithinLimit(paths, new[] { candidate });
+            if (result.Added > 0)
+            {
+                paths.Clear();
+                paths.AddRange(result.Paths);
+                SaveLauncherPaths(paths);
+                requestRebuild?.Invoke();
+            }
+            if (result.Rejected > 0) ShowCapacityMessage(owner, result.Rejected);
+        }
+
+        static void ShowCapacityMessage(Button owner, int rejected)
+        {
+            string message = rejected == 1 ? "快捷启动栏最多只能添加 8 项。" : $"快捷启动栏最多只能添加 8 项，已有 {rejected} 项未添加。";
+            var window = owner == null ? Application.Current?.MainWindow : Window.GetWindow(owner);
+            if (window != null)
+                MessageBox.Show(window, message, "快捷启动栏", MessageBoxButton.OK, MessageBoxImage.Information);
+            else
+                MessageBox.Show(message, "快捷启动栏", MessageBoxButton.OK, MessageBoxImage.Information);
         }
 
         static string PromptUrl(Button owner)

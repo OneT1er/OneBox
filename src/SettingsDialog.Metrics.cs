@@ -36,10 +36,12 @@ namespace PowerAudioManager
                 row.Children.Add(nameRow);
 
                 // 编辑按钮 → 内联编辑所有属性
-                var editBtn = new Button { Content = "✎", Width = 24, Height = 22, Background = Brushes.Transparent, BorderBrush = Brushes.Transparent, Foreground = fg, FontSize = 12, Cursor = System.Windows.Input.Cursors.Hand, Padding = new Thickness(0), ToolTip = "编辑" };
-                UiKit.ApplyFlatStyle(editBtn); editBtn.MinWidth = 0; editBtn.MinHeight = 0;
-                var delBtn = new Button { Content = "✕", Width = 24, Height = 22, Background = Brushes.Transparent, BorderBrush = Brushes.Transparent, Foreground = new SolidColorBrush(Color.FromRgb(200, 100, 100)), FontSize = 12, Cursor = System.Windows.Input.Cursors.Hand, Padding = new Thickness(0), ToolTip = "删除" };
-                UiKit.ApplyFlatStyle(delBtn); delBtn.MinWidth = 0; delBtn.MinHeight = 0;
+                var editBtn = new Button { Content = IconCatalog.CreateElement(IconKey.Edit, 14, fg), Width = 28, Height = 28, Background = Brushes.Transparent, BorderBrush = Brushes.Transparent, Foreground = fg, Cursor = System.Windows.Input.Cursors.Hand, Padding = new Thickness(0), ToolTip = "编辑" };
+                System.Windows.Automation.AutomationProperties.SetName(editBtn, "编辑");
+                UiKit.ApplyFlatStyle(editBtn);
+                var delBtn = new Button { Content = IconCatalog.CreateElement(IconKey.Delete, 14, new SolidColorBrush(Color.FromRgb(220, 120, 120))), Width = 28, Height = 28, Background = Brushes.Transparent, BorderBrush = Brushes.Transparent, Foreground = new SolidColorBrush(Color.FromRgb(200, 100, 100)), Cursor = System.Windows.Input.Cursors.Hand, Padding = new Thickness(0), ToolTip = "删除" };
+                System.Windows.Automation.AutomationProperties.SetName(delBtn, "删除");
+                UiKit.ApplyFlatStyle(delBtn);
 
                 string capturedKey = key;
                 var capturedList = list;
@@ -47,7 +49,12 @@ namespace PowerAudioManager
                 {
                     var updated = new List<string>(hw.EnabledMetrics);
                     updated.Remove(capturedKey);
-                    hw.SaveEnabledMetrics(updated);
+                    if (!hw.SaveEnabledMetrics(updated))
+                    {
+                        MessageBox.Show("指标设置保存失败，当前运行状态未改变。", "OneBox 设置",
+                            MessageBoxButton.OK, MessageBoxImage.Error);
+                        return;
+                    }
                     RefreshMetricList(capturedList, hw, fg);
                 };
                 editBtn.Click += (s2, e2) =>
@@ -115,7 +122,12 @@ namespace PowerAudioManager
                         int idx = updated.IndexOf(capturedKey);
                         if (idx >= 0) updated[idx] = finalKey;
                         else updated.Add(finalKey);
-                        hw.SaveEnabledMetrics(updated);
+                        if (!hw.SaveEnabledMetrics(updated))
+                        {
+                            MessageBox.Show("指标设置保存失败，当前运行状态未改变。", "OneBox 设置",
+                                MessageBoxButton.OK, MessageBoxImage.Error);
+                            return;
+                        }
                         RefreshMetricList(capturedList, hw, fg);
                     };
                     cancelBtn2.Click += (s3, e3) => RefreshMetricList(capturedList, hw, fg);
@@ -125,17 +137,24 @@ namespace PowerAudioManager
 
                 // 上移/下移按钮
                 int curIdx = hw.EnabledMetrics.IndexOf(capturedKey);
-                var upBtn = new Button { Content = "▲", Width = 24, Height = 22, Background = Brushes.Transparent, BorderBrush = Brushes.Transparent, Foreground = fg, FontSize = 9, Cursor = System.Windows.Input.Cursors.Hand, Padding = new Thickness(0), ToolTip = "上移", IsEnabled = curIdx > 0 };
-                UiKit.ApplyFlatStyle(upBtn); upBtn.MinWidth = 0; upBtn.MinHeight = 0;
-                var downBtn = new Button { Content = "▼", Width = 24, Height = 22, Background = Brushes.Transparent, BorderBrush = Brushes.Transparent, Foreground = fg, FontSize = 9, Cursor = System.Windows.Input.Cursors.Hand, Padding = new Thickness(0), ToolTip = "下移", IsEnabled = curIdx < hw.EnabledMetrics.Count - 1 };
-                UiKit.ApplyFlatStyle(downBtn); downBtn.MinWidth = 0; downBtn.MinHeight = 0;
+                var upBtn = new Button { Content = IconCatalog.CreateElement(IconKey.ChevronUp, 14, fg), Width = 28, Height = 28, Background = Brushes.Transparent, BorderBrush = Brushes.Transparent, Foreground = fg, Cursor = System.Windows.Input.Cursors.Hand, Padding = new Thickness(0), ToolTip = "上移", IsEnabled = curIdx > 0 };
+                System.Windows.Automation.AutomationProperties.SetName(upBtn, "上移");
+                UiKit.ApplyFlatStyle(upBtn);
+                var downBtn = new Button { Content = IconCatalog.CreateElement(IconKey.ChevronDown, 14, fg), Width = 28, Height = 28, Background = Brushes.Transparent, BorderBrush = Brushes.Transparent, Foreground = fg, Cursor = System.Windows.Input.Cursors.Hand, Padding = new Thickness(0), ToolTip = "下移", IsEnabled = curIdx < hw.EnabledMetrics.Count - 1 };
+                System.Windows.Automation.AutomationProperties.SetName(downBtn, "下移");
+                UiKit.ApplyFlatStyle(downBtn);
 
                 upBtn.Click += (s3, e3) =>
                 {
                     var updated = new List<string>(hw.EnabledMetrics);
                     int idx = updated.IndexOf(capturedKey);
                     if (idx > 0) { var tmp = updated[idx]; updated[idx] = updated[idx - 1]; updated[idx - 1] = tmp; }
-                    hw.SaveEnabledMetrics(updated);
+                    if (!hw.SaveEnabledMetrics(updated))
+                    {
+                        MessageBox.Show("指标设置保存失败，当前运行状态未改变。", "OneBox 设置",
+                            MessageBoxButton.OK, MessageBoxImage.Error);
+                        return;
+                    }
                     RefreshMetricList(capturedList, hw, fg);
                 };
                 downBtn.Click += (s3, e3) =>
@@ -143,7 +162,12 @@ namespace PowerAudioManager
                     var updated = new List<string>(hw.EnabledMetrics);
                     int idx = updated.IndexOf(capturedKey);
                     if (idx >= 0 && idx < updated.Count - 1) { var tmp = updated[idx]; updated[idx] = updated[idx + 1]; updated[idx + 1] = tmp; }
-                    hw.SaveEnabledMetrics(updated);
+                    if (!hw.SaveEnabledMetrics(updated))
+                    {
+                        MessageBox.Show("指标设置保存失败，当前运行状态未改变。", "OneBox 设置",
+                            MessageBoxButton.OK, MessageBoxImage.Error);
+                        return;
+                    }
                     RefreshMetricList(capturedList, hw, fg);
                 };
 
@@ -258,7 +282,12 @@ namespace PowerAudioManager
                     if (!updated.Contains(finalKey))
                     {
                         updated.Add(finalKey);
-                        hw.SaveEnabledMetrics(updated);
+                        if (!hw.SaveEnabledMetrics(updated))
+                        {
+                            MessageBox.Show("指标设置保存失败，当前运行状态未改变。", "OneBox 设置",
+                                MessageBoxButton.OK, MessageBoxImage.Error);
+                            return;
+                        }
                     }
                 }
                 RefreshMetricList(metricList, hw, fg);

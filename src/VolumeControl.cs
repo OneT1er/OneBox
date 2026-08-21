@@ -1,112 +1,159 @@
 using System;
-using System.Collections.Generic;
-using System.Diagnostics;
-using System.Runtime.InteropServices;
-using System.Text;
-using System.Windows;
-using System.Windows.Controls;
-using System.Windows.Input;
-using System.Windows.Media;
-using System.Windows.Media.Imaging;
-using System.Windows.Threading;
-using System.IO;
-using Microsoft.Win32;
+using NAudio.CoreAudioApi;
 
 namespace PowerAudioManager
 {
+    public interface IAudioEndpointVolumeSession
+    {
+        float Volume { get; set; }
+        bool Mute { get; set; }
+    }
+
+    /// <summary>
+    /// Small, platform-free cache/recovery decision layer. Production uses the
+    /// NAudio implementation below; tests can inject a fake endpoint to verify
+    /// device disappearance and recovery without requiring an audio device.
+    /// </summary>
+    public sealed class AudioVolumeSession
+    {
+        readonly Func<IAudioEndpointVolumeSession> _factory;
+        IAudioEndpointVolumeSession _current;
+
+        public AudioVolumeSession(Func<IAudioEndpointVolumeSession> factory) { _factory = factory; }
+
+        IAudioEndpointVolumeSession Endpoint => _current ?? (_current = _factory?.Invoke());
+
+        public float GetVolume()
+        {
+            try { return VolumeControl.Clamp(Endpoint?.Volume ?? 0); }
+            catch { _current = null; return 0; }
+        }
+
+        public bool TrySetVolume(float value)
+        {
+            try { var endpoint = Endpoint; if (endpoint == null) return false; endpoint.Volume = VolumeControl.Clamp(value); return true; }
+            catch { _current = null; return false; }
+        }
+
+        public bool TryGetMute(out bool muted)
+        {
+            try { var endpoint = Endpoint; if (endpoint == null) { muted = false; return false; } muted = endpoint.Mute; return true; }
+            catch { _current = null; muted = false; return false; }
+        }
+
+        public bool TrySetMute(bool muted)
+        {
+            try { var endpoint = Endpoint; if (endpoint == null) return false; endpoint.Mute = muted; return true; }
+            catch { _current = null; return false; }
+        }
+
+        public void Invalidate() { _current = null; }
+    }
+
     public static class VolumeControl
     {
-        [ComImport, Guid("5CDF2C82-841E-4546-9722-0CF74078229A"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-        interface IAudioEndpointVolume
-        {
-            int RegisterControlChangeNotify(IntPtr p);
-            int UnregisterControlChangeNotify(IntPtr p);
-            int GetChannelCount(out int count);
-            int SetMasterVolumeLevel(float level, ref Guid context);
-            int SetMasterVolumeLevelScalar(float level, ref Guid context);
-            int GetMasterVolumeLevel(out float level);
-            int GetMasterVolumeLevelScalar(out float level);
-            int SetChannelVolumeLevel(uint c, float l, ref Guid g);
-            int SetChannelVolumeLevelScalar(uint c, float l, ref Guid g);
-            int GetChannelVolumeLevel(uint c, out float l);
-            int GetChannelVolumeLevelScalar(uint c, out float l);
-            int SetMute(bool mute, ref Guid g);
-            int GetMute(out bool mute);
-            int GetVolumeStepInfo(out uint step, out uint count);
-            int VolumeStepUp(ref Guid g);
-            int VolumeStepDown(ref Guid g);
-            int QueryHardwareSupport(out uint mask);
-            int GetVolumeRange(out float min, out float max, out float inc);
-        }
+        static readonly object Sync = new object();
+        static MMDeviceEnumerator _enumerator;
+        static MMDevice _device;
+        static AudioEndpointVolume _endpoint;
 
-        [ComImport, Guid("D666063F-1587-4E43-81F1-B948E807363F"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-        interface IMMDeviceVol
+        static AudioEndpointVolume GetEndpoint()
         {
-            int Activate(ref Guid iid, int dwClsCtx, IntPtr activationParams, [MarshalAs(UnmanagedType.IUnknown)] out object ppInterface);
-        }
-
-        static IAudioEndpointVolume _cachedEp;
-
-        static IAudioEndpointVolume GetEndpoint()
-        {
-            if (_cachedEp != null) return _cachedEp;
-            try
+            lock (Sync)
             {
-                // 复用 AudioDevices.cs 中声明的 MMDeviceEnumerator2 ComImport 类，
-                // 避免 CLR 因重复 CLSID 引发"重复 CLSID → 不同托管类型"的混淆。
-                var e = (AudioDevices.IMMDeviceEnumerator2)new AudioDevices.MMDeviceEnumerator2();
-                IntPtr pDev;
-                if (e.GetDefaultAudioEndpoint(0, 0, out pDev) != 0 || pDev == IntPtr.Zero)
+                if (_endpoint != null) return _endpoint;
+                try
                 {
-                    Marshal.ReleaseComObject(e);
+                    _enumerator = _enumerator ?? new MMDeviceEnumerator();
+                    if (!_enumerator.TryGetDefaultAudioEndpoint(DataFlow.Render, Role.Console, out _device))
+                        return null;
+                    _endpoint = _device.AudioEndpointVolume;
+                    return _endpoint;
+                }
+                catch (Exception ex)
+                {
+                    AppLog.Log("Get audio endpoint volume", ex);
+                    InvalidateCore();
                     return null;
                 }
-                var dev = (IMMDeviceVol)Marshal.GetObjectForIUnknown(pDev);
-                var iid = new Guid("5CDF2C82-841E-4546-9722-0CF74078229A");
-                object ep;
-                dev.Activate(ref iid, 1, IntPtr.Zero, out ep);
-                Marshal.ReleaseComObject(dev);
-                Marshal.Release(pDev);
-                Marshal.ReleaseComObject(e);
-                _cachedEp = (IAudioEndpointVolume)ep;
-                return _cachedEp;
             }
-            catch { return null; }
         }
 
         public static void Invalidate()
         {
-            if (_cachedEp != null) { try { Marshal.ReleaseComObject(_cachedEp); } catch { } _cachedEp = null; }
+            lock (Sync) InvalidateCore();
+        }
+
+        static void InvalidateCore()
+        {
+            try { _endpoint?.Dispose(); } catch (Exception ex) { AppLog.Log("Dispose audio volume", ex); }
+            try { _device?.Dispose(); } catch (Exception ex) { AppLog.Log("Dispose audio device", ex); }
+            _endpoint = null;
+            _device = null;
+            // The enumerator is cheap and can be recreated after a device graph
+            // reset; retaining it is useful between normal UI refreshes.
+        }
+
+        public static void Shutdown()
+        {
+            lock (Sync)
+            {
+                InvalidateCore();
+                try { _enumerator?.Dispose(); } catch (Exception ex) { AppLog.Log("Dispose audio enumerator", ex); }
+                _enumerator = null;
+            }
         }
 
         public static float GetVolume()
         {
-            var ep = GetEndpoint(); if (ep == null) return 0;
-            try { float v; ep.GetMasterVolumeLevelScalar(out v); return v; }
-            catch { Invalidate(); return 0; }
+            lock (Sync)
+            {
+                var endpoint = GetEndpoint();
+                if (endpoint == null) return 0;
+                try { return Clamp(endpoint.MasterVolumeLevelScalar); }
+                catch (Exception ex) { AppLog.Log("Get volume", ex); InvalidateCore(); return 0; }
+            }
         }
 
-        public static void SetVolume(float v)
+        public static void SetVolume(float value)
         {
-            v = Math.Max(0, Math.Min(1, v));
-            var ep = GetEndpoint(); if (ep == null) return;
-            try { var g = Guid.Empty; ep.SetMasterVolumeLevelScalar(v, ref g); }
-            catch { Invalidate(); }
+            lock (Sync)
+            {
+                var endpoint = GetEndpoint();
+                if (endpoint == null) return;
+                try { endpoint.MasterVolumeLevelScalar = Clamp(value); }
+                catch (Exception ex) { AppLog.Log("Set volume", ex); InvalidateCore(); }
+            }
         }
 
         public static bool GetMute()
         {
-            var ep = GetEndpoint(); if (ep == null) return false;
-            try { bool m; ep.GetMute(out m); return m; }
-            catch { Invalidate(); return false; }
+            lock (Sync)
+            {
+                var endpoint = GetEndpoint();
+                if (endpoint == null) return false;
+                try { return endpoint.Mute; }
+                catch (Exception ex) { AppLog.Log("Get mute", ex); InvalidateCore(); return false; }
+            }
         }
 
-        public static void SetMute(bool m)
+        public static void SetMute(bool muted)
         {
-            var ep = GetEndpoint(); if (ep == null) return;
-            try { var g = Guid.Empty; ep.SetMute(m, ref g); }
-            catch { Invalidate(); }
+            lock (Sync)
+            {
+                var endpoint = GetEndpoint();
+                if (endpoint == null) return;
+                try { endpoint.Mute = muted; }
+                catch (Exception ex) { AppLog.Log("Set mute", ex); InvalidateCore(); }
+            }
+        }
+
+        public static float Clamp(float value)
+        {
+            if (float.IsNaN(value)) return 0;
+            if (value < 0) return 0;
+            if (value > 1) return 1;
+            return value;
         }
     }
-
 }

@@ -9,6 +9,14 @@ using System.IO;
 
 namespace PowerAudioManager
 {
+    public static class MonitorLifecyclePolicy
+    {
+        public static bool ShouldCollect(bool moduleEnabled, bool isExiting)
+        {
+            return moduleEnabled && !isExiting;
+        }
+    }
+
     // 温度/性能监控：OneBoxSvc 守护、硬件传感器轮询、指标行与折叠态温度刷新。
     public partial class MainWindow : Window
     {
@@ -16,6 +24,14 @@ namespace PowerAudioManager
         {
             try
             {
+                var registration = AutoStartService.GetServiceRegistrationKind();
+                if (registration == OneBox.Contracts.ServiceImagePathKind.LegacyGui || registration == OneBox.Contracts.ServiceImagePathKind.Other)
+                {
+                    AppLog.Log("Service", "legacy or foreign service image path detected; requesting explicit repair");
+                    string repairError = AutoStartService.RepairService();
+                    if (repairError != null) AppLog.Log("Service", "repair failed: " + repairError);
+                    return;
+                }
                 using (var svc = new System.ServiceProcess.ServiceController("OneBoxSvc"))
                 {
                     if (svc.Status != System.ServiceProcess.ServiceControllerStatus.Running)
@@ -30,7 +46,11 @@ namespace PowerAudioManager
 
         void StartTempMonitor()
         {
-            if (!ModuleVisible("Temp")) return;
+            if (!MonitorLifecyclePolicy.ShouldCollect(ModuleVisible("Temp"), _isExiting))
+            {
+                StopTempMonitor();
+                return;
+            }
             // PerfHistory/ForegroundHistory 改为性能趋势图窗口打开时按需加载采集（见 PerfChartWindow.Acquire/Release），
             // 不在启动时加载、不在后台常驻--图表关闭即释放每条 series ~1MB 内存。
             HardwareMonitorService.Instance.Start();
@@ -40,27 +60,49 @@ namespace PowerAudioManager
 
         void StartTempTimer()
         {
-            try { _tempTimer?.Dispose(); } catch { }
+            StopTempTimerOnly();
             int intervalMs = AppPrefs.GetInt("Temp.IntervalMs", 1000);
             if (intervalMs < 500) intervalMs = 500;
             if (intervalMs > 60000) intervalMs = 60000;
             _tempTimer = new System.Threading.Timer(_ =>
             {
-                HardwareMonitorService.Instance.Update();
-                Dispatcher.BeginInvoke(new Action(() =>
+                if (!MonitorLifecyclePolicy.ShouldCollect(ModuleVisible("Temp"), _isExiting)) return;
+                try { HardwareMonitorService.Instance.Update(); }
+                catch (Exception ex) { AppLog.Log("Temperature update", ex); return; }
+                if (Dispatcher.HasShutdownStarted) return;
+                try
                 {
-                    UpdateTempUI();
-                    PerfHistory.Add(HardwareMonitorService.Instance.ActiveMetrics);
-                }));
+                    Dispatcher.BeginInvoke(new Action(() =>
+                    {
+                        if (!MonitorLifecyclePolicy.ShouldCollect(ModuleVisible("Temp"), _isExiting)) return;
+                        UpdateTempUI();
+                        PerfHistory.Add(HardwareMonitorService.Instance.ActiveMetrics);
+                    }));
+                }
+                catch (Exception ex) { AppLog.Log("Temperature dispatch", ex); }
             }, null, 2000, intervalMs);
         }
 
         internal void RestartTempTimer()
         {
-            try { _tempTimer?.Dispose(); } catch { }
-            if (!ModuleVisible("Temp")) return;
+            StopTempMonitor();
+            if (!MonitorLifecyclePolicy.ShouldCollect(ModuleVisible("Temp"), _isExiting)) return;
             HardwareMonitorService.Instance.Start();
             StartTempTimer();
+        }
+
+        void StopTempTimerOnly()
+        {
+            var timer = System.Threading.Interlocked.Exchange(ref _tempTimer, null);
+            try { timer?.Dispose(); } catch { }
+        }
+
+        void StopTempMonitor()
+        {
+            StopTempTimerOnly();
+            try { HardwareMonitorService.Instance.Stop(); } catch (Exception ex) { AppLog.Log("Temperature stop", ex); }
+            _metricValBlocks = null;
+            _metricKeys = null;
         }
 
         void UpdateTempUI()
@@ -106,7 +148,8 @@ namespace PowerAudioManager
                             for (int i = 0; i < metrics.Count; i++)
                             {
                                 if (i > 0)
-                                    _metricRow.Children.Add(new TextBlock { Text = " │ ", Foreground = UiKit.FrozenBrush(UiKit.BorderColor), FontSize = 11, VerticalAlignment = VerticalAlignment.Center, Opacity = 0.5 });
+                                    _metricRow.Children.Add(new Border { Width = 1, Height = 12, Background = UiKit.FrozenBrush(UiKit.BorderColor),
+                                        Margin = new Thickness(6, 0, 6, 0), VerticalAlignment = VerticalAlignment.Center, Opacity = 0.5 });
 
                                 var m = metrics[i];
                                 var iconColor = UiKit.MetricIconColorByKey(m.IconKey);
@@ -136,16 +179,22 @@ namespace PowerAudioManager
                 {
                     var hw = HardwareMonitorService.Instance;
                     _collapsedTempLabel.Inlines.Clear();
-                    _collapsedTempLabel.FontFamily = CompFont;
+                    _collapsedTempLabel.FontFamily = AppFont;
                     _collapsedTempLabel.FontSize = 10;
                     if (hw.CpuTemperature.HasValue)
                     {
-                        _collapsedTempLabel.Inlines.Add(new Run("\U0001F321 "));
+                        _collapsedTempLabel.Inlines.Add(new InlineUIContainer(
+                            IconCatalog.CreateElement(IconKey.Temperature, 12,
+                                UiKit.FrozenBrush(UiKit.TextSecondary))));
+                        _collapsedTempLabel.Inlines.Add(new Run(" "));
                         _collapsedTempLabel.Inlines.Add(new Run($"{hw.CpuTemperature.Value:0}  "));
                     }
                     if (hw.GpuTemperature.HasValue)
                     {
-                        _collapsedTempLabel.Inlines.Add(new Run("\U0001F3AE "));
+                        _collapsedTempLabel.Inlines.Add(new InlineUIContainer(
+                            IconCatalog.CreateElement(IconKey.Gpu, 12,
+                                UiKit.FrozenBrush(UiKit.TextSecondary))));
+                        _collapsedTempLabel.Inlines.Add(new Run(" "));
                         _collapsedTempLabel.Inlines.Add(new Run($"{hw.GpuTemperature.Value:0}"));
                     }
                 }

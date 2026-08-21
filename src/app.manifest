@@ -19,8 +19,8 @@
   <application xmlns="urn:schemas-microsoft-com:asm.v3">
     <windowsSettings>
       <!-- Per-Monitor V2 DPI awareness is configured via <ApplicationHighDpiMode>
-           in OneBox.csproj (.NET 8 mechanism). The legacy manifest dpiAware/
-           dpiAwareness entries are intentionally omitted: .NET 8 strips them and
+           in OneBox.csproj (.NET 10 mechanism). The legacy manifest dpiAware/
+           dpiAwareness entries are intentionally omitted: the SDK strips them and
            they would only raise WFAC010. ApplyScaling divides its layout scale by
            the live DPI so it doesn't double-count the DPI scaling. -->
     </windowsSettings>

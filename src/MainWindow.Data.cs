@@ -6,6 +6,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
 using System.IO;
+using PowerAudioManager.Commands;
 
 namespace PowerAudioManager
 {
@@ -28,12 +29,26 @@ namespace PowerAudioManager
                 List<AudioDeviceInfo> devices = null;
                 try { plans = PowerPlanService.GetPowerPlans(); } catch (Exception ex) { AppLog.Log("LoadData plans", ex); }
                 try { devices = AudioDevices.GetOutputDevices(); } catch (Exception ex) { AppLog.Log("LoadData devices", ex); }
-                Dispatcher.BeginInvoke(new Action(() =>
+                try
+                {
+                    if (_isExiting || Dispatcher.HasShutdownStarted)
+                    {
+                        _loading = false;
+                        return;
+                    }
+                    Dispatcher.BeginInvoke(new Action(() =>
+                    {
+                        if (_isExiting) { _loading = false; return; }
+                        _loading = false;
+                        RenderPlans(plans);
+                        RenderDevices(devices);
+                    }));
+                }
+                catch (Exception ex)
                 {
                     _loading = false;
-                    RenderPlans(plans);
-                    RenderDevices(devices);
-                }));
+                    AppLog.Log("LoadData dispatch", ex);
+                }
             });
         }
 
@@ -81,7 +96,7 @@ namespace PowerAudioManager
                 {
                     _audioSection.Children.Add(new TextBlock
                     {
-                        Text = "未找到音频设备",
+                        Text = "未找到音频输出",
                         Foreground = new SolidColorBrush(UiKit.TextSecondary),
                         FontSize = 11
                     });
@@ -110,16 +125,8 @@ namespace PowerAudioManager
             };
             StyleButton(btn, isActive);
             btn.MouseDoubleClick += (s, e) => { try { System.Diagnostics.Process.Start("control.exe", "powercfg.cpl"); } catch { } e.Handled = true; };
-            btn.Click += (s, e) =>
-            {
-                // 乐观标记选中计划为活动态让 UI 即时响应，再后台切换避免系统策略刷新导致 1-3s UI 冻结。
-                _currentPlanId = plan.Guid;
-                foreach (var p in _powerPlans) p.IsActive = p.Guid == plan.Guid;
-                if (_powerSection == null) return;
-                _powerSection.Children.Clear();
-                foreach (var p in _powerPlans) _powerSection.Children.Add(CreatePlanButton(p));
-                PowerPlanService.SetActivePlanAsync(plan.Guid, Dispatcher, ok => { AppLog.Log("PowerPlan", "switch to " + plan.Name + " (" + plan.Guid + ") ok=" + ok); if (ok) LoadData(); });
-            };
+            btn.Command = CreateUiCommand(AppCommandId.PowerActivate, CommandSource.MainWindow,
+                () => new PowerActivatePayload(plan.Guid));
             return btn;
         }
 
@@ -158,16 +165,8 @@ namespace PowerAudioManager
                 ToolTip = hkText != null ? dev.Name + "  [" + hkText + "]" : dev.Name
             };
             StyleButton(btn, isActive);
-            btn.Click += (s, e) =>
-            {
-                if (AudioDevices.SetDefaultDevice(dev.Id))
-                {
-                    _currentDeviceId = dev.Id;
-                    VolumeControl.Invalidate();
-                    LoadData();
-                    ScheduleVolumeRefresh();
-                }
-            };
+            btn.Command = CreateUiCommand(AppCommandId.AudioActivate, CommandSource.MainWindow,
+                () => new AudioActivatePayload(dev.Id));
             var devCtx = new ContextMenu();
             var hideItem = new MenuItem { Header = "隐藏此设备" };
             hideItem.Click += (s, e) => { DevicePrefs.SetHidden(dev.Name, true); LoadData(); RefreshHotkeys(); };
@@ -199,7 +198,7 @@ namespace PowerAudioManager
             _volSliderUpdating = true;
             try { _volSlider.Value = VolumeControl.GetVolume() * 100; if (_volLabel != null) _volLabel.Text = ((int)_volSlider.Value).ToString() + "%"; } catch { }
             _volSliderUpdating = false;
-            _muteBtn.Content = UiKit.MuteIcon(VolumeControl.GetMute());
+            _muteBtn.Content = UiKit.MuteIcon(VolumeControl.GetMute(), UiKit.FrozenBrush(UiKit.TextSecondary));
         }
 
         void ScheduleVolumeRefresh()
@@ -224,7 +223,7 @@ namespace PowerAudioManager
                 try { if (_audioDevices != null) { var d = _audioDevices.Find(x => x.IsDefault); if (d != null) dev = d.Name; } } catch { }
                 string mem = "";
                 try { var ms = MemoryCleaner.GetStatus(); if (ms != null) mem = string.Format(System.Environment.NewLine + "内存: {0:0.0}/{1:0.0} GB ({2}%) · 已缓存 {3:0.0}GB", (ms.TotalBytes - ms.AvailableBytes) / 1073741824.0, ms.TotalBytes / 1073741824.0, ms.MemoryLoadPercent, ms.CachedBytes / 1073741824.0); } catch { }
-                return "电源计划: " + plan + System.Environment.NewLine + "音频设备: " + dev + mem;
+                return "电源计划: " + plan + System.Environment.NewLine + "音频输出: " + dev + mem;
             }
         }
 
