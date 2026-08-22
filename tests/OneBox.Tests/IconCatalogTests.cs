@@ -3,6 +3,7 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Windows.Media.Imaging;
+using System.Windows;
 using System.Reflection;
 using Xunit;
 
@@ -55,6 +56,71 @@ namespace PowerAudioManager.Tests
             Assert.NotNull(image.UriSource);
             Assert.Equal(Uri.UriSchemeFile, image.UriSource.Scheme);
             Assert.True(File.Exists(image.UriSource.LocalPath), image.UriSource.LocalPath);
+        }
+
+        [Fact]
+        public void AuthoredTrayIconHasTransparentMatteAndAntialiasedEdges()
+        {
+            var root = FindRepoRoot();
+            var png = Path.Combine(root, "src", "app.png");
+            var ico = Path.Combine(root, "src", "app.ico");
+
+            AssertTransparentIconFrame(png, new Size(256, 256));
+            using var stream = File.OpenRead(ico);
+            var decoder = new IconBitmapDecoder(stream, BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.OnLoad);
+            var expected = new[] { 16, 20, 24, 32, 40, 48, 64, 128, 256 };
+            Assert.Equal(expected.Length, decoder.Frames.Count);
+            foreach (var size in expected)
+            {
+                var frame = decoder.Frames.Single(f => f.PixelWidth == size && f.PixelHeight == size);
+                AssertTransparentFrame(frame, size);
+            }
+        }
+
+        static void AssertTransparentIconFrame(string path, Size expectedSize)
+        {
+            using var stream = File.OpenRead(path);
+            var decoder = new PngBitmapDecoder(stream, BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.OnLoad);
+            Assert.Single(decoder.Frames);
+            Assert.Equal(expectedSize.Width, decoder.Frames[0].PixelWidth);
+            Assert.Equal(expectedSize.Height, decoder.Frames[0].PixelHeight);
+            AssertTransparentFrame(decoder.Frames[0], (int)expectedSize.Width);
+        }
+
+        static void AssertTransparentFrame(BitmapSource source, int size)
+        {
+            var frame = new FormatConvertedBitmap(source, System.Windows.Media.PixelFormats.Bgra32, null, 0);
+            var pixels = new byte[size * size * 4];
+            frame.CopyPixels(pixels, size * 4, 0);
+
+            byte AlphaAt(int x, int y) => pixels[(y * size + x) * 4 + 3];
+            Assert.Equal(0, AlphaAt(0, 0));
+            Assert.Equal(0, AlphaAt(size - 1, 0));
+            Assert.Equal(0, AlphaAt(0, size - 1));
+            Assert.Equal(0, AlphaAt(size - 1, size - 1));
+            // The cube's top face is an intentionally empty hole.  Checking
+            // it catches a white matte reappearing even if the outer corners
+            // remain transparent.
+            Assert.InRange(AlphaAt(size / 2, size / 4), (byte)0, (byte)8);
+            Assert.Contains(pixels.Where((_, index) => index % 4 == 3), alpha => alpha > 0 && alpha < 255);
+
+            for (var index = 0; index < size * size; index++)
+            {
+                var alpha = pixels[index * 4 + 3];
+                if (alpha <= 16) continue;
+                var blue = pixels[index * 4];
+                var green = pixels[index * 4 + 1];
+                var red = pixels[index * 4 + 2];
+                Assert.False(red > 240 && green > 240 && blue > 240,
+                    $"near-white opaque pixel at {index % size},{index / size} (RGBA {red},{green},{blue},{alpha})");
+            }
+
+            var visible = Enumerable.Range(0, size * size)
+                .Where(index => pixels[index * 4 + 3] > 240)
+                .Select(index => (r: pixels[index * 4 + 2], g: pixels[index * 4 + 1], b: pixels[index * 4]))
+                .ToArray();
+            Assert.NotEmpty(visible);
+            Assert.Contains(visible, color => Math.Abs(color.r - 0x8E) <= 1 && Math.Abs(color.g - 0x8C) <= 1 && Math.Abs(color.b - 0xD8) <= 1);
         }
 
         [Fact]
