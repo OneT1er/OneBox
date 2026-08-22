@@ -109,6 +109,7 @@ namespace PowerAudioManager
                     }
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { break; }
+                catch (Exception) when (cancellationToken.IsCancellationRequested) { break; }
                 catch (Exception ex) { AppLog.Log("Temp", "hardware pipe rejected/disconnected: " + ex.Message); }
                 finally
                 {
@@ -347,18 +348,23 @@ namespace PowerAudioManager
         {
             CancellationTokenSource cancellation;
             Task task;
+            NamedPipeClientStream activePipe;
             lock (_gate)
             {
                 if (!_started) return;
                 _started = false;
                 cancellation = _pipeCancellation;
                 task = _pipeTask;
+                activePipe = _activePipe;
                 _pipeCancellation = null;
                 _pipeTask = null;
-                try { _activePipe?.Dispose(); } catch { }
                 _activePipe = null;
             }
+            // Signal cancellation before disposing the transport so a normal
+            // rebuild/restart is observed as an intentional shutdown rather
+            // than an EOF/rejected pipe failure in the client log.
             try { cancellation?.Cancel(); } catch { }
+            try { activePipe?.Dispose(); } catch { }
             try { task?.Wait(2000); } catch { }
             cancellation?.Dispose();
             lock (_gate)

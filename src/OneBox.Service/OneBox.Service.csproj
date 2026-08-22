@@ -19,4 +19,12 @@
   <ItemGroup>
     <Compile Include="..\Shared\SecurePipe.cs" Link="Infrastructure\SecurePipe.cs" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- Do not publish local verification output exposed through the
+         workspace's src/OneBox.Service/artifacts reparse point. -->
+    <Compile Remove="artifacts\**" />
+    <EmbeddedResource Remove="artifacts\**" />
+    <None Remove="artifacts\**" />
+    <Content Remove="artifacts\**" />
+  </ItemGroup>
 </Project>

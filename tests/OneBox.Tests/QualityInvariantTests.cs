@@ -3,10 +3,14 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
+using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Win32;
 using PowerAudioManager;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using Xunit;
 
 namespace OneBox.Tests;
@@ -61,6 +65,50 @@ public sealed class QualityInvariantTests
     }
 
     [Fact]
+    public void PipeIdentityVerification_UsesPipeOwnerInsteadOfOpeningSystemProcess()
+    {
+        string source = ReadSource("src", "PipeServerIdentityVerifier.cs");
+        Assert.Contains("GetSecurityInfo", source, StringComparison.Ordinal);
+        Assert.Contains("DangerousAddRef", source, StringComparison.Ordinal);
+        Assert.Contains("OwnerSecurityInformation", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("private static extern IntPtr OpenProcess", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void HardwareRuntime_ReclaimsSidScopedStaleCompanionPipe()
+    {
+        string source = ReadSource("src", "OneBox.Service", "UserRuntime.cs");
+        Assert.Contains("CleanupStaleHardwarePipe", source, StringComparison.Ordinal);
+        Assert.Contains("GetNamedPipeServerProcessId", source, StringComparison.Ordinal);
+        Assert.Contains("ServiceConstants.HardwareExecutable", source, StringComparison.Ordinal);
+        Assert.Contains("Kill(entireProcessTree: true)", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void HardwareRuntime_StopOwnsAndKillsHelperBeforeCancellingGuardian()
+    {
+        string source = ReadSource("src", "OneBox.Service", "UserRuntime.cs");
+        Assert.Contains("_hardwareGate", source, StringComparison.Ordinal);
+        Assert.Contains("_stopping", source, StringComparison.Ordinal);
+        int stop = source.IndexOf("public async Task StopAsync()", StringComparison.Ordinal);
+        int terminate = source.IndexOf("TerminateHardwareProcess(process);", stop, StringComparison.Ordinal);
+        int cancel = source.IndexOf("_stop.Cancel();", stop, StringComparison.Ordinal);
+        Assert.True(terminate >= 0 && cancel > terminate,
+            "StopAsync must terminate the owned helper before cancelling the guardian.");
+    }
+
+    [Fact]
+    public void HardwareMonitor_StopCancelsBeforeDisposingPipeAndSuppressesExpectedClose()
+    {
+        string source = ReadSource("src", "HardwareMonitorService.cs");
+        Assert.Contains("catch (Exception) when (cancellationToken.IsCancellationRequested)", source, StringComparison.Ordinal);
+        int cancel = source.IndexOf("cancellation?.Cancel();", StringComparison.Ordinal);
+        int dispose = source.IndexOf("activePipe?.Dispose();", StringComparison.Ordinal);
+        Assert.True(cancel >= 0 && dispose > cancel,
+            "HardwareMonitorService.Stop must cancel before disposing the active pipe.");
+    }
+
+    [Fact]
     public void ElevatedHelpers_LogWithoutShowingDuplicateDialogs()
     {
         string app = ReadSource("src", "App.cs");
@@ -73,6 +121,31 @@ public sealed class QualityInvariantTests
     }
 
     [Fact]
+    public void StartupServiceCheck_CannotBlockLoadedUiThread()
+    {
+        string source = ReadSource("src", "MainWindow.cs");
+        int taskStart = source.IndexOf("Task.Run", StringComparison.Ordinal);
+        int serviceCall = source.IndexOf("EnsureServiceRunning();", StringComparison.Ordinal);
+        Assert.True(taskStart >= 0, "service startup must be dispatched off the WPF Loaded handler");
+        Assert.True(serviceCall > taskStart, "EnsureServiceRunning must run inside the background task");
+        Assert.Contains("OnLoaded done", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TrayStartup_ForceCreatesVerifiesAndReleasesShellIcon()
+    {
+        string source = ReadSource("src", "TrayController.cs");
+        Assert.Contains("ForceCreate(false)", source, StringComparison.Ordinal);
+        Assert.Contains("_tray.IsCreated", source, StringComparison.Ordinal);
+        Assert.Contains("StartRetry", source, StringComparison.Ordinal);
+        Assert.Contains("StopRetry", source, StringComparison.Ordinal);
+        Assert.Contains("MaxTrayRetryAttempts", source, StringComparison.Ordinal);
+        Assert.Contains("StopRetry();", source, StringComparison.Ordinal);
+        Assert.Contains("_tray?.Dispose()", source, StringComparison.Ordinal);
+        Assert.Contains("state changed:", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void GeneralSettings_DoNotApplyAfterPersistenceFailure()
     {
         string dialog = ReadSource("src", "SettingsDialog.cs");
@@ -81,6 +154,25 @@ public sealed class QualityInvariantTests
         Assert.Contains("if (!TryPersist", ReadSource("src", "SettingsDialog.General.cs"), StringComparison.Ordinal);
         Assert.Contains("previousTopmost", command, StringComparison.Ordinal);
         Assert.Contains("AppPrefs.Set(PreferenceKeys.Window.Topmost, previousTopmost)", command, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SettingsComboBoxes_UseCompleteDarkPopupAndItemTemplate()
+    {
+        string theme = ReadSource("src", "ThemeTokens.cs");
+        string resources = ReadSource("src", "AppResources.cs");
+        string metrics = ReadSource("src", "SettingsDialog.Metrics.cs");
+
+        Assert.Contains("CreateDarkComboBoxStyle", resources, StringComparison.Ordinal);
+        Assert.Contains("CreateComboBoxTemplate", theme, StringComparison.Ordinal);
+        Assert.Contains("CreateComboBoxItemTemplate", theme, StringComparison.Ordinal);
+        Assert.Contains("DropDownChrome", theme, StringComparison.Ordinal);
+        Assert.Contains("Popup.AllowsTransparencyProperty", theme, StringComparison.Ordinal);
+        Assert.Contains("ComboBox.IsDropDownOpenProperty", theme, StringComparison.Ordinal);
+        Assert.Contains("Selector.IsSelectedProperty", theme, StringComparison.Ordinal);
+        Assert.Contains("ScrollViewer.BackgroundProperty, Brush(Card)", theme, StringComparison.Ordinal);
+        Assert.Contains("StyleDarkComboBox(typeCombo)", metrics, StringComparison.Ordinal);
+        Assert.Contains("StyleDarkComboBox(sensorCombo)", metrics, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -147,6 +239,57 @@ public sealed class QualityInvariantTests
         string stderr = process.StandardError.ReadToEnd();
         Assert.Equal(0, process.ExitCode);
         Assert.DoesNotContain("FileNotFoundException", stderr, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TrayMenuTheme_UsesTransparentPopupChromeAndVectorStates()
+    {
+        string source = ReadSource("src", "TrayController.cs");
+        Assert.Contains("CreateTrayMenu", source, StringComparison.Ordinal);
+        Assert.Contains("HasDropShadow = false", source, StringComparison.Ordinal);
+        Assert.Contains("ContextMenuService.SetHasDropShadow(menu, false)", source, StringComparison.Ordinal);
+        Assert.Contains("Popup.AllowsTransparencyProperty, true", source, StringComparison.Ordinal);
+        Assert.Contains("CheckMark", source, StringComparison.Ordinal);
+        Assert.Contains("Path.StrokeProperty, UiKit.FrozenBrush(UiKit.AccentColor)", source, StringComparison.Ordinal);
+        Assert.Contains("CreateTraySeparatorStyle", source, StringComparison.Ordinal);
+        Assert.Contains("SubmenuPopup", source, StringComparison.Ordinal);
+        // Popup.HasDropShadowProperty is read-only. It cannot be assigned by
+        // FrameworkElementFactory; the transparent popup chrome plus the
+        // ContextMenuService setting above are the supported no-shadow path.
+        Assert.DoesNotContain("Popup.HasDropShadowProperty", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("ButtonBase.IsPressedProperty", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TrayMenuTemplate_CanInstantiateOnStaWithoutReadOnlyPopupPropertyFailure()
+    {
+        Exception failure = null;
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                var trayType = typeof(MainWindow).Assembly.GetType("PowerAudioManager.TrayController", throwOnError: true);
+                var factory = trayType.GetMethod("CreateTrayMenu", BindingFlags.Static | BindingFlags.NonPublic);
+                Assert.NotNull(factory);
+                var menu = Assert.IsType<ContextMenu>(factory.Invoke(null, null));
+                Assert.False(menu.HasDropShadow);
+                Assert.False(ContextMenuService.GetHasDropShadow(menu));
+                var item = new MenuItem { Header = "Template smoke", IsCheckable = true, IsChecked = true };
+                menu.Items.Add(item);
+                Assert.True(menu.ApplyTemplate());
+                Assert.True(item.ApplyTemplate());
+            }
+            catch (Exception ex)
+            {
+                failure = ex is TargetInvocationException { InnerException: not null } invocation
+                    ? invocation.InnerException
+                    : ex;
+            }
+        });
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        thread.Join();
+        Assert.Null(failure);
     }
 
     private static string ReadSource(params string[] parts)

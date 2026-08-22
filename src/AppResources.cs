@@ -141,9 +141,18 @@ namespace PowerAudioManager
         }
 
         // Shared combo surface defaults.
-        // 已自动渲染深色紫影下拉框。保留为空方法以便迁移期间现有调用点编译通过。
+        // Apply the complete dark template (closed state, popup, item hover,
+        // selection, focus and disabled states).  WPF's default ComboBox
+        // template is tied to the Windows light theme and leaves white
+        // surfaces behind even when Background/Foreground are set locally.
         public static void StyleDarkComboBox(ComboBox cb)
         {
+            if (cb == null) return;
+            cb.Style = ThemeTokens.CreateDarkComboBoxStyle();
+            cb.Background = new SolidColorBrush(ThemeTokens.Card);
+            cb.Foreground = new SolidColorBrush(Color.FromRgb(230, 228, 250));
+            cb.BorderBrush = new SolidColorBrush(ThemeTokens.Border);
+            cb.BorderThickness = new Thickness(1);
         }
 
     }

@@ -4,4 +4,12 @@
     <AssemblyName>OneBox.Contracts</AssemblyName>
     <RootNamespace>OneBox.Contracts</RootNamespace>
   </PropertyGroup>
+  <ItemGroup>
+    <!-- Contracts are referenced by both runtime processes; keep build and
+         verification directories out of every consuming publish graph. -->
+    <Compile Remove="artifacts\**" />
+    <EmbeddedResource Remove="artifacts\**" />
+    <None Remove="artifacts\**" />
+    <Content Remove="artifacts\**" />
+  </ItemGroup>
 </Project>

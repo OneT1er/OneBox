@@ -253,8 +253,14 @@ namespace PowerAudioManager
                     }
                     catch (Exception ex) { AppLog.Log("Startup LoadData dispatch", ex); }
                 }, null, 50, System.Threading.Timeout.Infinite);
-                // 确保服务运行（温度/内存 helper），未运行则提权启动一次（UAC 一次，之后服务常驻无 UAC）
-                try { EnsureServiceRunning(); } catch { }
+                // 服务状态检查可能触发 runas/UAC。绝不能在 Loaded UI 线程同步等待，
+                // 否则 UAC 被用户延后或关闭时，整个窗口（包括托盘和性能指标）都会冻结。
+                _ = System.Threading.Tasks.Task.Run(() =>
+                {
+                    if (_isExiting) return;
+                    try { EnsureServiceRunning(); }
+                    catch (Exception ex) { AppLog.Log("Service", "background startup check: " + ex.Message); }
+                });
                 // 温度监控启动（后台初始化硬件传感器）
                 try { StartTempMonitor(); } catch { }
                 AppLog.Log("Startup", "OnLoaded done " + sw.ElapsedMilliseconds + "ms");
@@ -313,6 +319,9 @@ namespace PowerAudioManager
         {
             if (!_exitLifecycle.TryBegin()) return;
             _isExiting = true;
+            // Prevent a trailing throttled slider value from being dispatched
+            // while the window and audio endpoint are shutting down.
+            try { CancelPendingVolumeCommand(); } catch { }
             try { _refreshTimer?.Stop(); } catch { }
             try { _screenPoll?.Stop(); } catch { }
             try { _autoCleanTimer?.Stop(); } catch { }

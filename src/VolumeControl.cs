@@ -3,6 +3,74 @@ using NAudio.CoreAudioApi;
 
 namespace PowerAudioManager
 {
+    /// <summary>
+    /// Keeps slider notifications from becoming a stream of audio commands.
+    /// Programmatic UI synchronization is never accepted, equal values are
+    /// ignored, and real user changes are coalesced to at most one command per
+    /// interval. The latest value remains pending so the end of a drag is not
+    /// lost.
+    /// </summary>
+    public sealed class AudioVolumeCommandGate
+    {
+        public const float EqualityEpsilon = 0.001f;
+        readonly TimeSpan _minimumInterval;
+        float? _lastSent;
+        DateTime _lastSentAt;
+        bool _hasSent;
+        float? _pending;
+
+        public AudioVolumeCommandGate(TimeSpan minimumInterval)
+        {
+            if (minimumInterval < TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(minimumInterval));
+            _minimumInterval = minimumInterval;
+        }
+
+        public bool HasPending => _pending.HasValue;
+
+        public void CancelPending()
+        {
+            _pending = null;
+        }
+
+        public bool TryAccept(float value, bool programmatic, DateTime now, out float dispatchValue)
+        {
+            dispatchValue = 0;
+            if (programmatic || float.IsNaN(value) || value < 0 || value > 1)
+            {
+                _pending = null;
+                return false;
+            }
+
+            value = VolumeControl.Clamp(value);
+            if (_lastSent.HasValue && NearlyEqual(_lastSent.Value, value))
+            {
+                _pending = null;
+                return false;
+            }
+
+            _pending = value;
+            if (_hasSent && now - _lastSentAt < _minimumInterval) return false;
+            return TryFlush(now, out dispatchValue);
+        }
+
+        public bool TryFlush(DateTime now, out float dispatchValue)
+        {
+            dispatchValue = 0;
+            if (!_pending.HasValue || (_hasSent && now - _lastSentAt < _minimumInterval)) return false;
+            dispatchValue = _pending.Value;
+            _pending = null;
+            _lastSent = dispatchValue;
+            _lastSentAt = now;
+            _hasSent = true;
+            return true;
+        }
+
+        static bool NearlyEqual(float left, float right)
+        {
+            return Math.Abs(left - right) < EqualityEpsilon;
+        }
+    }
+
     public interface IAudioEndpointVolumeSession
     {
         float Volume { get; set; }
@@ -121,7 +189,16 @@ namespace PowerAudioManager
             {
                 var endpoint = GetEndpoint();
                 if (endpoint == null) return;
-                try { endpoint.MasterVolumeLevelScalar = Clamp(value); }
+                try
+                {
+                    float target = Clamp(value);
+                    // Avoid writing the endpoint when a refresh/retry reports
+                    // the value it already has. This is especially important
+                    // during device graph notifications.
+                    if (Math.Abs(Clamp(endpoint.MasterVolumeLevelScalar) - target) < AudioVolumeCommandGate.EqualityEpsilon)
+                        return;
+                    endpoint.MasterVolumeLevelScalar = target;
+                }
                 catch (Exception ex) { AppLog.Log("Set volume", ex); InvalidateCore(); }
             }
         }

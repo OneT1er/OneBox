@@ -34,6 +34,51 @@ namespace OneBox.Tests
         }
 
         [Fact]
+        public void VolumeCommandGateIgnoresProgrammaticAndDuplicateUpdates()
+        {
+            var gate = new AudioVolumeCommandGate(TimeSpan.Zero);
+            var now = DateTime.UtcNow;
+
+            Assert.False(gate.TryAccept(0.42f, true, now, out _));
+            Assert.True(gate.TryAccept(0.42f, false, now, out var first));
+            Assert.Equal(0.42f, first);
+            Assert.False(gate.TryAccept(0.4205f, false, now, out _));
+            Assert.False(gate.HasPending);
+        }
+
+        [Fact]
+        public void VolumeCommandGateCoalescesDragAndFlushesLatestValue()
+        {
+            var gate = new AudioVolumeCommandGate(TimeSpan.FromMilliseconds(75));
+            var now = DateTime.UtcNow;
+
+            Assert.True(gate.TryAccept(0.10f, false, now, out var first));
+            Assert.Equal(0.10f, first);
+            Assert.False(gate.TryAccept(0.20f, false, now.AddMilliseconds(10), out _));
+            Assert.False(gate.TryAccept(0.30f, false, now.AddMilliseconds(20), out _));
+            Assert.True(gate.HasPending);
+            Assert.False(gate.TryFlush(now.AddMilliseconds(70), out _));
+            Assert.True(gate.TryFlush(now.AddMilliseconds(75), out var latest));
+            Assert.Equal(0.30f, latest);
+            Assert.False(gate.HasPending);
+        }
+
+        [Fact]
+        public void VolumeCommandGateCancelPendingDropsTrailingCommand()
+        {
+            var gate = new AudioVolumeCommandGate(TimeSpan.FromMilliseconds(75));
+            var now = DateTime.UtcNow;
+
+            Assert.True(gate.TryAccept(0.10f, false, now, out _));
+            Assert.False(gate.TryAccept(0.80f, false, now.AddMilliseconds(10), out _));
+            Assert.True(gate.HasPending);
+            gate.CancelPending();
+
+            Assert.False(gate.HasPending);
+            Assert.False(gate.TryFlush(now.AddSeconds(1), out _));
+        }
+
+        [Fact]
         public void NotificationGateDebouncesAndStopsExactlyOnce()
         {
             int calls = 0;

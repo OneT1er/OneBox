@@ -13,8 +13,19 @@ namespace PowerAudioManager
     // 数据加载与渲染：电源计划 / 音频设备 / 音量 / 托盘状态文本。
     public partial class MainWindow : Window
     {
+        bool _volumeInputReady;
+        readonly AudioVolumeCommandGate _volumeCommandGate =
+            new AudioVolumeCommandGate(TimeSpan.FromMilliseconds(75));
+        DispatcherTimer _volumeCommandTimer;
+        bool _volumeLifecycleHooked;
+
         internal void LoadData()
         {
+            // A full data/device refresh supersedes a pending drag value. Do
+            // this at the refresh boundary, not inside UpdateVolumeUI: the
+            // latter is also called after a real user volume command and must
+            // not cancel the next value in the same drag.
+            CancelPendingVolumeCommand();
             try { UpdateVolumeUI(); } catch { }
             try { UpdateMemoryUI(); } catch { }
             try { UpdateTrayTooltip(); } catch { }
@@ -196,9 +207,50 @@ namespace PowerAudioManager
         {
             if (_volSlider == null) return;
             _volSliderUpdating = true;
-            try { _volSlider.Value = VolumeControl.GetVolume() * 100; if (_volLabel != null) _volLabel.Text = ((int)_volSlider.Value).ToString() + "%"; } catch { }
-            _volSliderUpdating = false;
-            _muteBtn.Content = UiKit.MuteIcon(VolumeControl.GetMute(), UiKit.FrozenBrush(UiKit.TextSecondary));
+            try
+            {
+                _volSlider.Value = VolumeControl.GetVolume() * 100;
+                if (_volLabel != null) _volLabel.Text = ((int)_volSlider.Value).ToString() + "%";
+                if (_muteBtn != null)
+                    _muteBtn.Content = UiKit.MuteIcon(VolumeControl.GetMute(), UiKit.FrozenBrush(UiKit.TextSecondary));
+            }
+            catch { }
+            finally { _volSliderUpdating = false; }
+        }
+
+        internal void CancelPendingVolumeCommand()
+        {
+            _volumeCommandGate.CancelPending();
+            try { _volumeCommandTimer?.Stop(); } catch { }
+        }
+
+        void QueueUserVolumeCommand(float value)
+        {
+            if (_isExiting || !_volumeInputReady) return;
+            if (_volumeCommandGate.TryAccept(value, false, DateTime.UtcNow, out var dispatchValue))
+                DispatchUserVolumeCommand(dispatchValue);
+            if (_volumeCommandGate.HasPending) EnsureVolumeCommandTimer();
+        }
+
+        void DispatchUserVolumeCommand(float value)
+        {
+            _ = ExecuteCommandAsync(AppCommandId.AudioSetVolume,
+                CommandSource.MainWindow, new AudioVolumePayload(value));
+        }
+
+        void EnsureVolumeCommandTimer()
+        {
+            if (_volumeCommandTimer == null)
+            {
+                _volumeCommandTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(75) };
+                _volumeCommandTimer.Tick += (s, e) =>
+                {
+                    if (_volumeCommandGate.TryFlush(DateTime.UtcNow, out var dispatchValue))
+                        DispatchUserVolumeCommand(dispatchValue);
+                    if (!_volumeCommandGate.HasPending) _volumeCommandTimer.Stop();
+                };
+            }
+            if (!_volumeCommandTimer.IsEnabled) _volumeCommandTimer.Start();
         }
 
         void ScheduleVolumeRefresh()
@@ -207,6 +259,7 @@ namespace PowerAudioManager
             int hits = 0;
             t.Tick += (s, e) =>
             {
+                CancelPendingVolumeCommand();
                 VolumeControl.Invalidate();
                 UpdateVolumeUI();
                 if (++hits >= 3) t.Stop();

@@ -19,6 +19,15 @@ namespace PowerAudioManager
     {
         void BuildUI()
         {
+            // RebuildUI can replace the slider while its trailing throttle
+            // tick is pending. Drop that old user value before composing the
+            // new controls so it cannot target the new endpoint/UI state.
+            CancelPendingVolumeCommand();
+            if (!_volumeLifecycleHooked)
+            {
+                Closed += (s, e) => CancelPendingVolumeCommand();
+                _volumeLifecycleHooked = true;
+            }
             // admin 运行时 UIPI 默认阻止普通进程（资源管理器/浏览器）拖放进来，放宽消息过滤
             try
             {
@@ -263,9 +272,14 @@ namespace PowerAudioManager
             _volSlider.Foreground = new SolidColorBrush(UiKit.AccentColor);
             _volSlider.ValueChanged += (s, e) => {
                 if (_volLabel != null) _volLabel.Text = ((int)_volSlider.Value).ToString() + "%";
-                if (!_volSliderUpdating) _ = ExecuteCommandAsync(AppCommandId.AudioSetVolume,
-                    CommandSource.MainWindow, new AudioVolumePayload((float)(_volSlider.Value / 100.0)));
+                if (!_volSliderUpdating && _volumeInputReady)
+                    QueueUserVolumeCommand((float)(_volSlider.Value / 100.0));
             };
+            // A slider can receive layout/template value changes while the
+            // window is being composed. Those are state synchronization, not
+            // user input; only accept notifications after the control is live.
+            _volumeInputReady = false;
+            _volSlider.Loaded += (s, e) => _volumeInputReady = true;
             volRow.Children.Add(_volSlider);
             contentPanel.Children.Add(volRow);
             }
@@ -320,6 +334,10 @@ namespace PowerAudioManager
 
             _mainBorder.Child = _root;
             Content = _mainBorder;
+            // RebuildUI replaces Content while the window is already loaded;
+            // in that case the new slider is immediately eligible for user
+            // input even if WPF does not replay Loaded for every child.
+            if (IsLoaded) _volumeInputReady = true;
         }
 
         void BuildClipboardButton(StackPanel contentPanel)

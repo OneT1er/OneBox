@@ -10,20 +10,26 @@ namespace PowerAudioManager
 {
     internal static class PipeServerIdentityVerifier
     {
-        private const uint ProcessQueryLimitedInformation = 0x1000;
-        private const uint TokenQuery = 0x0008;
+        // A medium-integrity desktop process is intentionally not allowed to
+        // open a LocalSystem service process, even with
+        // PROCESS_QUERY_LIMITED_INFORMATION (ERROR_ACCESS_DENIED).  Do not
+        // use the server PID as an authentication mechanism.  The named pipe
+        // object itself is owned by LocalSystem and has a protected ACL; that
+        // is the credential we can verify from the client side.
+        private const uint OwnerSecurityInformation = 0x00000001;
+        private const int SeKernelObject = 6;
 
         [DllImport("kernel32.dll", SetLastError = true)]
         private static extern bool GetNamedPipeServerProcessId(SafePipeHandle pipe, out uint serverProcessId);
 
-        [DllImport("kernel32.dll", SetLastError = true)]
-        private static extern IntPtr OpenProcess(uint desiredAccess, bool inheritHandle, uint processId);
-
         [DllImport("advapi32.dll", SetLastError = true)]
-        private static extern bool OpenProcessToken(IntPtr processHandle, uint desiredAccess, out IntPtr tokenHandle);
+        private static extern uint GetSecurityInfo(
+            IntPtr handle, int objectType, uint securityInfo,
+            out IntPtr ownerSid, IntPtr groupSid, IntPtr dacl,
+            IntPtr sacl, out IntPtr securityDescriptor);
 
         [DllImport("kernel32.dll")]
-        private static extern bool CloseHandle(IntPtr handle);
+        private static extern IntPtr LocalFree(IntPtr memory);
 
         public static void EnsureLocalSystemServer(NamedPipeClientStream pipe)
         {
@@ -32,22 +38,31 @@ namespace PowerAudioManager
             if (!GetNamedPipeServerProcessId(pipe.SafePipeHandle, out uint processId))
                 throw WindowsFailure("无法读取管道服务端进程");
 
-            IntPtr process = OpenProcess(ProcessQueryLimitedInformation, false, processId);
-            if (process == IntPtr.Zero) throw WindowsFailure("无法打开管道服务端进程");
-            IntPtr token = IntPtr.Zero;
+            // GetNamedPipeServerProcessId is retained only for diagnostics. A
+            // normal user cannot OpenProcess() a LocalSystem service, so using
+            // that PID here rejects every legitimate connection.
+            IntPtr ownerSid = IntPtr.Zero;
+            IntPtr securityDescriptor = IntPtr.Zero;
+            bool addedRef = false;
             try
             {
-                if (!OpenProcessToken(process, TokenQuery, out token) || token == IntPtr.Zero)
-                    throw WindowsFailure("无法读取管道服务端令牌");
-                using var identity = new WindowsIdentity(token);
-                string sid = identity.User?.Value;
+                pipe.SafePipeHandle.DangerousAddRef(ref addedRef);
+                uint result = GetSecurityInfo(pipe.SafePipeHandle.DangerousGetHandle(), SeKernelObject,
+                    OwnerSecurityInformation, out ownerSid, IntPtr.Zero, IntPtr.Zero,
+                    IntPtr.Zero, out securityDescriptor);
+                if (result != 0)
+                    throw new Win32Exception((int)result, $"无法读取管道服务端安全描述符（PID={processId}）");
+                if (ownerSid == IntPtr.Zero)
+                    throw new InvalidOperationException($"管道服务端未提供所有者（PID={processId}）。");
+
+                string sid = new SecurityIdentifier(ownerSid).Value;
                 if (!PipeServerIdentity.IsTrusted(sid))
-                    throw new UnauthorizedAccessException($"拒绝非 LocalSystem 管道服务端（PID={processId}, SID={sid ?? "unknown"}）。");
+                    throw new UnauthorizedAccessException($"拒绝非 LocalSystem 管道服务端（PID={processId}, owner={sid}）。");
             }
             finally
             {
-                if (token != IntPtr.Zero) CloseHandle(token);
-                CloseHandle(process);
+                if (securityDescriptor != IntPtr.Zero) LocalFree(securityDescriptor);
+                if (addedRef) pipe.SafePipeHandle.DangerousRelease();
             }
         }
 

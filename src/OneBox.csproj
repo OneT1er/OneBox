@@ -39,6 +39,15 @@
     <EmbeddedResource Remove="OneBox.Contracts\**\*;OneBox.Service\**\*;OneBox.Hardware\**\*;Shared\**\*" />
     <None Remove="OneBox.Contracts\**\*;OneBox.Service\**\*;OneBox.Hardware\**\*;Shared\**\*" />
     <Content Remove="OneBox.Contracts\**\*;OneBox.Service\**\*;OneBox.Hardware\**\*;Shared\**\*" />
+    <!-- The workspace may contain a directory reparse point named
+         `src/artifacts` used by local verification jobs.  It is build
+         output, never application content.  Explicitly remove it from all
+         SDK default item globs so publishing into an artifacts staging
+         folder cannot recursively copy the repository's own artifacts. -->
+    <Compile Remove="artifacts\**" />
+    <EmbeddedResource Remove="artifacts\**" />
+    <None Remove="artifacts\**" />
+    <Content Remove="artifacts\**" />
   </ItemGroup>
 
   <ItemGroup>
