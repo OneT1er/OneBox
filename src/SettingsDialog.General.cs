@@ -58,11 +58,9 @@ namespace PowerAudioManager
             topmostCb.IsChecked = AppPrefs.GetBool("Topmost", false);
             stack.Children.Add(topmostCb);
 
-            var lockCb = new CheckBox { Content = "锁定位置（禁止拖动悬浮窗）", Foreground = Brushes.White, FontSize = 12, Margin = new Thickness(0, 0, 0, 8) };
+            var lockCb = new CheckBox { Content = "锁定位置", Foreground = Brushes.White, FontSize = 12, Margin = new Thickness(0, 0, 0, 16) };
             lockCb.IsChecked = AppPrefs.GetBool("LockPosition", false);
             stack.Children.Add(lockCb);
-
-            stack.Children.Add(new TextBlock { Text = "固定位置：悬浮窗位置不受分辨率变化影响（拖到哪固定到哪，仅在完全离开屏幕时自动回到可视区）。", Foreground = fg, FontSize = 10, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 12) });
 
             stack.Children.Add(new Border { Height = 1, Background = new SolidColorBrush(Color.FromRgb(80, 75, 120)), Margin = new Thickness(0, 4, 0, 12) });
 
@@ -80,11 +78,9 @@ namespace PowerAudioManager
             delayRow.Children.Add(new TextBlock { Text = "秒后折叠（0=立即）", Foreground = fg, FontSize = 12, VerticalAlignment = VerticalAlignment.Center });
             stack.Children.Add(delayRow);
 
-            var expandAfterManualCb = new CheckBox { Content = "手动折叠后，鼠标悬停也自动展开", Foreground = fg, FontSize = 11, Margin = new Thickness(20, 0, 0, 8) };
+            var expandAfterManualCb = new CheckBox { Content = "手动折叠后允许悬停展开", Foreground = fg, FontSize = 11, Margin = new Thickness(20, 0, 0, 16) };
             expandAfterManualCb.IsChecked = AppPrefs.GetBool("AutoExpandAfterManual", false);
             stack.Children.Add(expandAfterManualCb);
-
-            stack.Children.Add(new TextBlock { Text = "默认：手动折叠后保持折叠，鼠标悬停不展开；只有自动折叠的才悬停展开。", Foreground = fg, FontSize = 10, Margin = new Thickness(0, 0, 0, 16) });
 
             stack.Children.Add(new Border { Height = 1, Background = new SolidColorBrush(Color.FromRgb(80, 75, 120)), Margin = new Thickness(0, 4, 0, 12) });
 
@@ -97,9 +93,8 @@ namespace PowerAudioManager
             double autoScaleShown = 1.0;
             try { if (mwForScale != null && mwForScale._scaling != null) autoScaleShown = mwForScale._scaling.AutoScale; } catch { }
 
-            stack.Children.Add(new TextBlock { Text = "窗口缩放", Foreground = Brushes.White, FontSize = 12, Margin = new Thickness(0, 0, 0, 4) });
-            stack.Children.Add(new TextBlock { Text = $"auto {(int)Math.Round(autoScaleShown * 100)}%", Foreground = fg, FontSize = 10, Margin = new Thickness(0, 0, 0, 4) });
-            var scaleRow = new DockPanel { Margin = new Thickness(0, 0, 0, 4) };
+            stack.Children.Add(new TextBlock { Text = $"窗口缩放（自动 {(int)Math.Round(autoScaleShown * 100)}%）", Foreground = Brushes.White, FontSize = 12, Margin = new Thickness(0, 0, 0, 4) });
+            var scaleRow = new DockPanel { Margin = new Thickness(0, 0, 0, 16) };
             var scaleSlider = new Slider { Minimum = 80, Maximum = 200, Value = isAuto ? 100 : (int)(curScale * 100), TickFrequency = 5, IsSnapToTickEnabled = true, Width = 160, VerticalAlignment = VerticalAlignment.Center };
             var scalePctLabel = new TextBlock { Text = isAuto ? "自动" : $"{(int)(curScale * 100)}%", Foreground = fg, FontSize = 11, Width = 40, TextAlignment = TextAlignment.Right, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0) };
             var scaleAutoCb = new CheckBox { Content = "自动", Foreground = fg, FontSize = 11, IsChecked = isAuto, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0) };
@@ -113,22 +108,21 @@ namespace PowerAudioManager
             scaleRow.Children.Add(scaleAutoCb);
             scaleRow.Children.Add(scaleSlider);
             stack.Children.Add(scaleRow);
-            stack.Children.Add(new TextBlock { Text = "小屏自动缩小；手动 80%–200%。", Foreground = fg, FontSize = 10, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 16) });
 
             stack.Children.Add(new Border { Height = 1, Background = new SolidColorBrush(Color.FromRgb(80, 75, 120)), Margin = new Thickness(0, 4, 0, 12) });
 
             // 开机自启：统一状态标志可选择注册表、计划任务或 OneBoxSvc 服务方式。
             stack.Children.Add(new TextBlock { Text = "开机自启", Foreground = Brushes.White, FontWeight = FontWeights.SemiBold, FontSize = 13, Margin = new Thickness(0, 0, 0, 6) });
 
-            var autoStartCb = new CheckBox { Content = "开机自启（开机时自动启动）", Foreground = Brushes.White, FontSize = 12, Margin = new Thickness(0, 0, 0, 8) };
+            var autoStartCb = new CheckBox { Content = "开机自启", Foreground = Brushes.White, FontSize = 12, Margin = new Thickness(0, 0, 0, 8) };
             bool svcInstalled = AutoStartService.IsServiceInstalled();
             autoStartCb.IsChecked = AutoStartService.IsEnabled();
             stack.Children.Add(autoStartCb);
 
             var autoStartStatus = new TextBlock { Foreground = fg, FontSize = 10, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 16) };
             autoStartStatus.Text = svcInstalled
-                ? "OneBoxSvc 已安装；开机自启由注册表、计划任务或服务中的当前方式执行，勾选状态统一保存。"
-                : "OneBoxSvc 未安装；当前可使用注册表方式，选择需要提升权限的方式时会提示一次管理员授权。";
+                ? "OneBoxSvc 已安装"
+                : "OneBoxSvc 未安装，将使用注册表启动";
             stack.Children.Add(autoStartStatus);
 
             var btns = MakeButtons();

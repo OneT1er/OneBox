@@ -396,7 +396,7 @@ namespace PowerAudioManager
 
                 using var request = new HttpRequestMessage(HttpMethod.Post, EndpointAi);
                 request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", key);
-                request.Headers.UserAgent.ParseAdd("OneBox/1.7.2");
+                request.Headers.UserAgent.ParseAdd("OneBox/" + ApplicationVersion.Value);
                 request.Headers.Accept.ParseAdd("application/json");
                 request.Content = new ByteArrayContent(JsonSerializer.SerializeToUtf8Bytes(payload));
                 request.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");

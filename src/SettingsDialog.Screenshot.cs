@@ -38,12 +38,11 @@ namespace PowerAudioManager
             rootRow.Children.Add(browseBtn);
             rootRow.Children.Add(rootBox);
             stack.Children.Add(rootRow);
-            stack.Children.Add(new TextBlock { Text = "截图按前台应用名自动建子文件夹存放。", Foreground = fg, FontSize = 10, Margin = new Thickness(0, 0, 0, 16) });
 
             // 高级：Game Bar 截图默认关闭。开启后启用 HDR 检测 + Game Bar 回退，HDR/全屏游戏截图不走黑。
             stack.Children.Add(new TextBlock { Text = "高级：Game Bar 截图（HDR / 全屏游戏）", Foreground = Brushes.White, FontWeight = FontWeights.SemiBold, FontSize = 13, Margin = new Thickness(0, 0, 0, 6) });
             bool gbEnabled = AppPrefs.GetBool("Screenshot.GameBarEnabled", false);
-            var gbToggle = new CheckBox { Content = "启用 Game Bar 截图回退（默认关闭，仅普通截图）", IsChecked = gbEnabled, Foreground = Brushes.White, FontSize = 12, Margin = new Thickness(0, 0, 0, 8) };
+            var gbToggle = new CheckBox { Content = "启用 Game Bar 截图回退", IsChecked = gbEnabled, Foreground = Brushes.White, FontSize = 12, Margin = new Thickness(0, 0, 0, 8) };
             stack.Children.Add(gbToggle);
 
             // Game Bar 配置仅在启用时有效，关闭开关时整体变灰。
@@ -75,12 +74,11 @@ namespace PowerAudioManager
             gbRow.Children.Add(gbBrowseBtn);
             gbRow.Children.Add(gbBox);
             gbPanel.Children.Add(gbRow);
-            gbPanel.Children.Add(new TextBlock { Text = "Game Bar 生成截图后，从这里读取文件。若你的 Game Bar 图库位置被改过，请设为实际路径。留空则用默认的“视频\\Captures”。", Foreground = fg, FontSize = 10, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 16) });
 
             gbPanel.Children.Add(new TextBlock { Text = "Game Bar 截图快捷键", Foreground = Brushes.White, FontWeight = FontWeights.SemiBold, FontSize = 13, Margin = new Thickness(0, 0, 0, 6) });
             var gbHk = MakeHotkeyRow(owner, dlg, AppPrefs.GetInt("Screenshot.GameBarHotkey", 0), fg, emptyText: "（未设置，用默认 Win+Alt+PrtScn）", bottomMargin: 8, testOccupancy: false);
             gbPanel.Children.Add(gbHk.Row);
-            gbPanel.Children.Add(new TextBlock { Text = "游戏前台时系统会吞掉注入的 Win 键，导致默认 Win+Alt+PrtScn 触发不了 Game Bar。配置步骤：1) 先在这里点“设置快捷键”设一个不含 Win 的组合（如 Alt+F12）；2) 再去 Game Bar 设置里把截图快捷键改成同一个组合。注意：被 Game Bar 注册的组合在 OneBox 里按 Alt+键可能捕获不到，可改用 Ctrl+ 组合并在 Game Bar 里设同款。", Foreground = fg, FontSize = 10, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 16) });
+            gbPanel.Children.Add(new TextBlock { Text = "需与 Game Bar 使用相同快捷键，建议选择不含 Win 的组合。", Foreground = fg, FontSize = 10, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 16) });
 
             stack.Children.Add(gbPanel);
             gbToggle.Checked += (s, e) => gbPanel.IsEnabled = true;
@@ -91,8 +89,6 @@ namespace PowerAudioManager
             stack.Children.Add(new TextBlock { Text = "截图快捷键", Foreground = Brushes.White, FontWeight = FontWeights.SemiBold, FontSize = 13, Margin = new Thickness(0, 0, 0, 6) });
             var hk = MakeHotkeyRow(owner, dlg, AppPrefs.GetInt("Screenshot.Hotkey", 0), fg, bottomMargin: 8);
             stack.Children.Add(hk.Row);
-            stack.Children.Add(new TextBlock { Text = "普通窗口直接截取客户区；全屏游戏截图为黑屏时自动回退到 Game Bar（需在系统设置→游戏中启用捕获）。", Foreground = fg, FontSize = 10, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 16) });
-
 
             var btns = MakeButtons();
             ((Button)btns.Children[0]).Click += async (s, e) =>

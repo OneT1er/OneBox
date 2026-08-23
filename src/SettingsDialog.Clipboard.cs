@@ -16,7 +16,6 @@ namespace PowerAudioManager
             stack.Children.Add(new TextBlock { Text = "剪贴板历史快捷键", Foreground = Brushes.White, FontWeight = FontWeights.SemiBold, FontSize = 13, Margin = new Thickness(0, 0, 0, 6) });
             var clipHk = MakeHotkeyRow(owner, dlg, AppPrefs.GetInt("Clipboard.Hotkey", 0), fg);
             stack.Children.Add(clipHk.Row);
-            stack.Children.Add(new TextBlock { Text = "按下快捷键从鼠标位置弹出剪贴板历史。左键复制，右键删除单条。", Foreground = fg, FontSize = 10, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 0) });
 
             var btns = MakeButtons();
             ((Button)btns.Children[0]).Click += async (s, e) =>

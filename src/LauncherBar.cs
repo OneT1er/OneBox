@@ -401,7 +401,7 @@ namespace PowerAudioManager
         static async System.Threading.Tasks.Task<byte[]> DownloadBytesAsync(Uri uri, System.Threading.CancellationToken cancellationToken)
         {
             using var request = new HttpRequestMessage(HttpMethod.Get, uri);
-            request.Headers.UserAgent.ParseAdd("OneBox/1.7.2");
+            request.Headers.UserAgent.ParseAdd("OneBox/" + ApplicationVersion.Value);
             using var response = await OneBoxHttp.Client.SendAsync(
                 request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
             response.EnsureSuccessStatusCode();
@@ -412,7 +412,7 @@ namespace PowerAudioManager
         static async System.Threading.Tasks.Task<string> DownloadTextAsync(Uri uri, System.Threading.CancellationToken cancellationToken)
         {
             using var request = new HttpRequestMessage(HttpMethod.Get, uri);
-            request.Headers.UserAgent.ParseAdd("OneBox/1.7.2");
+            request.Headers.UserAgent.ParseAdd("OneBox/" + ApplicationVersion.Value);
             using var response = await OneBoxHttp.Client.SendAsync(
                 request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
             response.EnsureSuccessStatusCode();

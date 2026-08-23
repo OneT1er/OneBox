@@ -19,7 +19,7 @@ namespace PowerAudioManager
                 CornerRadius = new CornerRadius(4),
                 Padding = new Thickness(10, 6, 10, 6),
                 Margin = new Thickness(0, 0, 0, 12),
-                Child = new TextBlock { Text = "内存清理由 OneBoxSvc 服务执行（SYSTEM 权限），所有清理项可用，无需管理员重启", Foreground = Brushes.White, FontSize = 11, TextWrapping = TextWrapping.Wrap }
+                Child = new TextBlock { Text = "OneBoxSvc 已接管特权清理", Foreground = Brushes.White, FontSize = 11 }
             });
 
             stack.Children.Add(new TextBlock { Text = "自动清理", Foreground = Brushes.White, FontWeight = FontWeights.SemiBold, FontSize = 13, Margin = new Thickness(0, 0, 0, 6) });
@@ -52,7 +52,6 @@ namespace PowerAudioManager
             stack.Children.Add(thRow);
 
             stack.Children.Add(new TextBlock { Text = "要清理的内存区域", Foreground = Brushes.White, FontWeight = FontWeights.SemiBold, FontSize = 13, Margin = new Thickness(0, 8, 0, 4) });
-            stack.Children.Add(new TextBlock { Text = "可以全部取消；未选择任何项目时，手动与自动清理都不会执行。", Foreground = fg, FontSize = 10, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 6) });
             var cbWS = MakeAreaCb("Working set", "释放各进程的工作集（已加载到物理内存的代码与数据），把未使用的页面交还系统。", "Clean.WorkingSet", true, fg, true);
             var cbSFC = MakeAreaCb("System file cache", "归还系统文件缓存：Windows 用来加速文件读取的内存被释放回可用池。", "Clean.SystemFileCache", true, fg, true);
             var cbMPL = MakeAreaCb("Modified page list", "把已修改但尚未写回磁盘的脏页刷盘后转入可用列表。", "Clean.ModifiedPageList", false, fg, true);
@@ -75,9 +74,15 @@ namespace PowerAudioManager
             ConfirmIfDangerous(cbMPL, dlg, "刷盘 Modified page list 可能导致系统短暂卡顿，确定启用？");
 
             stack.Children.Add(new Border { Height = 1, Background = new SolidColorBrush(Color.FromRgb(80, 75, 120)), Margin = new Thickness(0, 14, 0, 12) });
-            var allowFreezeCb = new CheckBox { Content = "允许自动清理危险项（Standby list / Modified page list）", Foreground = fg, FontSize = 11, Margin = new Thickness(0, 0, 0, 4), IsChecked = AppPrefs.GetBool("AutoCleanAllowFreezes", false) };
+            var allowFreezeCb = new CheckBox
+            {
+                Content = "自动清理包含危险项",
+                Foreground = fg,
+                FontSize = 11,
+                IsChecked = AppPrefs.GetBool("AutoCleanAllowFreezes", false),
+                ToolTip = "Standby list / Modified page list 可能造成短暂卡顿"
+            };
             stack.Children.Add(allowFreezeCb);
-            stack.Children.Add(new TextBlock { Text = "默认自动清理会跳过这两项以避免后台卡顿；勾选后自动清理也执行它们。", Foreground = fg, FontSize = 10, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 0) });
 
             var btns = MakeButtons();
             ((Button)btns.Children[0]).Click += async (s, e) =>

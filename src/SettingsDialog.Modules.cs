@@ -12,7 +12,7 @@ namespace PowerAudioManager
         static ScrollViewer BuildModulesTab(Window owner, Window dlg, SolidColorBrush fg)
         {
             var stack = new StackPanel { Margin = new Thickness(20) };
-            stack.Children.Add(new TextBlock { Text = "勾选要在悬浮窗中显示的板块：", Foreground = Brushes.White, FontSize = 13, Margin = new Thickness(0, 0, 0, 12) });
+            stack.Children.Add(new TextBlock { Text = "悬浮窗板块", Foreground = Brushes.White, FontSize = 13, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 0, 0, 12) });
 
             var cbPower = MakeCb("电源计划", "Power");
             var cbAudio = MakeCb("音频输出", "Audio");
@@ -30,19 +30,16 @@ namespace PowerAudioManager
             stack.Children.Add(cbClip);
             stack.Children.Add(cbGallery);
             stack.Children.Add(cbTemp);
-            stack.Children.Add(new TextBlock { Text = "关闭温度监控会停止后台采集并释放硬件监控资源；其他板块仅从悬浮窗隐藏，托盘菜单与全局快捷键不受影响。", Foreground = fg, FontSize = 10, Margin = new Thickness(0, 14, 0, 0), TextWrapping = TextWrapping.Wrap });
 
             // 音频循环切换快捷键（SoundSwitch 式）：按一下切到下一个可见输出设备并弹提示
             stack.Children.Add(new TextBlock { Text = "音频循环切换快捷键", Foreground = Brushes.White, FontWeight = FontWeights.SemiBold, FontSize = 13, Margin = new Thickness(0, 16, 0, 6) });
             var cycleHk = MakeHotkeyRow(owner, dlg, AppPrefs.GetInt("Audio.CycleHotkey", 0), fg);
             stack.Children.Add(cycleHk.Row);
-            stack.Children.Add(new TextBlock { Text = "按下快捷键在可见输出设备间循环切换（跳过已隐藏的），右下角弹提示。", Foreground = fg, FontSize = 10, TextWrapping = TextWrapping.Wrap });
 
             // 电源计划循环切换快捷键：按一下切到下一个电源计划并弹提示
             stack.Children.Add(new TextBlock { Text = "电源循环切换快捷键", Foreground = Brushes.White, FontWeight = FontWeights.SemiBold, FontSize = 13, Margin = new Thickness(0, 16, 0, 6) });
             var pwHk = MakeHotkeyRow(owner, dlg, AppPrefs.GetInt("Power.CycleHotkey", 0), fg);
             stack.Children.Add(pwHk.Row);
-            stack.Children.Add(new TextBlock { Text = "按下快捷键在所有电源计划间循环切换，右下角弹提示。", Foreground = fg, FontSize = 10, TextWrapping = TextWrapping.Wrap });
 
             var btns = MakeButtons();
             ((Button)btns.Children[0]).Click += async (s, e) =>
