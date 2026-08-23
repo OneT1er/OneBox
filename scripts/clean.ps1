@@ -5,13 +5,10 @@ $ErrorActionPreference = 'Stop'
 $repositoryRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $repositoryPrefix = $repositoryRoot.TrimEnd('\') + '\'
 
-# Keep distributable outputs under artifacts/packages and artifacts/publish.
-# Everything listed here is a reproducible build, test, or legacy output.
+# Everything listed here is a reproducible build, package, test, or legacy
+# output. Run scripts/package.ps1 again whenever release artifacts are needed.
 $generatedDirectories = @(
-    'artifacts\.staging',
-    'artifacts\audio-build',
-    'artifacts\audio-obj',
-    'artifacts\verification',
+    'artifacts',
     'output',
     'publish',
     'src\output',
@@ -62,4 +59,4 @@ foreach ($relativePath in $generatedDirectories) {
     Remove-GeneratedDirectory -RelativePath $relativePath
 }
 
-Write-Host 'Clean complete. Release packages and publish output were preserved.'
+Write-Host 'Clean complete. All generated outputs were removed.'
