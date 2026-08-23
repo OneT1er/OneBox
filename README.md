@@ -137,6 +137,9 @@ dotnet publish src/OneBox.Hardware/OneBox.Hardware.csproj -c Release -r win-x64 
 
 # 可复现打包：还原固定为 1.2.0 的 vpk，将三个项目发布到同一 staging 目录后生成 Velopack 包
 powershell -ExecutionPolicy Bypass -File scripts/package.ps1
+
+# 清理编译、测试和旧 staging 产物（保留 artifacts/packages 与 artifacts/publish）
+powershell -ExecutionPolicy Bypass -File scripts/clean.ps1
 ```
 
 测试使用 xUnit v3 的 VSTest 适配器（`xunit.runner.visualstudio` + `Microsoft.NET.Test.Sdk`）；直接执行上面的 `dotnet test OneBox.sln -c Release` 即可发现并运行测试。

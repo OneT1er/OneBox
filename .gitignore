@@ -1,5 +1,7 @@
 src/output/
 output/
+publish/
+src/src/
 src/bin/
 src/obj/
 **/bin/
