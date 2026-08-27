@@ -212,6 +212,7 @@ namespace PowerAudioManager
                 Dispatcher.BeginInvoke(new Action(() => { try { if (_tray != null) _tray.UpdateIcon(); } catch { } }),
                     System.Windows.Threading.DispatcherPriority.ApplicationIdle);
                 try { ClipboardHistory.Start(); } catch { }
+                try { ScreenshotService.RestartExternalCaptureTakeover(); } catch (Exception ex) { AppLog.Log("Screenshot takeover startup", ex); }
                 _ = RunStartupUpdateCheckAsync();
                 try { RestartAutoCleanTimer(); } catch { }
                 try { StartAutoCollapse(); } catch { }

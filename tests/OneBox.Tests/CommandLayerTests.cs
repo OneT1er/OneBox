@@ -255,6 +255,8 @@ public sealed class PreferenceDefinitionTests
     [InlineData("Screenshot.GameBarEnabled")]
     [InlineData("Screenshot.GameBarDir")]
     [InlineData("Screenshot.GameBarHotkey")]
+    [InlineData("Screenshot.ExternalTakeoverEnabled")]
+    [InlineData("Screenshot.ExternalTakeoverDir")]
     [InlineData("Translate.From")]
     [InlineData("Translate.To")]
     [InlineData("Temp.IntervalMs")]

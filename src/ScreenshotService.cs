@@ -97,15 +97,28 @@ namespace PowerAudioManager
     {
         static readonly ScreenshotConcurrencyGate CaptureGate = new ScreenshotConcurrencyGate();
         static readonly CancellationTokenSource LifetimeCancellation = new CancellationTokenSource();
+        static readonly object ExternalWatcherLock = new object();
+        static readonly Dictionary<string, PendingExternalCapture> PendingExternalCaptures =
+            new Dictionary<string, PendingExternalCapture>(StringComparer.OrdinalIgnoreCase);
+        static FileSystemWatcher _externalWatcher;
         const string RootPrefKey = "Screenshot.RootDir";
         const string GameBarDirPrefKey = "Screenshot.GameBarDir";
         const string GameBarHotkeyPrefKey = "Screenshot.GameBarHotkey";
         const string GameBarEnabledPrefKey = "Screenshot.GameBarEnabled";
+        const string ExternalTakeoverEnabledPrefKey = "Screenshot.ExternalTakeoverEnabled";
+        const string ExternalTakeoverDirPrefKey = "Screenshot.ExternalTakeoverDir";
         const string DefaultRoot = "OneBoxScreenshots";
         // Game Bar 写文件较慢，HDR 下尤甚——需捕获、色调映射/编码，同时写入 .png 和 .jxr。
         // 实测 HDR 截图在高速机器上约需 16s，故最长等待 25s
         //（有文件出现即返回）。在 ThreadPool 上等待，不阻塞 UI/热键。
         const int GameBarWaitMs = 25000;
+
+        sealed class PendingExternalCapture
+        {
+            public readonly HashSet<string> Paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            public string ExeName;
+            public Timer Timer;
+        }
 
         [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
         [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
@@ -258,7 +271,185 @@ namespace PowerAudioManager
 
         public static void Shutdown()
         {
+            StopExternalCaptureTakeover();
             try { LifetimeCancellation.Cancel(); } catch { }
+        }
+
+        /// <summary>
+        /// 启动安全的外部截图接管。只监听官方截图目录，不注册热键、不模拟输入、
+        /// 不注入游戏进程、不读取游戏画面。支持 Game Bar、Steam、显卡工具及自定义目录。
+        /// </summary>
+        public static void RestartExternalCaptureTakeover()
+        {
+            StopExternalCaptureTakeover();
+            if (!AppPrefs.GetBool(ExternalTakeoverEnabledPrefKey, false) || LifetimeCancellation.IsCancellationRequested) return;
+
+            string dir = ExternalTakeoverDir();
+            if (!Directory.Exists(dir))
+            {
+                AppLog.Log("Screenshot takeover", "source directory not found: " + dir);
+                return;
+            }
+            if (SameDirectory(dir, RootDir()))
+            {
+                AppLog.Log("Screenshot takeover", "source directory cannot equal OneBox destination: " + dir);
+                return;
+            }
+
+            try
+            {
+                var watcher = new FileSystemWatcher(dir)
+                {
+                    IncludeSubdirectories = true,
+                    Filter = "*.*",
+                    NotifyFilter = NotifyFilters.FileName | NotifyFilters.CreationTime | NotifyFilters.LastWrite,
+                    InternalBufferSize = 32 * 1024,
+                    EnableRaisingEvents = false,
+                };
+                watcher.Created += OnExternalCaptureCreated;
+                watcher.Renamed += OnExternalCaptureRenamed;
+                watcher.Error += (_, e) => AppLog.Log("Screenshot takeover", "watcher error: " + e.GetException()?.Message);
+                lock (ExternalWatcherLock)
+                {
+                    _externalWatcher = watcher;
+                    watcher.EnableRaisingEvents = true;
+                }
+                AppLog.Log("Screenshot takeover", "started: " + dir);
+            }
+            catch (Exception ex) { AppLog.Log("Screenshot takeover start", ex); }
+        }
+
+        static void StopExternalCaptureTakeover()
+        {
+            lock (ExternalWatcherLock)
+            {
+                try { _externalWatcher?.Dispose(); } catch { }
+                _externalWatcher = null;
+                foreach (var pending in PendingExternalCaptures.Values)
+                    try { pending.Timer?.Dispose(); } catch { }
+                PendingExternalCaptures.Clear();
+            }
+        }
+
+        static void OnExternalCaptureCreated(object sender, FileSystemEventArgs e) => QueueExternalCapture(e.FullPath);
+        static void OnExternalCaptureRenamed(object sender, RenamedEventArgs e) => QueueExternalCapture(e.FullPath);
+
+        static void QueueExternalCapture(string path)
+        {
+            try
+            {
+                if (LifetimeCancellation.IsCancellationRequested || !IsSupportedExternalImage(path)) return;
+                if (IsInsideDirectory(path, RootDir())) return; // 防止监听父目录时再次接管自己的副本
+
+                string key = Path.Combine(Path.GetDirectoryName(path) ?? "", Path.GetFileNameWithoutExtension(path));
+                lock (ExternalWatcherLock)
+                {
+                    if (_externalWatcher == null) return;
+                    if (!PendingExternalCaptures.TryGetValue(key, out var pending))
+                    {
+                        pending = new PendingExternalCapture
+                        {
+                            ExeName = Sanitize(ForegroundWatcher.CaptureExeName() ?? "ExternalCapture")
+                        };
+                        pending.Timer = new Timer(_ => ProcessExternalCapture(key), null, Timeout.Infinite, Timeout.Infinite);
+                        PendingExternalCaptures[key] = pending;
+                    }
+                    pending.Paths.Add(path);
+                    // Game Bar 的 SDR PNG 与 HDR JXR、Steam 的最终重命名可能相隔片刻；合并成一次接管。
+                    pending.Timer.Change(3000, Timeout.Infinite);
+                }
+            }
+            catch (Exception ex) { AppLog.Log("Screenshot takeover queue", ex); }
+        }
+
+        static void ProcessExternalCapture(string key)
+        {
+            PendingExternalCapture pending;
+            lock (ExternalWatcherLock)
+            {
+                if (!PendingExternalCaptures.Remove(key, out pending)) return;
+                try { pending.Timer?.Dispose(); } catch { }
+            }
+            if (LifetimeCancellation.IsCancellationRequested) return;
+
+            try
+            {
+                var paths = new HashSet<string>(pending.Paths, StringComparer.OrdinalIgnoreCase);
+                string sourceDir = Path.GetDirectoryName(key);
+                string baseName = Path.GetFileName(key);
+                if (Directory.Exists(sourceDir))
+                {
+                    foreach (string candidate in Directory.EnumerateFiles(sourceDir))
+                        if (string.Equals(Path.GetFileNameWithoutExtension(candidate), baseName, StringComparison.OrdinalIgnoreCase)
+                            && IsSupportedExternalImage(candidate)) paths.Add(candidate);
+                }
+
+                string appDir = Path.Combine(RootDir(), pending.ExeName);
+                Directory.CreateDirectory(appDir);
+                string stamp = DateTime.Now.ToString("yyyyMMdd_HHmmss_fff");
+                string preview = null;
+                foreach (string source in paths.OrderBy(ExternalPreviewPriority))
+                {
+                    string ext = Path.GetExtension(source).ToLowerInvariant();
+                    string suffix = ext == ".jxr" ? "_hdr" : "";
+                    string copied = CopyInto(source, Path.Combine(appDir, stamp + suffix + ext), LifetimeCancellation.Token);
+                    if (preview == null && copied != null) preview = copied;
+                }
+                if (preview == null)
+                {
+                    AppLog.Log("Screenshot takeover", "files were not ready: " + key);
+                    return;
+                }
+
+                AppLog.Log("Screenshot takeover", $"ok app={pending.ExeName} files={paths.Count} saved={preview}");
+                var app = Application.Current;
+                if (app == null || app.Dispatcher.HasShutdownStarted) return;
+                app.Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    ScreenshotToast.Show(pending.ExeName, preview, "外部截图接管");
+                    Captured?.Invoke();
+                }));
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception ex) { AppLog.Log("Screenshot takeover process", ex); }
+        }
+
+        static int ExternalPreviewPriority(string path)
+        {
+            string ext = Path.GetExtension(path).ToLowerInvariant();
+            if (ext == ".png") return 0;
+            if (ext == ".jpg" || ext == ".jpeg") return 1;
+            if (ext == ".bmp" || ext == ".webp") return 2;
+            return 3; // JXR 最后复制，只有没有普通预览图时才用于 Toast
+        }
+
+        static bool IsSupportedExternalImage(string path)
+        {
+            string ext = Path.GetExtension(path ?? "").ToLowerInvariant();
+            return ext == ".png" || ext == ".jpg" || ext == ".jpeg"
+                || ext == ".bmp" || ext == ".webp" || ext == ".jxr";
+        }
+
+        static bool SameDirectory(string left, string right)
+        {
+            try
+            {
+                return string.Equals(Path.TrimEndingDirectorySeparator(Path.GetFullPath(left)),
+                    Path.TrimEndingDirectorySeparator(Path.GetFullPath(right)), StringComparison.OrdinalIgnoreCase);
+            }
+            catch { return false; }
+        }
+
+        static bool IsInsideDirectory(string path, string directory)
+        {
+            try
+            {
+                string fullPath = Path.GetFullPath(path);
+                string root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(directory));
+                return fullPath.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(fullPath, root, StringComparison.OrdinalIgnoreCase);
+            }
+            catch { return false; }
         }
 
         static void CaptureForegroundCore(CancellationToken cancellationToken)
@@ -487,7 +678,7 @@ namespace PowerAudioManager
         static string Sanitize(string s)
         {
             if (string.IsNullOrEmpty(s)) return "Unknown";
-            var invalid = Path.GetInvalidPathChars();
+            var invalid = Path.GetInvalidFileNameChars();
             var sb = new System.Text.StringBuilder();
             foreach (char c in s) if (Array.IndexOf(invalid, c) < 0) sb.Append(c);
             return sb.Length == 0 ? "Unknown" : sb.ToString();
@@ -676,6 +867,12 @@ namespace PowerAudioManager
             if (string.IsNullOrWhiteSpace(s))
                 s = System.IO.Path.Combine(System.Environment.GetFolderPath(System.Environment.SpecialFolder.MyVideos), "Captures");
             return s;
+        }
+
+        public static string ExternalTakeoverDir()
+        {
+            string path = AppPrefs.GetString(ExternalTakeoverDirPrefKey, "");
+            return string.IsNullOrWhiteSpace(path) ? GameBarDir() : path;
         }
     }
 }

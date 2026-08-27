@@ -40,6 +40,8 @@ namespace PowerAudioManager.Commands
             public static readonly PreferenceDefinition<bool> GameBarEnabled = new("Screenshot.GameBarEnabled", false);
             public static readonly PreferenceDefinition<string> GameBarDirectory = new("Screenshot.GameBarDir", "");
             public static readonly PreferenceDefinition<int> GameBarHotkey = new("Screenshot.GameBarHotkey", 0);
+            public static readonly PreferenceDefinition<bool> ExternalTakeoverEnabled = new("Screenshot.ExternalTakeoverEnabled", false);
+            public static readonly PreferenceDefinition<string> ExternalTakeoverDirectory = new("Screenshot.ExternalTakeoverDir", "");
         }
 
         public static class Translate
