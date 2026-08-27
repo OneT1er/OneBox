@@ -162,9 +162,16 @@ namespace PowerAudioManager
                 lock (_lock)
                 {
                     _entries.Clear();
+                    string ownExe = Path.GetFileNameWithoutExtension(Environment.ProcessPath ?? "OneBox");
                     foreach (var d in data)
                         if (DateTime.TryParse(d.time, null, System.Globalization.DateTimeStyles.RoundtripKind, out var t))
+                        {
+                            // 旧版本会在趋势窗口取得焦点后持续写入 OneBox。加载时清掉这些
+                            // 无效记录，避免修复升级后的首次打开仍被旧历史铺满。
+                            if (string.Equals(d.exe, ownExe, StringComparison.OrdinalIgnoreCase)
+                                || string.Equals(d.exe, "OneBox", StringComparison.OrdinalIgnoreCase)) continue;
                             _entries.Add(new Entry { Time = t, Exe = d.exe });
+                        }
                     _lastExe = _entries.Count > 0 ? _entries[_entries.Count - 1].Exe : null;
                 }
                 AppLog.Log("FGHistory", "loaded " + _entries.Count);

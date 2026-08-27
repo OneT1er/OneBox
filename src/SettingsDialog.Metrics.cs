@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -11,6 +12,28 @@ namespace PowerAudioManager
         static readonly string[] IconKeyOptions = { "cpu", "gpu", "hot", "vram", "dram", "disk", "fan", "ctrl", "mb", "def" };
 
         static readonly string[] IconKeyLabels = { "CPU芯片", "GPU显卡", "火焰", "显存", "内存条", "硬盘", "风扇", "滑动条", "主板", "圆点" };
+
+        static bool IsMetricSensorEnabled(HardwareMonitorService hw, SensorInfo sensor)
+        {
+            return hw.EnabledMetrics.Any(key =>
+            {
+                var cfg = HardwareMonitorService.DecodeConfig(key, out _, out _);
+                return cfg != null
+                    && string.Equals(cfg.SensorType, sensor.SensorType, StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(cfg.HardwareName, sensor.HardwareName, StringComparison.Ordinal)
+                    && string.Equals(cfg.SensorName, sensor.SensorName, StringComparison.Ordinal);
+            });
+        }
+
+        static string SensorCategory(SensorInfo sensor)
+        {
+            string type = sensor?.HwType ?? "";
+            if (type.Equals("Cpu", StringComparison.OrdinalIgnoreCase)) return "CPU";
+            if (type.StartsWith("Gpu", StringComparison.OrdinalIgnoreCase)) return "GPU";
+            if (type.Equals("Motherboard", StringComparison.OrdinalIgnoreCase)) return "主板";
+            if (type.Equals("Storage", StringComparison.OrdinalIgnoreCase)) return "硬盘";
+            return "其他";
+        }
 
         static void RefreshMetricList(StackPanel list, HardwareMonitorService hw, SolidColorBrush fg)
         {
@@ -89,8 +112,7 @@ namespace PowerAudioManager
                     editPanel.Children.Add(new TextBlock { Text = "传感器", Foreground = fg, FontSize = 10, Margin = new Thickness(0, 6, 0, 2) });
                     var sensorCombo2 = new ComboBox { Height = 24, FontSize = 11, Background = new SolidColorBrush(Color.FromRgb(42, 39, 60)), Foreground = Brushes.White, BorderBrush = new SolidColorBrush(Color.FromRgb(80, 75, 120)) };
                     AppResources.StyleDarkComboBox(sensorCombo2);
-                    var pool = string.Equals(cfg.SensorType, "Fan", StringComparison.OrdinalIgnoreCase) ? hw.AllFanSensors :
-                               string.Equals(cfg.SensorType, "Control", StringComparison.OrdinalIgnoreCase) ? hw.AllControlSensors : hw.AllTempSensors;
+                    var pool = hw.GetSensors(cfg.SensorType);
                     int selSensor = 0;
                     for (int si = 0; si < pool.Count; si++)
                     {
@@ -194,17 +216,22 @@ namespace PowerAudioManager
             form.Children.Add(new TextBlock { Text = "类型", Foreground = fg, FontSize = 11, Margin = new Thickness(0, 0, 0, 2) });
             var typeCombo = new ComboBox { Height = 26, FontSize = 11, Background = new SolidColorBrush(Color.FromRgb(42, 39, 60)), Foreground = new SolidColorBrush(Color.FromRgb(220, 218, 245)), BorderBrush = new SolidColorBrush(Color.FromRgb(80, 75, 120)) };
             AppResources.StyleDarkComboBox(typeCombo);
-            typeCombo.Items.Add(new ComboBoxItem { Content = "温度", Tag = "Temp" });
-            typeCombo.Items.Add(new ComboBoxItem { Content = "风扇转速 (RPM)", Tag = "Fan" });
-            typeCombo.Items.Add(new ComboBoxItem { Content = "风扇控制 (%)", Tag = "Control" });
+            var tempSensors = hw.GetSensors("Temperature");
+            var fanSensors = hw.GetSensors("Fan");
+            var controlSensors = hw.GetSensors("Control");
+            typeCombo.Items.Add(new ComboBoxItem { Content = $"温度 ({tempSensors.Count})", Tag = "Temp" });
+            typeCombo.Items.Add(new ComboBoxItem { Content = $"风扇转速 RPM ({fanSensors.Count})", Tag = "Fan" });
+            typeCombo.Items.Add(new ComboBoxItem { Content = $"风扇控制 % ({controlSensors.Count})", Tag = "Control" });
             typeCombo.SelectedIndex = 0;
             form.Children.Add(typeCombo);
 
             // 传感器选择
             form.Children.Add(new TextBlock { Text = "传感器", Foreground = fg, FontSize = 11, Margin = new Thickness(0, 6, 0, 2) });
-            var sensorCombo = new ComboBox { Height = 26, FontSize = 11, Background = new SolidColorBrush(Color.FromRgb(42, 39, 60)), Foreground = new SolidColorBrush(Color.FromRgb(220, 218, 245)), BorderBrush = new SolidColorBrush(Color.FromRgb(80, 75, 120)) };
+            var sensorCombo = new ComboBox { Height = 28, FontSize = 11, MaxDropDownHeight = 300, Background = new SolidColorBrush(Color.FromRgb(42, 39, 60)), Foreground = new SolidColorBrush(Color.FromRgb(220, 218, 245)), BorderBrush = new SolidColorBrush(Color.FromRgb(80, 75, 120)) };
             AppResources.StyleDarkComboBox(sensorCombo);
             form.Children.Add(sensorCombo);
+            var sensorHint = new TextBlock { Foreground = fg, FontSize = 9, Margin = new Thickness(2, 3, 0, 0), TextWrapping = TextWrapping.Wrap };
+            form.Children.Add(sensorHint);
 
             void PopulateSensors()
             {
@@ -212,28 +239,49 @@ namespace PowerAudioManager
                 var tag = (typeCombo.SelectedItem as ComboBoxItem)?.Tag as string;
                 List<SensorInfo> pool;
                 string unit;
-                if (tag == "Fan")      { pool = hw.AllFanSensors;    unit = "RPM"; }
-                else if (tag == "Control") { pool = hw.AllControlSensors; unit = "%"; }
-                else                     { pool = hw.AllTempSensors;  unit = "°C"; }
+                if (tag == "Fan")      { pool = fanSensors;    unit = "RPM"; }
+                else if (tag == "Control") { pool = controlSensors; unit = "%"; }
+                else                     { pool = tempSensors;  unit = "°C"; }
 
-                if (pool.Count == 0)
+                var sensors = pool
+                    .GroupBy(s => $"{s.SensorType}\0{s.HardwareName}\0{s.SensorName}", StringComparer.OrdinalIgnoreCase)
+                    .Select(g => g.First())
+                    .OrderBy(s => SensorCategory(s) == "CPU" ? 0 : SensorCategory(s) == "GPU" ? 1 : SensorCategory(s) == "主板" ? 2 : SensorCategory(s) == "硬盘" ? 3 : 4)
+                    .ThenBy(s => s.HardwareName, StringComparer.CurrentCultureIgnoreCase)
+                    .ThenBy(s => s.SensorName, StringComparer.CurrentCultureIgnoreCase)
+                    .ToList();
+                int availableCount = sensors.Count(s => !IsMetricSensorEnabled(hw, s));
+
+                if (sensors.Count == 0)
                 {
                     sensorCombo.Items.Add(new ComboBoxItem { Content = "(无可用传感器)", Tag = null });
+                    sensorHint.Text = "未检测到此类传感器，请确认 OneBoxSvc 和硬件采集进程正在运行。";
                 }
                 else
                 {
-                    // 先触发一次硬件刷新确保预览值有效
-                    hw.Update();
-                    foreach (var s in pool)
+                    int firstAvailable = -1;
+                    foreach (var s in sensors)
                     {
                         float? preview = hw.ReadSensorPreview(s);
                         string valStr = preview.HasValue ? $"  [{preview.Value:0}{unit}]" : "  [--]";
                         string dn = HardwareMonitorService.DefaultDisplayName(s.HardwareName, s.SensorName, s.SensorType);
                         string ik = HardwareMonitorService.AutoIconKey(dn, s);
-                        sensorCombo.Items.Add(new ComboBoxItem { Content = $"{s.HardwareName} — {s.SensorName}{valStr}", Tag = HardwareMonitorService.EncodeConfig(s, dn, ik) });
+                        bool added = IsMetricSensorEnabled(hw, s);
+                        var item = new ComboBoxItem
+                        {
+                            Content = $"{SensorCategory(s)} · {s.HardwareName} — {s.SensorName}{valStr}{(added ? "  （已添加）" : "")}",
+                            Tag = HardwareMonitorService.EncodeConfig(s, dn, ik),
+                            IsEnabled = !added,
+                            ToolTip = $"{s.HardwareName}\n{s.SensorName}"
+                        };
+                        sensorCombo.Items.Add(item);
+                        if (!added && firstAvailable < 0) firstAvailable = sensorCombo.Items.Count - 1;
                     }
+                    sensorCombo.SelectedIndex = firstAvailable;
+                    sensorHint.Text = availableCount > 0
+                        ? $"按硬件分类排列，{availableCount} 个可添加；已添加的传感器会自动禁用。"
+                        : "此类型的传感器均已添加。";
                 }
-                sensorCombo.SelectedIndex = pool.Count > 0 ? 0 : -1;
             }
             PopulateSensors();
             typeCombo.SelectionChanged += (_, _) => PopulateSensors();
@@ -268,6 +316,11 @@ namespace PowerAudioManager
             btnRow.Children.Add(cancelBtn);
             form.Children.Add(btnRow);
 
+            void UpdateConfirmState() => confirmBtn.IsEnabled =
+                sensorCombo.SelectedItem is ComboBoxItem selected && selected.IsEnabled && selected.Tag is string;
+            sensorCombo.SelectionChanged += (_, _) => UpdateConfirmState();
+            UpdateConfirmState();
+
             confirmBtn.Click += (_, _) =>
             {
                 var keyTemplate = (sensorCombo.SelectedItem as ComboBoxItem)?.Tag as string;
@@ -279,7 +332,9 @@ namespace PowerAudioManager
                         parts[3] = string.IsNullOrWhiteSpace(nameBox.Text) ? parts[3] : nameBox.Text.Trim();
                     var finalKey = string.Join("|", parts);
                     var updated = new List<string>(hw.EnabledMetrics);
-                    if (!updated.Contains(finalKey))
+                    string ignoredName, ignoredIcon;
+                    var selectedSensor = HardwareMonitorService.DecodeConfig(finalKey, out ignoredName, out ignoredIcon);
+                    if (selectedSensor != null && !IsMetricSensorEnabled(hw, selectedSensor))
                     {
                         updated.Add(finalKey);
                         if (!hw.SaveEnabledMetrics(updated))

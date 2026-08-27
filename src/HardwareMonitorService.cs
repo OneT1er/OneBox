@@ -271,6 +271,18 @@ namespace PowerAudioManager
             }
         }
 
+        /// <summary>返回设置界面可安全枚举的传感器快照，避免管道刷新时修改集合。</summary>
+        public List<SensorInfo> GetSensors(string sensorType)
+        {
+            lock (_gate)
+            {
+                List<SensorInfo> source = IsType(sensorType, "Fan") ? AllFanSensors
+                    : IsType(sensorType, "Control") ? AllControlSensors
+                    : AllTempSensors;
+                return source.ToList();
+            }
+        }
+
         public bool SaveEnabledMetrics(List<string> list)
         {
             var next = list?.ToList() ?? new List<string>();
