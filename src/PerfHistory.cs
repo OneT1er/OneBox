@@ -58,7 +58,7 @@ namespace PowerAudioManager
                 if (_path == null)
                 {
                     string dir = Path.Combine(
-                        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "OneBox");
+                        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "OneT1er", "OneBox");
                     _path = Path.Combine(dir, "OneBox.perfhistory.json");
                 }
                 return _path;
@@ -86,6 +86,7 @@ namespace PowerAudioManager
             AddPair(Path.Combine(exeDir, "OneBox.perfhistory.json"));
             string localRoot = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "OneBox");
+            AddPair(Path.Combine(localRoot, "OneBox.perfhistory.json"));
             AddPair(Path.Combine(localRoot, "current", "OneBox.perfhistory.json"));
             return result;
         }

@@ -60,7 +60,7 @@ public sealed class DurableFileStoreTests
         string actual = Assert.IsType<string>(property.GetValue(null));
         string expected = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "OneBox", "OneBox.perfhistory.json");
+            "OneT1er", "OneBox", "OneBox.perfhistory.json");
 
         Assert.Equal(expected, actual, ignoreCase: true);
     }
