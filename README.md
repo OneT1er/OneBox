@@ -80,7 +80,8 @@
 - 趋势图支持 5 分钟至全天多个时间范围、双 Y 轴、十字线与数值提示。
 - 图表可标记各时间段的前台应用，方便对照负载变化。
 - 只记录真实传感器读数；停采、重启或传感器失配会显示断口，不用旧值填充。
-- 后台持续采集并每 60 秒落盘，打开图表即可查看此前记录。
+- 后台持续采集并每 60 秒原子落盘到 `%LocalAppData%\OneBox\`，保留上一代有效备份；异常断电后可自动恢复此前记录。
+- 传感器冷启动暂时无读数时保留配置并显示 `--`，不会删除已保存的历史曲线。
 - 硬件采集由隔离进程完成，通过 SID 隔离的命名管道传输。
 
 </details>
@@ -151,6 +152,7 @@ Release 同时提供 `OneBox-win-Portable.zip`，解压即可运行，适合临�
 | 音频设备热键 / 隐藏状态 | `HKCU\Software\PowerAudioManager\Devices` |
 | 翻译凭据 | 当前用户注册表，DPAPI 加密 |
 | 剪贴板历史 | `%LocalAppData%\OneBox\`，DPAPI 加密 |
+| 性能趋势历史 | `%LocalAppData%\OneBox\OneBox.perfhistory.json`，原子写入并保留有效备份 |
 | 截图与图库 | 用户在设置中选择的目录 |
 | 运行日志 | 应用目录下的 `OneBox.log` |
 | 服务 / 硬件日志 | `OneBox.Service.log` / `OneBox.Hardware.log` |
