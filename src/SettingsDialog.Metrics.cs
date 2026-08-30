@@ -15,14 +15,7 @@ namespace PowerAudioManager
 
         static bool IsMetricSensorEnabled(HardwareMonitorService hw, SensorInfo sensor)
         {
-            return hw.EnabledMetrics.Any(key =>
-            {
-                var cfg = HardwareMonitorService.DecodeConfig(key, out _, out _);
-                return cfg != null
-                    && string.Equals(cfg.SensorType, sensor.SensorType, StringComparison.OrdinalIgnoreCase)
-                    && string.Equals(cfg.HardwareName, sensor.HardwareName, StringComparison.Ordinal)
-                    && string.Equals(cfg.SensorName, sensor.SensorName, StringComparison.Ordinal);
-            });
+            return hw.IsSensorEnabled(sensor);
         }
 
         static string SensorCategory(SensorInfo sensor)
@@ -113,12 +106,21 @@ namespace PowerAudioManager
                     var sensorCombo2 = new ComboBox { Height = 24, FontSize = 11, Background = new SolidColorBrush(Color.FromRgb(42, 39, 60)), Foreground = Brushes.White, BorderBrush = new SolidColorBrush(Color.FromRgb(80, 75, 120)) };
                     AppResources.StyleDarkComboBox(sensorCombo2);
                     var pool = hw.GetSensors(cfg.SensorType);
-                    int selSensor = 0;
+                    SensorInfo resolvedSensor = HardwareMonitorService.ResolveSensor(pool, cfg);
+                    int selSensor = resolvedSensor == null ? -1 : pool.IndexOf(resolvedSensor);
                     for (int si = 0; si < pool.Count; si++)
                     {
                         var s = pool[si];
                         sensorCombo2.Items.Add(new ComboBoxItem { Content = $"{s.HardwareName} — {s.SensorName}", Tag = HardwareMonitorService.EncodeConfig(s, displayName, iconKey) });
-                        if (s.HardwareName == cfg.HardwareName && s.SensorName == cfg.SensorName) selSensor = si;
+                    }
+                    if (selSensor < 0)
+                    {
+                        sensorCombo2.Items.Insert(0, new ComboBoxItem
+                        {
+                            Content = $"当前暂不可用 — {cfg.HardwareName} — {cfg.SensorName}",
+                            Tag = capturedKey,
+                        });
+                        selSensor = 0;
                     }
                     sensorCombo2.SelectedIndex = selSensor;
                     editPanel.Children.Add(sensorCombo2);

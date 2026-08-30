@@ -19,12 +19,14 @@ namespace PowerAudioManager
     {
         public const int Capacity = 86400; // 全天 @1s
         static readonly object _lock = new object();
+        static readonly object _saveIoLock = new object();
         static readonly Dictionary<string, Series> _series = new Dictionary<string, Series>();
         // 后台持续采集：数据常驻内存（每条 series 全天约 1MB，传感器数量有限，可接受），
-        // 每 60 秒自动落盘一次 + 退出落盘；加载失败仅尝试一次（损坏文件备份为 .bak 后按空历史继续）。
+        // 每 60 秒自动原子落盘一次 + 退出落盘；主文件损坏时优先恢复上一代有效 .bak。
         static System.Threading.Timer _saveTimer;
         static bool _loadAttempted;   // Load 已尝试过（失败不每秒重试）
         static bool _loaded;          // _series 已从磁盘加载；Save 未加载时跳过，避免空写覆盖持久化数据
+        static bool _preserveBackupOnNextSave;
 
         class Series
         {
@@ -55,12 +57,37 @@ namespace PowerAudioManager
             {
                 if (_path == null)
                 {
-                    var exe = Environment.ProcessPath;
-                    string dir = string.IsNullOrEmpty(exe) ? AppDomain.CurrentDomain.BaseDirectory : Path.GetDirectoryName(exe);
+                    string dir = Path.Combine(
+                        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "OneBox");
                     _path = Path.Combine(dir, "OneBox.perfhistory.json");
                 }
                 return _path;
             }
+        }
+
+        static List<string> GetLoadCandidates()
+        {
+            var result = new List<string>();
+            void AddPair(string path)
+            {
+                if (string.IsNullOrEmpty(path)) return;
+                if (!result.Contains(path, StringComparer.OrdinalIgnoreCase)) result.Add(path);
+                string backup = path + ".bak";
+                if (!result.Contains(backup, StringComparer.OrdinalIgnoreCase)) result.Add(backup);
+            }
+
+            AddPair(FilePath);
+
+            // v1.8.1 and earlier kept history beside the executable. Keep both
+            // the current process directory and the conventional Velopack
+            // current directory as one-time migration sources.
+            string exe = Environment.ProcessPath;
+            string exeDir = string.IsNullOrEmpty(exe) ? AppDomain.CurrentDomain.BaseDirectory : Path.GetDirectoryName(exe);
+            AddPair(Path.Combine(exeDir, "OneBox.perfhistory.json"));
+            string localRoot = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "OneBox");
+            AddPair(Path.Combine(localRoot, "current", "OneBox.perfhistory.json"));
+            return result;
         }
 
         public static void Add(List<MetricValue> metrics)
@@ -69,12 +96,6 @@ namespace PowerAudioManager
             EnsureLoaded();
             lock (_lock)
             {
-                // 清理已删除的指标（用户在设置里删的，不再显示历史数据）
-                if (metrics.Count > 0)
-                {
-                    var currentKeys = new HashSet<string>(metrics.Where(m => m.IsTemp || m.Unit == "RPM").Select(m => m.ConfigKey));
-                    foreach (var k in _series.Keys.Where(k => !currentKeys.Contains(k)).ToList()) _series.Remove(k);
-                }
                 var now = DateTime.Now;
                 foreach (var m in metrics)
                 {
@@ -95,6 +116,19 @@ namespace PowerAudioManager
                     s.Icon = m.IconKey;
                     s.IsTemp = isTemp;
                 }
+            }
+        }
+
+        // 只有设置中明确删除/替换指标时才清理对应历史。单次快照缺值（DDR5
+        // 冷启动、SMBus 抖动等）绝不能删除已经持久化的整条曲线。
+        public static void RetainEnabledSeries(IEnumerable<string> enabledKeys)
+        {
+            EnsureLoaded();
+            var enabled = new HashSet<string>(enabledKeys ?? Enumerable.Empty<string>(), StringComparer.Ordinal);
+            lock (_lock)
+            {
+                foreach (string key in _series.Keys.Where(key => !enabled.Contains(key)).ToList())
+                    _series.Remove(key);
             }
         }
 
@@ -166,7 +200,7 @@ namespace PowerAudioManager
             try { Save(); } catch (Exception ex) { AppLog.Log("PerfHistory", ex); }
         }
 
-        // 首次 Add/图表打开时懒加载磁盘历史；失败仅尝试一次（损坏文件备份为 .bak 后按空历史继续）。
+        // 首次 Add/图表打开时懒加载磁盘历史；失败仅尝试一次，坏文件隔离后尝试有效备份。
         public static void EnsureLoaded()
         {
             if (_loaded || _loadAttempted) return;
@@ -196,88 +230,134 @@ namespace PowerAudioManager
         {
             try
             {
-                Dictionary<string, SeriesData> data;
-                lock (_lock)
+                lock (_saveIoLock)
                 {
-                    if (!_loaded) return;   // 从未加载过磁盘数据：不空写覆盖持久化文件
-                    data = new Dictionary<string, SeriesData>();
-                    foreach (var kv in _series)
+                    Dictionary<string, SeriesData> data;
+                    bool preserveBackup;
+                    lock (_lock)
                     {
-                        var s = kv.Value;
-                        var pts = new List<float>(s.Count);
-                        var times = new List<string>(s.Count);
-                        int start = (s.Head - s.Count + Capacity) % Capacity;
-                        for (int i = 0; i < s.Count; i++)
+                        if (!_loaded) return;   // 从未加载过磁盘数据：不空写覆盖持久化文件
+                        preserveBackup = _preserveBackupOnNextSave;
+                        data = new Dictionary<string, SeriesData>();
+                        foreach (var kv in _series)
                         {
-                            pts.Add(s.Buf[(start + i) % Capacity]);
-                            times.Add(((DateTimeOffset)s.Times[(start + i) % Capacity].ToUniversalTime()).ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture));
+                            var s = kv.Value;
+                            var pts = new List<float>(s.Count);
+                            var times = new List<string>(s.Count);
+                            int start = (s.Head - s.Count + Capacity) % Capacity;
+                            for (int i = 0; i < s.Count; i++)
+                            {
+                                pts.Add(s.Buf[(start + i) % Capacity]);
+                                times.Add(((DateTimeOffset)s.Times[(start + i) % Capacity].ToUniversalTime()).ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture));
+                            }
+                            data[kv.Key] = new SeriesData { name = s.Name, icon = s.Icon, isTemp = s.IsTemp, points = pts, times = times };
                         }
-                        data[kv.Key] = new SeriesData { name = s.Name, icon = s.Icon, isTemp = s.IsTemp, points = pts, times = times };
                     }
+                    string json = JsonSerializer.Serialize(data);
+                    DurableFileStore.WriteUtf8Atomically(FilePath, json, preserveBackup);
+                    lock (_lock) _preserveBackupOnNextSave = false;
+                    AppLog.Log("PerfHistory", "saved " + data.Count + " series");
                 }
-                File.WriteAllText(FilePath, JsonSerializer.Serialize(data));
-                AppLog.Log("PerfHistory", "saved " + data.Count + " series");
             }
             catch (Exception ex) { AppLog.Log("PerfHistory", "save fail: " + ex.Message); }
         }
 
-        // 返回是否成功加载（文件不存在视为成功：空历史也是合法状态）。损坏/解析异常时
-        // 把原文件备份为 .bak 并按空历史继续，避免新采集的数据永远无法落盘。
-        public static bool Load()
+        static Dictionary<string, Series> ReadSeries(string path, out string json)
         {
-            try
+            json = File.ReadAllText(path);
+            var data = JsonSerializer.Deserialize<Dictionary<string, SeriesData>>(json)
+                ?? new Dictionary<string, SeriesData>();
+            DateTime fileTime = File.GetLastWriteTime(path);
+            var loaded = new Dictionary<string, Series>();
+            foreach (var kv in data)
             {
-                if (!File.Exists(FilePath)) return true;
-                var data = JsonSerializer.Deserialize<Dictionary<string, SeriesData>>(File.ReadAllText(FilePath));
-                if (data == null) return true;
-                // 旧版 JSON 无 times：用文件最后修改时间回填（数据结束于保存时刻），避免旧数据被当成"最近"绘制
-                DateTime fileTime = File.GetLastWriteTime(FilePath);
-                lock (_lock)
+                if (kv.Value == null) throw new InvalidDataException("Series data is missing for " + kv.Key);
+                var s = new Series { Name = kv.Value.name, Icon = kv.Value.icon, IsTemp = kv.Value.isTemp };
+                var pts = kv.Value.points;
+                var times = kv.Value.times;
+                if (pts != null)
                 {
-                    foreach (var kv in data)
+                    int first = Math.Max(0, pts.Count - Capacity);
+                    for (int i = first; i < pts.Count; i++)
                     {
-                        var s = new Series { Name = kv.Value.name, Icon = kv.Value.icon, IsTemp = kv.Value.isTemp };
-                        var pts = kv.Value.points;
-                        var times = kv.Value.times;
-                        if (pts != null)
+                        DateTime t = fileTime.AddSeconds(-(pts.Count - 1 - i));
+                        if (times != null && i < times.Count)
                         {
-                            for (int i = 0; i < pts.Count; i++)
+                            string rawTime = times[i];
+                            if (long.TryParse(rawTime, NumberStyles.Integer, CultureInfo.InvariantCulture, out long unixSec))
                             {
-                                DateTime t;
-                                if (times != null && i < times.Count)
-                                {
-                                    // 兼容两种格式：旧版 ISO "o"；新版 unix 秒（更紧凑）。都解析不了则按保存时刻回填
-                                    if (DateTime.TryParse(times[i], null, DateTimeStyles.RoundtripKind, out var parsed))
-                                        t = parsed;
-                                    else if (long.TryParse(times[i], out var unixSec))
-                                        t = DateTimeOffset.FromUnixTimeSeconds(unixSec).LocalDateTime;
-                                    else
-                                        t = fileTime.AddSeconds(-(pts.Count - 1 - i)); // 旧格式回填：1s 间距结束于保存时刻
-                                }
-                                else
-                                    t = fileTime.AddSeconds(-(pts.Count - 1 - i)); // 旧格式回填：1s 间距结束于保存时刻
-                                s.Buf[s.Head] = pts[i];
-                                s.Times[s.Head] = t;
-                                s.Head = (s.Head + 1) % Capacity;
-                                if (s.Count < Capacity) s.Count++;
+                                try { t = DateTimeOffset.FromUnixTimeSeconds(unixSec).LocalDateTime; }
+                                catch (ArgumentOutOfRangeException) { }
+                            }
+                            else if (DateTime.TryParse(rawTime, null, DateTimeStyles.RoundtripKind, out DateTime parsed))
+                            {
+                                t = parsed.Kind == DateTimeKind.Utc ? parsed.ToLocalTime() : parsed;
                             }
                         }
-                        _series[kv.Key] = s;
+                        s.Buf[s.Head] = pts[i];
+                        s.Times[s.Head] = t;
+                        s.Head = (s.Head + 1) % Capacity;
+                        if (s.Count < Capacity) s.Count++;
                     }
                 }
-                AppLog.Log("PerfHistory", "loaded " + data.Count + " series");
-                return true;
+                loaded[kv.Key] = s;
             }
-            catch (Exception ex)
+            return loaded;
+        }
+
+        // 主文件无效时依次尝试 last-known-good 备份和旧版 executable 目录，
+        // 损坏文件单独隔离保留证据，绝不再覆盖有效 .bak。
+        public static bool Load()
+        {
+            foreach (string candidate in GetLoadCandidates())
             {
-                AppLog.Log("PerfHistory", "load fail, backing up: " + ex.Message);
+                if (!File.Exists(candidate)) continue;
                 try
                 {
-                    if (File.Exists(FilePath)) { File.Copy(FilePath, FilePath + ".bak", true); File.Delete(FilePath); }
+                    Dictionary<string, Series> loaded = ReadSeries(candidate, out string json);
+                    lock (_lock)
+                    {
+                        _series.Clear();
+                        foreach (var kv in loaded) _series[kv.Key] = kv.Value;
+                    }
+
+                    if (!string.Equals(candidate, FilePath, StringComparison.OrdinalIgnoreCase))
+                    {
+                        bool recoveredBackup = string.Equals(candidate, FilePath + ".bak", StringComparison.OrdinalIgnoreCase);
+                        lock (_lock) _preserveBackupOnNextSave = recoveredBackup;
+                        try
+                        {
+                            DurableFileStore.WriteUtf8Atomically(FilePath, json, preserveBackup: recoveredBackup);
+                            lock (_lock) _preserveBackupOnNextSave = false;
+                            AppLog.Log("PerfHistory", recoveredBackup
+                                ? "restored last-known-good backup"
+                                : "migrated history to stable app-data path");
+                        }
+                        catch (Exception ex)
+                        {
+                            AppLog.Log("PerfHistory", "history restore/migration deferred: " + ex.Message);
+                        }
+                    }
+
+                    AppLog.Log("PerfHistory", "loaded " + loaded.Count + " series");
+                    return true;
                 }
-                catch { }
-                return true;   // 损坏文件已备份，按空历史继续，后续数据可正常落盘
+                catch (Exception ex)
+                {
+                    AppLog.Log("PerfHistory", "load failed from " + candidate + ": " + ex.Message);
+                    try
+                    {
+                        string quarantined = DurableFileStore.QuarantineCorruptFile(candidate);
+                        if (!string.IsNullOrEmpty(quarantined))
+                            AppLog.Log("PerfHistory", "quarantined corrupt history as " + quarantined);
+                    }
+                    catch (Exception quarantineError)
+                    {
+                        AppLog.Log("PerfHistory", "could not quarantine corrupt history: " + quarantineError.Message);
+                    }
+                }
             }
+            return true;   // 无有效文件时按空历史继续，后续新数据正常原子落盘
         }
     }
 }

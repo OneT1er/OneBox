@@ -39,6 +39,7 @@ namespace PowerAudioManager
 
         private readonly object _gate = new();
         private readonly Dictionary<string, MetricValue> _lastMetrics = new();
+        private readonly HashSet<string> _loggedRemaps = new();
         private readonly List<MetricValue> _allPipeMetrics = new();
         private CancellationTokenSource _pipeCancellation;
         private Task _pipeTask;
@@ -238,18 +239,52 @@ namespace PowerAudioManager
                             Cached = true,
                         });
                     }
+                    else
+                    {
+                        // Sensors such as DDR5 SPD temperatures can be present
+                        // in enumeration for over a minute before their first
+                        // usable value arrives. Keep the configured row visible
+                        // as "--" instead of making the saved selection vanish.
+                        values.Add(CreateUnavailableMetric(config, key, displayName, iconKey));
+                    }
                 }
                 ActiveMetrics.Clear();
                 ActiveMetrics.AddRange(values);
             }
         }
 
+        internal static MetricValue CreateUnavailableMetric(SensorInfo config, string key, string displayName, string iconKey)
+        {
+            string unit = IsType(config?.SensorType, "Temperature") ? "°C"
+                : IsType(config?.SensorType, "Control") ? "%" : "RPM";
+            return new MetricValue
+            {
+                DisplayName = displayName,
+                IconKey = iconKey,
+                Value = null,
+                Unit = unit,
+                ConfigKey = key,
+                Cached = true,
+            };
+        }
+
         private MetricValue FindSnapshotMetric(SensorInfo config, string exactKey)
         {
-            MetricValue exact = _allPipeMetrics.FirstOrDefault(metric => metric.ConfigKey == exactKey);
+            MetricValue exact = string.IsNullOrEmpty(exactKey) ? null
+                : _allPipeMetrics.FirstOrDefault(metric => string.Equals(metric.ConfigKey, exactKey, StringComparison.Ordinal));
             if (exact != null) return exact;
             List<MetricValue> matches = _allPipeMetrics.Where(metric => MetricMatches(metric, config)).ToList();
-            return matches.Count == 1 ? matches[0] : null;
+            if (matches.Count == 1) return matches[0];
+
+            // LibreHardwareMonitor builds DDR5 hardware names from SPD data;
+            // the model text/suffix may drift between cold boots. Resolve the
+            // current sensor by unique type + SensorName, then bind its value.
+            SensorInfo actual = ResolveSensor(GetSensorSourceUnsafe(config.SensorType), config);
+            if (actual == null || SensorIdentityEquals(actual, config)) return null;
+            matches = _allPipeMetrics.Where(metric => MetricMatches(metric, actual)).ToList();
+            if (matches.Count != 1) return null;
+            LogSensorRemap(config, actual);
+            return matches[0];
         }
 
         private static bool MetricMatches(MetricValue metric, SensorInfo config)
@@ -261,13 +296,44 @@ namespace PowerAudioManager
                 && string.Equals(parts[1], config.HardwareName, StringComparison.Ordinal);
         }
 
+        private List<SensorInfo> GetSensorSourceUnsafe(string sensorType) =>
+            IsType(sensorType, "Fan") ? AllFanSensors
+            : IsType(sensorType, "Control") ? AllControlSensors
+            : AllTempSensors;
+
+        internal static SensorInfo ResolveSensor(IEnumerable<SensorInfo> source, SensorInfo config)
+        {
+            if (source == null || config == null) return null;
+            List<SensorInfo> candidates = source.Where(sensor =>
+                IsType(sensor.SensorType, config.SensorType)).ToList();
+            SensorInfo exact = candidates.FirstOrDefault(sensor => SensorIdentityEquals(sensor, config));
+            if (exact != null) return exact;
+
+            List<SensorInfo> sameName = candidates.Where(sensor =>
+                string.Equals(sensor.SensorName, config.SensorName, StringComparison.Ordinal)).ToList();
+            return sameName.Count == 1 ? sameName[0] : null;
+        }
+
+        private static bool SensorIdentityEquals(SensorInfo left, SensorInfo right) =>
+            left != null && right != null
+            && IsType(left.SensorType, right.SensorType)
+            && string.Equals(left.HardwareName, right.HardwareName, StringComparison.Ordinal)
+            && string.Equals(left.SensorName, right.SensorName, StringComparison.Ordinal);
+
+        private void LogSensorRemap(SensorInfo configured, SensorInfo actual)
+        {
+            string key = configured.SensorType + "|" + configured.HardwareName + "|" + configured.SensorName
+                + "->" + actual.HardwareName + "|" + actual.SensorName;
+            if (_loggedRemaps.Add(key))
+                AppLog.Log("Temp", $"sensor remap: '{configured.HardwareName} | {configured.SensorName}' -> '{actual.HardwareName} | {actual.SensorName}'");
+        }
+
         public float? ReadSensorPreview(SensorInfo config)
         {
             if (config == null) return null;
             lock (_gate)
             {
-                List<MetricValue> matches = _allPipeMetrics.Where(metric => MetricMatches(metric, config)).ToList();
-                return matches.Count == 1 ? matches[0].Value : null;
+                return FindSnapshotMetric(config, null)?.Value;
             }
         }
 
@@ -283,11 +349,33 @@ namespace PowerAudioManager
             }
         }
 
+        public bool IsSensorEnabled(SensorInfo sensor)
+        {
+            if (sensor == null) return false;
+            lock (_gate)
+            {
+                foreach (string key in EnabledMetrics)
+                {
+                    SensorInfo configured = DecodeConfig(key, out _, out _);
+                    if (configured == null || !IsType(configured.SensorType, sensor.SensorType)) continue;
+                    SensorInfo resolved = ResolveSensor(GetSensorSourceUnsafe(configured.SensorType), configured);
+                    if (SensorIdentityEquals(resolved, sensor)) return true;
+                }
+                return false;
+            }
+        }
+
         public bool SaveEnabledMetrics(List<string> list)
         {
             var next = list?.ToList() ?? new List<string>();
             if (!AppPrefs.SetString("Monitor.Metrics", string.Join(";", next))) return false;
-            lock (_gate) EnabledMetrics = next;
+            lock (_gate)
+            {
+                EnabledMetrics = next;
+                foreach (string key in _lastMetrics.Keys.Where(key => !next.Contains(key, StringComparer.Ordinal)).ToList())
+                    _lastMetrics.Remove(key);
+            }
+            PerfHistory.RetainEnabledSeries(next);
             UpdateFromSnapshot();
             return true;
         }
@@ -390,6 +478,7 @@ namespace PowerAudioManager
                 ActiveMetrics.Clear();
                 _allPipeMetrics.Clear();
                 _lastMetrics.Clear();
+                _loggedRemaps.Clear();
             }
         }
 
