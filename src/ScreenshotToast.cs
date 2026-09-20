@@ -20,7 +20,7 @@ namespace PowerAudioManager
         [DllImport("user32.dll", SetLastError = true)] static extern bool SetWindowDisplayAffinity(IntPtr hwnd, uint affinity);
         [DllImport("dwmapi.dll")] static extern int DwmFlush();
         [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr hwnd, out WindowRect rect);
-        [DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr hwnd, IntPtr after, int x, int y, int width, int height, uint flags);
+        [DllImport("user32.dll", SetLastError = true)] static extern bool SetWindowPos(IntPtr hwnd, IntPtr after, int x, int y, int width, int height, uint flags);
         [StructLayout(LayoutKind.Sequential)] struct WindowRect { public int Left, Top, Right, Bottom; }
 
         public static void Show(string appName, string path, string source) =>
@@ -156,19 +156,35 @@ namespace PowerAudioManager
                     AppLog.Log("ScreenshotToast", "Capture exclusion unavailable: " + Marshal.GetLastWin32Error());
                 SetWindowPos(hwnd, IntPtr.Zero, screen.WorkingArea.Left + 20, screen.WorkingArea.Top + 20, 0, 0, 0x15);
             };
-            dlg.Loaded += (_, _) =>
+            bool placementQueued = false;
+            bool revealed = false;
+            void QueuePlacement()
             {
-                // 使用物理坐标定位，兼容负坐标和不同 DPI 的副屏。
-                var hwnd = new System.Windows.Interop.WindowInteropHelper(dlg).Handle;
-                var area = screen.WorkingArea;
-                if (GetWindowRect(hwnd, out var rect))
+                if (!dlg.IsLoaded || placementQueued) return;
+                placementQueued = true;
+                // Loaded 仍处于首次 Show/SizeToContent 布局中；此时原生定位会被 WPF
+                // 恢复为 SourceInitialized 的位置。等布局和渲染完成后再按最终像素尺寸定位。
+                dlg.Dispatcher.BeginInvoke(DispatcherPriority.ContextIdle, new Action(() =>
                 {
+                    placementQueued = false;
+                    if (!dlg.IsVisible) return;
+                    var hwnd = new System.Windows.Interop.WindowInteropHelper(dlg).Handle;
+                    if (!GetWindowRect(hwnd, out var rect)) return;
+                    var area = screen.WorkingArea;
                     var origin = options.GetOrigin(area, rect.Right - rect.Left, rect.Bottom - rect.Top);
-                    SetWindowPos(hwnd, IntPtr.Zero, origin.X, origin.Y, 0, 0, 0x15);
-                }
-                dlg.BeginAnimation(UIElement.OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(160)));
-                timer.Start();
-            };
+                    if (!SetWindowPos(hwnd, IntPtr.Zero, origin.X, origin.Y, 0, 0, 0x15))
+                        AppLog.Log("ScreenshotToast", "Position failed: " + Marshal.GetLastWin32Error());
+                    if (!revealed)
+                    {
+                        revealed = true;
+                        dlg.BeginAnimation(UIElement.OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(160)));
+                        timer.Start();
+                    }
+                }));
+            }
+            dlg.Loaded += (_, _) => QueuePlacement();
+            dlg.ContentRendered += (_, _) => QueuePlacement();
+            dlg.SizeChanged += (_, _) => QueuePlacement();
             _current = dlg; dlg.Show();
         }
 

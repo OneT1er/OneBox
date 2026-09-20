@@ -46,7 +46,7 @@ namespace PowerAudioManager
             notificationPanel.Children.Add(new TextBlock { Text = "弹出位置", Foreground = fg, FontSize = 11, Margin = new Thickness(0, 0, 0, 4) });
             var positionBox = new ComboBox { Height = 28, FontSize = 12 };
             AppResources.StyleDarkComboBox(positionBox);
-            foreach (var label in new[] { "右下角（默认）", "左下角", "右上角", "左上角" }) positionBox.Items.Add(label);
+            foreach (var label in new[] { "右下角", "左下角", "右上角", "左上角" }) positionBox.Items.Add(label);
             positionBox.SelectedIndex = (int)toastOptions.Position;
             notificationPanel.Children.Add(positionBox);
             notificationPanel.Children.Add(new TextBlock { Text = "显示在截图时前台应用所在屏幕，悬停时暂停关闭。",
