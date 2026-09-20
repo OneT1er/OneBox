@@ -11,7 +11,7 @@ using System.Windows.Shapes;
 
 namespace PowerAudioManager
 {
-    // 设置对话框：侧栏 + 7 个 tab。各 tab 构建逻辑按文件拆分（partial）：
+    // 设置对话框：侧栏 + 8 个 tab。各 tab 构建逻辑按文件拆分（partial）：
     //   SettingsDialog.General / Modules / Memory / Translate / Screenshot / Clipboard / Temp / Metrics
     internal static partial class SettingsDialog
     {
@@ -83,6 +83,7 @@ namespace PowerAudioManager
                 BuildScreenshotTab(owner, dlg, fg),
                 BuildClipboardTab(owner, dlg, fg),
                 BuildTempTab(owner, dlg, fg),
+                BuildAboutTab(dlg, fg),
             };
 
             sideBar.Items.Add(SidebarItem(IconKey.Settings, "常规"));
@@ -92,6 +93,7 @@ namespace PowerAudioManager
             sideBar.Items.Add(SidebarItem(IconKey.Capture, "截图"));
             sideBar.Items.Add(SidebarItem(IconKey.Clipboard, "剪贴板"));
             sideBar.Items.Add(SidebarItem(IconKey.Performance, "性能"));
+            sideBar.Items.Add(SidebarItem(IconKey.Brand, "关于"));
 
             if (openTab >= 0 && openTab < sideBar.Items.Count)
             {

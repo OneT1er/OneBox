@@ -326,20 +326,20 @@ namespace PowerAudioManager
                     foreach (var seg in Segments)
                         if (tAt >= seg.Start && tAt < seg.End) { fgExe = seg.Exe; break; }
 
-                if (labels.Count > 0 || !string.IsNullOrEmpty(fgExe))
+                if (labels.Count > 0 || Segments != null)
                 {
-                    int tipRows = labels.Count + (string.IsNullOrEmpty(fgExe) ? 0 : 1);
+                    int tipRows = labels.Count + 1;
                     double cardW = 150, cardH = 14 * tipRows + 8;
                     double cx = _mouseX + 8; if (cx + cardW > w - 2) cx = _mouseX - cardW - 8;
                     double cy = padTop + 4;
                     dc.DrawRoundedRectangle(TooltipBg, null, new Rect(cx, cy, cardW, cardH), 4, 4);
                     int row = 0;
-                    if (!string.IsNullOrEmpty(fgExe))
-                    {
-                        var ftf = MakeText("前台: " + fgExe, 10, FanLabelBrush, ppd);
-                        dc.DrawText(ftf, new Point(cx + 6, cy + 4 + row * 14));
-                        row++;
-                    }
+                    var ftf = MakeText("前台: " + (string.IsNullOrEmpty(fgExe) ? "未记录" : fgExe), 10, FanLabelBrush, ppd);
+                    ftf.MaxTextWidth = cardW - 12;
+                    ftf.MaxLineCount = 1;
+                    ftf.Trimming = TextTrimming.CharacterEllipsis;
+                    dc.DrawText(ftf, new Point(cx + 6, cy + 4 + row * 14));
+                    row++;
                     for (int i = 0; i < labels.Count; i++)
                     {
                         dc.DrawRectangle(BrushFor(labels[i].Item1), null, new Rect(cx + 6, cy + 7 + row * 14, 8, 8));

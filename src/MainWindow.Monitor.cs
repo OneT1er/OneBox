@@ -51,8 +51,8 @@ namespace PowerAudioManager
                 StopTempMonitor();
                 return;
             }
-            // PerfHistory/ForegroundHistory 改为性能趋势图窗口打开时按需加载采集（见 PerfChartWindow.Acquire/Release），
-            // 不在启动时加载、不在后台常驻--图表关闭即释放每条 series ~1MB 内存。
+            // 前台历史与性能采样一起持续记录，图表关闭后仍保留真实时间覆盖范围。
+            ForegroundHistory.Start();
             HardwareMonitorService.Instance.Start();
             StartTempTimer();
         }
@@ -99,6 +99,7 @@ namespace PowerAudioManager
 
         void StopTempMonitor()
         {
+            ForegroundHistory.Stop();
             StopTempTimerOnly();
             try { HardwareMonitorService.Instance.Stop(); } catch (Exception ex) { AppLog.Log("Temperature stop", ex); }
             _metricValBlocks = null;

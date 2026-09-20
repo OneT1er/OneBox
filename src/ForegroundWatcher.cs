@@ -25,9 +25,19 @@ namespace PowerAudioManager
         const uint GW_HWNDNEXT = 2;
 
         /// <summary>
-        /// 取当前前台 exe 名（无扩展名）。当 OneBox 自己位于前台时，返回 Z 序中紧邻其后的
-        /// 可见应用，避免性能趋势窗口把整段前台历史都记录成 OneBox。
+        /// 取实际前台 exe 名（无扩展名）。采样失败返回空，不以其他窗口猜测历史。
         /// </summary>
+        public static string CaptureActualExeName()
+        {
+            try
+            {
+                var hwnd = GetForegroundWindow();
+                return hwnd == IntPtr.Zero ? null : GetExeName(hwnd, out _);
+            }
+            catch { return null; }
+        }
+
+        // 外部截图归档仍需要查找 OneBox 后方的来源应用；不用于历史采样。
         public static string CaptureExeName()
         {
             try

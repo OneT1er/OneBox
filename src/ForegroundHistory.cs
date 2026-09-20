@@ -14,170 +14,157 @@ namespace PowerAudioManager
         public string Exe;
     }
 
-    /// <summary>
-    /// 前台应用切换历史：独立轻量定时器（2s）用 CaptureExeName 检测前台 exe 变化，记录切换点。
-    /// 供大图 tooltip 显示“鼠标时间点对应的前台应用”。仅性能趋势图打开时启动（引用计数）。
-    /// 退出写 JSON / 启动读 JSON，跨重启保留历史。只调 GetForegroundWindow+QueryFullProcessImageName，开销小。
-    /// </summary>
+    // 每 2 秒采样实际前台；区间有明确结束时间，不向未采集时段外推。
     public static class ForegroundHistory
     {
-        struct Entry { public DateTime Time; public string Exe; }
+        struct Entry { public DateTime Time, End; public string Exe; }
         static readonly object _lock = new object();
+        static readonly object _saveLock = new object();
         static readonly List<Entry> _entries = new List<Entry>();
-        static string _lastExe;
         static Timer _timer;
-        static bool _running;
-        // 引用计数：仅当性能趋势图窗口打开时才采集 + 驻留内存（与 PerfHistory 一致）。
-        static int _openCount;
-        static bool _loaded;   // 已从磁盘加载；Save 未加载时跳过，避免空写覆盖
-        const int MaxEntries = 3000;
-
-        static string _fpath;
-        static string FilePath
-        {
-            get
-            {
-                if (_fpath == null)
-                {
-                    var exe = Environment.ProcessPath;
-                    string dir = string.IsNullOrEmpty(exe) ? AppDomain.CurrentDomain.BaseDirectory : Path.GetDirectoryName(exe);
-                    _fpath = Path.Combine(dir, "OneBox.foreground.json");
-                }
-                return _fpath;
-            }
-        }
+        static bool _running, _loaded, _newSession = true;
+        static int _generation;
+        static DateTime _lastSave;
+        const int MaxEntries = 43200;
+        static string FilePath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "OneT1er", "OneBox", "OneBox.foreground.json");
 
         public static void Start()
         {
             lock (_lock)
             {
                 if (_running) return;
+                if (!_loaded) _loaded = Load();
+                _newSession = true;
                 _running = true;
-                _timer = new Timer(Tick, null, 1000, 2000);
+                _lastSave = DateTime.UtcNow;
+                _timer = new Timer(Tick, ++_generation, 0, 2000);
             }
-            AppLog.Log("FGHistory", "started");
         }
 
         public static void Stop()
         {
-            lock (_lock) { _running = false; _timer?.Dispose(); _timer = null; }
-        }
-
-        // 性能趋势图窗口打开/关闭时调用（引用计数）。首次打开 Load+Start；最后关闭 Stop+Save+Clear 释放。
-        public static void Acquire()
-        {
             lock (_lock)
             {
-                if (_openCount == 0) { _loaded = Load(); Start(); }
-                _openCount++;
-            }
-        }
-
-        public static void Release()
-        {
-            lock (_lock)
-            {
-                if (_openCount == 0) return;
-                if (--_openCount == 0)
+                _running = false;
+                ++_generation;
+                _timer?.Dispose(); _timer = null;
+                if (_entries.Count > 0)
                 {
-                    Stop();
-                    try { Save(); } catch (Exception ex) { AppLog.Log("FGHistory", ex); }
-                    _entries.Clear(); _lastExe = null; _loaded = false;
-                    AppLog.Log("FGHistory", "released (in-memory cleared)");
+                    var last = _entries[^1];
+                    if (last.End > DateTime.Now) { last.End = DateTime.Now; _entries[^1] = last; }
                 }
+                _newSession = true;
             }
+            Save();
         }
+
+        // 图表只读取历史，采集生命周期由性能监控模块管理。
+        public static void Acquire() { lock (_lock) { if (!_loaded) _loaded = Load(); } }
+        public static void Release() { }
 
         static void Tick(object state)
         {
-            if (!_running) return;
-            try
-            {
-                string exe = ForegroundWatcher.CaptureExeName() ?? "";
-                lock (_lock)
-                {
-                    if (!string.Equals(exe, _lastExe, StringComparison.OrdinalIgnoreCase))
-                    {
-                        _lastExe = exe;
-                        _entries.Add(new Entry { Time = DateTime.Now, Exe = exe });
-                        if (_entries.Count > MaxEntries) _entries.RemoveAt(0);
-                    }
-                }
-            }
-            catch { }
-        }
-
-        // 取 [from, to] 范围内的前台段：每段从一个切换点到下一个切换点，exe 为该段前台
-        public static List<ForegroundSegment> GetSegments(DateTime from, DateTime to)
-        {
-            var result = new List<ForegroundSegment>();
+            bool save;
             lock (_lock)
             {
-                if (_entries.Count == 0) return result;
-                if (_entries[0].Time > from)
-                    result.Add(new ForegroundSegment { Start = from, End = _entries[0].Time, Exe = _entries[0].Exe });
-
-                for (int i = 0; i < _entries.Count; i++)
-                {
-                    var e = _entries[i];
-                    DateTime segStart = e.Time;
-                    DateTime segEnd = (i + 1 < _entries.Count) ? _entries[i + 1].Time : to;
-                    if (segEnd <= from) continue;
-                    if (segStart >= to) break;
-                    if (segStart < from) segStart = from;
-                    if (segEnd > to) segEnd = to;
-                    if (segEnd > segStart)
-                        result.Add(new ForegroundSegment { Start = segStart, End = segEnd, Exe = e.Exe });
-                }
+                if (!_running || (int)state != _generation) return;
+                RecordSample(DateTime.Now, ForegroundWatcher.CaptureActualExeName());
+                save = (DateTime.UtcNow - _lastSave).TotalSeconds >= 60;
+                if (save) _lastSave = DateTime.UtcNow;
             }
-            return result;
+            if (save) Save();
         }
 
-        public static void Clear() { lock (_lock) { _entries.Clear(); _lastExe = null; } }
+        internal static void RecordSample(DateTime time, string exe)
+        {
+            lock (_lock)
+            {
+                if (_entries.Count > 0)
+                {
+                    var last = _entries[^1];
+                    // 时钟回拨时丢弃重叠的未来记录，保持区间有序。
+                    if (time < last.Time)
+                    {
+                        _entries.RemoveAll(e => e.Time >= time);
+                        _newSession = true;
+                    }
+                    else if (!_newSession && time <= last.End.AddSeconds(2) &&
+                             string.Equals(last.Exe, exe ?? "", StringComparison.OrdinalIgnoreCase))
+                    {
+                        last.End = time.AddSeconds(2);
+                        _entries[^1] = last;
+                        return;
+                    }
+                    if (_entries.Count > 0 && _entries[^1].End > time)
+                    {
+                        last = _entries[^1]; last.End = time; _entries[^1] = last;
+                    }
+                }
+                _entries.Add(new Entry { Time = time, End = time.AddSeconds(2), Exe = exe ?? "" });
+                _newSession = false;
+                _entries.RemoveAll(e => e.End < time.AddDays(-1));
+                if (_entries.Count > MaxEntries) _entries.RemoveRange(0, _entries.Count - MaxEntries);
+            }
+        }
 
-        // ---- 持久化 ----
-        class EntryData { public string time { get; set; } public string exe { get; set; } }
+        public static List<ForegroundSegment> GetSegments(DateTime from, DateTime to)
+        {
+            lock (_lock)
+            {
+                return _entries.Where(e => e.End > from && e.Time < to && !string.IsNullOrEmpty(e.Exe))
+                    .Select(e => new ForegroundSegment {
+                        Start = e.Time < from ? from : e.Time,
+                        End = e.End > to ? to : e.End, Exe = e.Exe
+                    }).Where(e => e.End > e.Start).ToList();
+            }
+        }
+
+        public static void Clear() { lock (_lock) { _entries.Clear(); _newSession = true; } }
+        class EntryData { public DateTime time { get; set; } public DateTime? end { get; set; } public string exe { get; set; } }
 
         public static void Save()
         {
-            try
+            lock (_saveLock)
             {
-                if (!_loaded) return;   // 未加载（图表已关闭，Release 时已存盘）：不空写覆盖
-                List<EntryData> data;
-                lock (_lock) data = _entries.Select(e => new EntryData { time = e.Time.ToString("o"), exe = e.Exe }).ToList();
-                File.WriteAllText(FilePath, JsonSerializer.Serialize(data));
-                AppLog.Log("FGHistory", "saved " + data.Count);
+                try
+                {
+                    List<EntryData> data;
+                    lock (_lock)
+                    {
+                        if (!_loaded) return;
+                        data = _entries.Select(e => new EntryData { time = e.Time, end = e.End, exe = e.Exe }).ToList();
+                    }
+                    DurableFileStore.WriteUtf8Atomically(FilePath, JsonSerializer.Serialize(data));
+                }
+                catch (Exception ex) { AppLog.Log("FGHistory", ex); }
             }
-            catch (Exception ex) { AppLog.Log("FGHistory", "save fail: " + ex.Message); }
         }
 
-        // 返回是否成功加载（文件不存在视为成功）。失败时 Release 的 Save 跳过，避免空写覆盖旧文件。
         public static bool Load()
         {
-            try
+            lock (_lock)
             {
-                if (!File.Exists(FilePath)) return true;
-                var data = JsonSerializer.Deserialize<List<EntryData>>(File.ReadAllText(FilePath));
-                if (data == null) return true;
-                lock (_lock)
+                foreach (var path in new[] { FilePath, FilePath + ".bak" })
                 {
-                    _entries.Clear();
-                    string ownExe = Path.GetFileNameWithoutExtension(Environment.ProcessPath ?? "OneBox");
-                    foreach (var d in data)
-                        if (DateTime.TryParse(d.time, null, System.Globalization.DateTimeStyles.RoundtripKind, out var t))
+                    if (!File.Exists(path)) continue;
+                    try
+                    {
+                        var data = JsonSerializer.Deserialize<List<EntryData>>(File.ReadAllText(path));
+                        _entries.Clear();
+                        // 旧格式没有结束时间，无法证明覆盖范围，不能当作连续历史。
+                        foreach (var d in (data ?? new List<EntryData>()).OrderBy(d => d.time).TakeLast(MaxEntries))
                         {
-                            // 旧版本会在趋势窗口取得焦点后持续写入 OneBox。加载时清掉这些
-                            // 无效记录，避免修复升级后的首次打开仍被旧历史铺满。
-                            if (string.Equals(d.exe, ownExe, StringComparison.OrdinalIgnoreCase)
-                                || string.Equals(d.exe, "OneBox", StringComparison.OrdinalIgnoreCase)) continue;
-                            _entries.Add(new Entry { Time = t, Exe = d.exe });
+                            if (!d.end.HasValue || d.end.Value <= d.time) continue;
+                            _entries.Add(new Entry { Time = d.time, End = d.end.Value, Exe = d.exe ?? "" });
                         }
-                    _lastExe = _entries.Count > 0 ? _entries[_entries.Count - 1].Exe : null;
+                        _newSession = true;
+                        return true;
+                    }
+                    catch (Exception ex) { AppLog.Log("FGHistory", ex); }
                 }
-                AppLog.Log("FGHistory", "loaded " + _entries.Count);
-                return true;
+                return !File.Exists(FilePath) && !File.Exists(FilePath + ".bak");
             }
-            catch (Exception ex) { AppLog.Log("FGHistory", "load fail: " + ex.Message); return false; }
         }
     }
 }

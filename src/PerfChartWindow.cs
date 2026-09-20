@@ -18,8 +18,7 @@ namespace PowerAudioManager
 
         public PerfChartWindow()
         {
-            // 持有历史数据引用计数：构造时 Load，关闭时 Save+Clear 释放内存。
-            // 图表未打开期间 PerfHistory/ForegroundHistory 不驻留内存、不采集。
+            // 读取后台持续采集的历史，关闭图表不停止采样。
             try { PerfHistory.Acquire(); } catch (Exception ex) { AppLog.Log("PerfChartWindow", ex); }
             try { ForegroundHistory.Acquire(); } catch (Exception ex) { AppLog.Log("PerfChartWindow", ex); }
 

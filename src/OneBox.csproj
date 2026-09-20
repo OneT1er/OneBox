@@ -25,6 +25,7 @@
 
   <ItemGroup>
     <EmbeddedResource Include="app.ico" />
+    <EmbeddedResource Include="..\CHANGELOG.md" LogicalName="PowerAudioManager.CHANGELOG.md" />
     <EmbeddedResource Include="app.png" />
     <!-- H.NotifyIcon.Wpf reopens BitmapImage.UriSource at runtime. Keep the
          authored icon beside every framework-dependent executable, while the
