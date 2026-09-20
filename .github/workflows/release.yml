@@ -1,0 +1,115 @@
+name: Build and release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Validate version and prepare release notes
+        run: |
+          $ErrorActionPreference = 'Stop'
+          [xml]$props = Get-Content Directory.Build.props -Raw
+          $version = @($props.Project.PropertyGroup.Version | Where-Object { $_ })[0].ToString()
+          if ($version -notmatch '^\d+\.\d+\.\d+$') { throw "Expected a stable version: $version" }
+          if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_REF_NAME -cne "v$version") {
+            throw "Tag $env:GITHUB_REF_NAME does not match project version $version"
+          }
+          $changelog = Get-Content CHANGELOG.md -Raw
+          $pattern = '(?ms)^## v' + [regex]::Escape($version) + ' \([^\r\n]+\)\r?\n(?<notes>.*?)(?=^## |\z)'
+          $match = [regex]::Match($changelog, $pattern)
+          if (-not $match.Success) { throw "Missing changelog for v$version" }
+          New-Item -ItemType Directory -Force artifacts/release | Out-Null
+          $match.Groups['notes'].Value.Trim() | Set-Content artifacts/release/release-notes.md -Encoding utf8
+
+      - name: Run tests
+        run: |
+          dotnet test tests/OneBox.Tests/OneBox.Tests.csproj -c Release --logger trx --results-directory artifacts/test-results
+          if ($LASTEXITCODE -ne 0) { throw 'Tests failed' }
+
+      - name: Package and validate application
+        run: ./scripts/package.ps1 -Configuration Release -Runtime win-x64
+
+      - name: Prepare assets and checksums
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $packages = @(Get-ChildItem artifacts/packages/win-x64 -File)
+          foreach ($name in @('OneBox-win-Setup.exe', 'OneBox-win-Portable.zip', 'releases.win.json', 'assets.win.json', 'RELEASES')) {
+            if ($name -notin $packages.Name) { throw "Missing release asset: $name" }
+          }
+          $packages | Copy-Item -Destination artifacts/release
+          $packages | Sort-Object Name | ForEach-Object {
+            $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $($_.Name)"
+          } | Set-Content artifacts/release/SHA256SUMS.txt -Encoding utf8
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: OneBox-win-x64
+          path: artifacts/release/*
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: artifacts/test-results/*.trx
+          if-no-files-found: ignore
+
+  release:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: windows-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: OneBox-win-x64
+          path: release-assets
+
+      - name: Publish complete release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tag = $env:RELEASE_TAG
+          $existing = gh release view $tag --json isDraft 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            if (-not ($existing | ConvertFrom-Json).isDraft) { throw "$tag is already published; refusing to overwrite it" }
+          } else {
+            gh release create $tag --verify-tag --draft --title "OneBox $tag" --notes-file release-assets/release-notes.md
+            if ($LASTEXITCODE -ne 0) { throw 'Failed to create release draft' }
+          }
+          $assets = @(Get-ChildItem release-assets -File | Where-Object Name -ne 'release-notes.md' | ForEach-Object FullName)
+          if ($assets.Count -lt 7) { throw 'Release artifact is incomplete' }
+          gh release upload $tag @assets --clobber
+          if ($LASTEXITCODE -ne 0) { throw 'Asset upload failed; release remains a draft' }
+          gh release edit $tag --draft=false --latest --notes-file release-assets/release-notes.md
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to publish release' }

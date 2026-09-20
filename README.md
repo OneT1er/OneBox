@@ -187,6 +187,8 @@ OneBox 不提供云端账户。只有在主动使用百度翻译功能时，待�
 
 仓库通过 `global.json` 固定 SDK，公共版本号位于 `Directory.Build.props`。
 
+当前版本：**v1.8.3**。版本改动见 [更新日志](CHANGELOG.md)。
+
 ```powershell
 dotnet restore OneBox.sln
 dotnet build OneBox.sln -c Debug
@@ -204,6 +206,12 @@ Velopack 产物输出到 `artifacts/packages/win-x64`。清理所有编译、测
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/clean.ps1
 ```
+
+### GitHub Actions 云端构建与发布
+
+在 [Actions → Build and release](https://github.com/OneT1er/OneBox/actions/workflows/release.yml) 点击 **Run workflow**，可在 Windows 云端运行测试并打包，从运行页面下载 `OneBox-win-x64` 构建产物，手动构建不会发布 Release。
+
+正式发版时，先更新 `Directory.Build.props` 的版本号和 `CHANGELOG.md`，提交后推送对应标签（例如 `v1.8.3`）。Actions 会校验标签与版本一致，通过测试和包内容检查后创建 Release 草稿，上传安装包、便携包、Velopack 更新文件及 SHA-256 校验值，最后公开为最新版本。流程使用仓库自带的 `GITHUB_TOKEN`，无需另存个人访问令牌。
 
 ### 目录结构
 
