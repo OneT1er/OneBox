@@ -42,6 +42,10 @@ namespace PowerAudioManager.Commands
             public static readonly PreferenceDefinition<int> GameBarHotkey = new("Screenshot.GameBarHotkey", 0);
             public static readonly PreferenceDefinition<bool> ExternalTakeoverEnabled = new("Screenshot.ExternalTakeoverEnabled", false);
             public static readonly PreferenceDefinition<string> ExternalTakeoverDirectory = new("Screenshot.ExternalTakeoverDir", "");
+            public static readonly PreferenceDefinition<int> ToastPosition = new("Screenshot.ToastPosition", 0);
+            public static readonly PreferenceDefinition<bool> ToastCompact = new("Screenshot.ToastCompact", false);
+            public static readonly PreferenceDefinition<int> ToastDurationSeconds = new("Screenshot.ToastDurationSeconds", 5);
+            public static readonly PreferenceDefinition<bool> ToastExcludeFromCapture = new("Screenshot.ToastExcludeFromCapture", true);
         }
 
         public static class Translate

@@ -264,6 +264,7 @@ namespace PowerAudioManager
             using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, LifetimeCancellation.Token);
             await CaptureGate.RunAsync(async token =>
             {
+                await ScreenshotToast.DismissForCaptureAsync();
                 await Task.Run(() => CaptureForegroundCore(token), token).ConfigureAwait(false);
                 return true;
             }, TimeSpan.FromSeconds(40), linked.Token).ConfigureAwait(false);

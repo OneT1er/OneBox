@@ -79,6 +79,7 @@ namespace PowerAudioManager
         public static byte[] CaptureRegion()
         {
             if (Application.Current == null) return null;
+            ScreenshotToast.DismissForCapture();
             byte[] result = null;
             var virtualPixels = GetVirtualScreenPixels();
             if (virtualPixels.IsEmpty) return null;

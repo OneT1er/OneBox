@@ -39,6 +39,57 @@ namespace PowerAudioManager
             rootRow.Children.Add(rootBox);
             stack.Children.Add(rootRow);
 
+            var toastOptions = ScreenshotToastOptions.Load();
+            var notificationPanel = new StackPanel();
+            notificationPanel.Children.Add(new TextBlock { Text = "截图通知", Foreground = Brushes.White,
+                FontWeight = FontWeights.SemiBold, FontSize = 13, Margin = new Thickness(0, 0, 0, 10) });
+            notificationPanel.Children.Add(new TextBlock { Text = "弹出位置", Foreground = fg, FontSize = 11, Margin = new Thickness(0, 0, 0, 4) });
+            var positionBox = new ComboBox { Height = 28, FontSize = 12 };
+            AppResources.StyleDarkComboBox(positionBox);
+            foreach (var label in new[] { "右下角（默认）", "左下角", "右上角", "左上角" }) positionBox.Items.Add(label);
+            positionBox.SelectedIndex = (int)toastOptions.Position;
+            notificationPanel.Children.Add(positionBox);
+            notificationPanel.Children.Add(new TextBlock { Text = "显示在截图时前台应用所在屏幕，悬停时暂停关闭。",
+                Foreground = fg, FontSize = 10, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 4, 0, 8) });
+            var durationRow = new DockPanel { LastChildFill = true, Margin = new Thickness(0, 0, 0, 8) };
+            var durationInput = new StackPanel { Orientation = Orientation.Horizontal };
+            var durationBox = MakeBox();
+            durationBox.Text = toastOptions.DurationSeconds.ToString();
+            durationBox.Width = 50; durationBox.Height = 28; durationBox.Padding = new Thickness(6, 3, 6, 3);
+            durationInput.Children.Add(durationBox);
+            durationInput.Children.Add(new TextBlock { Text = "秒（1–30）", Foreground = fg, FontSize = 11,
+                VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0, 0, 0) });
+            DockPanel.SetDock(durationInput, Dock.Right); durationRow.Children.Add(durationInput);
+            durationRow.Children.Add(new TextBlock { Text = "显示时间", Foreground = fg, FontSize = 11, VerticalAlignment = VerticalAlignment.Center });
+            notificationPanel.Children.Add(durationRow);
+            var compactToggle = new CheckBox { Content = "缩略版（小缩略图，更少占屏）", IsChecked = toastOptions.Compact,
+                Foreground = Brushes.White, FontSize = 11, Margin = new Thickness(0, 0, 0, 8) };
+            var excludeToggle = new CheckBox { Content = "避免通知被再次截图截入", IsChecked = toastOptions.ExcludeFromCapture,
+                Foreground = Brushes.White, FontSize = 11, Margin = new Thickness(0, 0, 0, 4) };
+            notificationPanel.Children.Add(compactToggle); notificationPanel.Children.Add(excludeToggle);
+            notificationPanel.Children.Add(new TextBlock {
+                Text = "启用系统截图排除，OneBox 再次截图前会关闭旧通知。部分游戏或第三方截图工具可能不支持排除。",
+                Foreground = fg, FontSize = 10, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 8) });
+            ScreenshotToastOptions ReadNotificationOptions()
+            {
+                if (!int.TryParse(durationBox.Text, out int seconds) || seconds < 1 || seconds > 30)
+                {
+                    MessageBox.Show(dlg, "通知显示时间请输入 1–30 秒的整数。", "OneBox 设置", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    durationBox.Focus(); durationBox.SelectAll();
+                    return null;
+                }
+                return new ScreenshotToastOptions { Position = (ScreenshotToastPosition)positionBox.SelectedIndex,
+                    DurationSeconds = seconds, Compact = compactToggle.IsChecked == true,
+                    ExcludeFromCapture = excludeToggle.IsChecked == true }.Normalize();
+            }
+            var previewButton = new Button { Content = "预览通知", Height = 28, FontSize = 11,
+                HorizontalAlignment = HorizontalAlignment.Left, Padding = new Thickness(12, 0, 12, 0) };
+            AppResources.StyleDialogButton(previewButton, false);
+            previewButton.Click += (_, _) => { var options = ReadNotificationOptions(); if (options != null) ScreenshotToast.ShowPreview(options); };
+            notificationPanel.Children.Add(previewButton);
+            stack.Children.Add(new Border { Child = notificationPanel, Background = UiKit.FrozenBrush(ThemeTokens.TitleSurface),
+                CornerRadius = new CornerRadius(8), Padding = new Thickness(12), Margin = new Thickness(0, 12, 0, 4) });
+
             // 安全接管：由 Game Bar / Steam / 显卡工具响应实体按键，OneBox 只接管落盘后的图片。
             stack.Children.Add(new TextBlock { Text = "安全：外部截图接管（反作弊游戏）", Foreground = Brushes.White, FontWeight = FontWeights.SemiBold, FontSize = 13, Margin = new Thickness(0, 12, 0, 6) });
             bool takeoverEnabled = AppPrefs.GetBool("Screenshot.ExternalTakeoverEnabled", false);
@@ -143,6 +194,8 @@ namespace PowerAudioManager
             var btns = MakeButtons();
             ((Button)btns.Children[0]).Click += async (s, e) =>
             {
+                var notificationOptions = ReadNotificationOptions();
+                if (notificationOptions == null) return;
                 if (takeoverToggle.IsChecked == true)
                 {
                     string sourceDir = takeoverBox.Text.Trim();
@@ -171,6 +224,10 @@ namespace PowerAudioManager
                     }
                 }
                 if (!TryPersist(dlg,
+                    () => AppPrefs.Set(PreferenceKeys.Screenshot.ToastPosition, (int)notificationOptions.Position),
+                    () => AppPrefs.Set(PreferenceKeys.Screenshot.ToastCompact, notificationOptions.Compact),
+                    () => AppPrefs.Set(PreferenceKeys.Screenshot.ToastDurationSeconds, notificationOptions.DurationSeconds),
+                    () => AppPrefs.Set(PreferenceKeys.Screenshot.ToastExcludeFromCapture, notificationOptions.ExcludeFromCapture),
                     () => AppPrefs.Set(PreferenceKeys.Screenshot.RootDirectory, rootBox.Text.Trim()),
                     () => AppPrefs.Set(PreferenceKeys.Screenshot.GameBarEnabled, gbToggle.IsChecked == true),
                     () => AppPrefs.Set(PreferenceKeys.Screenshot.GameBarDirectory, gbBox.Text.Trim()),
