@@ -36,26 +36,67 @@ namespace PowerAudioManager
                 string displayName, iconKey;
                 var cfg = HardwareMonitorService.DecodeConfig(key, out displayName, out iconKey);
                 if (cfg == null) continue;
-                var row = new DockPanel { Margin = new Thickness(0, 3, 0, 3), LastChildFill = true };
+                var card = new Border
+                {
+                    Background = UiKit.FrozenBrush(Color.FromRgb(34, 32, 50)),
+                    BorderBrush = UiKit.FrozenBrush(Color.FromRgb(60, 55, 80)),
+                    BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(8),
+                    Padding = new Thickness(8, 6, 8, 6), Margin = new Thickness(0, 0, 0, 5)
+                };
+                var content = new StackPanel();
+                card.Child = content;
                 string unit = string.Equals(cfg.SensorType, "Temperature", StringComparison.OrdinalIgnoreCase) ? "°C" :
                               string.Equals(cfg.SensorType, "Control", StringComparison.OrdinalIgnoreCase) ? "%" : "RPM";
                 float? val = hw.ReadSensorPreview(cfg);
-                string valStr = val.HasValue ? $" {val.Value:0}{unit}" : "";
+                string valStr = val.HasValue ? $"{val.Value:0} {unit}" : "暂无读数";
 
-                // 矢量图标 + 名称 + 值
-                var nameRow = new StackPanel { Orientation = Orientation.Horizontal };
+                // 独立名称和读数列，长名称截断后仍可通过提示查看全文。
+                var header = new Grid();
+                header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
                 var iconColor = UiKit.MetricIconColorByKey(iconKey);
-                nameRow.Children.Add(UiKit.MetricIcon(iconKey, iconColor));
-                nameRow.Children.Add(new TextBlock { Text = " " + displayName, Foreground = Brushes.White, FontSize = 11, FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center });
-                nameRow.Children.Add(new TextBlock { Text = valStr, Foreground = fg, FontSize = 11, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0, 0, 0) });
-                nameRow.Children.Add(new TextBlock { Text = $"  {cfg.SensorName}", Foreground = fg, FontSize = 9, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(4, 0, 0, 0) });
-                row.Children.Add(nameRow);
+                header.Children.Add(new Border
+                {
+                    Width = 22, Height = 22, CornerRadius = new CornerRadius(6),
+                    Background = UiKit.FrozenBrush(Color.FromArgb(28, iconColor.R, iconColor.G, iconColor.B)),
+                    Child = UiKit.MetricIcon(iconKey, iconColor)
+                });
+                var nameText = new TextBlock
+                {
+                    Text = displayName, ToolTip = displayName, Foreground = Brushes.White,
+                    FontSize = 12, FontWeight = FontWeights.SemiBold,
+                    VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 8, 0),
+                    TextTrimming = TextTrimming.CharacterEllipsis
+                };
+                Grid.SetColumn(nameText, 1);
+                header.Children.Add(nameText);
+                var valueText = new TextBlock
+                {
+                    Text = valStr, Foreground = val.HasValue ? Brushes.White : fg,
+                    FontSize = val.HasValue ? 13 : 10, FontWeight = FontWeights.SemiBold,
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+                Grid.SetColumn(valueText, 2);
+                header.Children.Add(valueText);
+                content.Children.Add(header);
+                // 次行合并传感器信息和操作，硬件全名通过悬停查看。
+                var footer = new Grid { Margin = new Thickness(0, 2, 0, 0) };
+                footer.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                footer.Children.Add(new TextBlock
+                {
+                    Text = cfg.SensorName, ToolTip = $"{cfg.HardwareName} — {cfg.SensorName}",
+                    Foreground = fg, FontSize = 10, VerticalAlignment = VerticalAlignment.Center,
+                    Margin = new Thickness(0, 0, 6, 0), TextTrimming = TextTrimming.CharacterEllipsis
+                });
+                content.Children.Add(footer);
 
                 // 编辑按钮 → 内联编辑所有属性
-                var editBtn = new Button { Content = IconCatalog.CreateElement(IconKey.Edit, 14, fg), Width = 28, Height = 28, Background = Brushes.Transparent, BorderBrush = Brushes.Transparent, Foreground = fg, Cursor = System.Windows.Input.Cursors.Hand, Padding = new Thickness(0), ToolTip = "编辑" };
+                var editBtn = new Button { Content = IconCatalog.CreateElement(IconKey.Edit, 14, fg), Width = 24, Height = 24, Background = Brushes.Transparent, BorderBrush = Brushes.Transparent, Foreground = fg, Cursor = System.Windows.Input.Cursors.Hand, Padding = new Thickness(0), ToolTip = "编辑" };
                 System.Windows.Automation.AutomationProperties.SetName(editBtn, "编辑");
                 UiKit.ApplyFlatStyle(editBtn);
-                var delBtn = new Button { Content = IconCatalog.CreateElement(IconKey.Delete, 14, new SolidColorBrush(Color.FromRgb(220, 120, 120))), Width = 28, Height = 28, Background = Brushes.Transparent, BorderBrush = Brushes.Transparent, Foreground = new SolidColorBrush(Color.FromRgb(200, 100, 100)), Cursor = System.Windows.Input.Cursors.Hand, Padding = new Thickness(0), ToolTip = "删除" };
+                var delBtn = new Button { Content = IconCatalog.CreateElement(IconKey.Delete, 14, new SolidColorBrush(Color.FromRgb(220, 120, 120))), Width = 24, Height = 24, Background = Brushes.Transparent, BorderBrush = Brushes.Transparent, Foreground = new SolidColorBrush(Color.FromRgb(200, 100, 100)), Cursor = System.Windows.Input.Cursors.Hand, Padding = new Thickness(0), ToolTip = "删除" };
                 System.Windows.Automation.AutomationProperties.SetName(delBtn, "删除");
                 UiKit.ApplyFlatStyle(delBtn);
 
@@ -76,8 +117,9 @@ namespace PowerAudioManager
                 editBtn.Click += (s2, e2) =>
                 {
                     // 展开内联编辑面板
-                    row.Children.Clear();
-                    var editPanel = new StackPanel();
+                    content.Children.Clear();
+                    content.Children.Add(header);
+                    var editPanel = new StackPanel { Margin = new Thickness(0, 10, 0, 0) };
                     // 名称
                     editPanel.Children.Add(new TextBlock { Text = "名称", Foreground = fg, FontSize = 10, Margin = new Thickness(0, 0, 0, 2) });
                     var nameBox = new TextBox { Text = displayName, Width = 120, Height = 22, FontSize = 11, Background = new SolidColorBrush(Color.FromRgb(42, 39, 60)), Foreground = Brushes.White, BorderBrush = new SolidColorBrush(Color.FromRgb(80, 75, 120)) };
@@ -156,15 +198,15 @@ namespace PowerAudioManager
                     };
                     cancelBtn2.Click += (s3, e3) => RefreshMetricList(capturedList, hw, fg);
 
-                    row.Children.Add(editPanel);
+                    content.Children.Add(editPanel);
                 };
 
                 // 上移/下移按钮
                 int curIdx = hw.EnabledMetrics.IndexOf(capturedKey);
-                var upBtn = new Button { Content = IconCatalog.CreateElement(IconKey.ChevronUp, 14, fg), Width = 28, Height = 28, Background = Brushes.Transparent, BorderBrush = Brushes.Transparent, Foreground = fg, Cursor = System.Windows.Input.Cursors.Hand, Padding = new Thickness(0), ToolTip = "上移", IsEnabled = curIdx > 0 };
+                var upBtn = new Button { Content = IconCatalog.CreateElement(IconKey.ChevronUp, 14, fg), Width = 24, Height = 24, Background = Brushes.Transparent, BorderBrush = Brushes.Transparent, Foreground = fg, Cursor = System.Windows.Input.Cursors.Hand, Padding = new Thickness(0), ToolTip = "上移", IsEnabled = curIdx > 0 };
                 System.Windows.Automation.AutomationProperties.SetName(upBtn, "上移");
                 UiKit.ApplyFlatStyle(upBtn);
-                var downBtn = new Button { Content = IconCatalog.CreateElement(IconKey.ChevronDown, 14, fg), Width = 28, Height = 28, Background = Brushes.Transparent, BorderBrush = Brushes.Transparent, Foreground = fg, Cursor = System.Windows.Input.Cursors.Hand, Padding = new Thickness(0), ToolTip = "下移", IsEnabled = curIdx < hw.EnabledMetrics.Count - 1 };
+                var downBtn = new Button { Content = IconCatalog.CreateElement(IconKey.ChevronDown, 14, fg), Width = 24, Height = 24, Background = Brushes.Transparent, BorderBrush = Brushes.Transparent, Foreground = fg, Cursor = System.Windows.Input.Cursors.Hand, Padding = new Thickness(0), ToolTip = "下移", IsEnabled = curIdx < hw.EnabledMetrics.Count - 1 };
                 System.Windows.Automation.AutomationProperties.SetName(downBtn, "下移");
                 UiKit.ApplyFlatStyle(downBtn);
 
@@ -195,19 +237,29 @@ namespace PowerAudioManager
                     RefreshMetricList(capturedList, hw, fg);
                 };
 
-                DockPanel.SetDock(delBtn, Dock.Right);
-                DockPanel.SetDock(editBtn, Dock.Right);
-                DockPanel.SetDock(downBtn, Dock.Right);
-                DockPanel.SetDock(upBtn, Dock.Right);
-                row.Children.Add(delBtn);
-                row.Children.Add(editBtn);
-                row.Children.Add(downBtn);
-                row.Children.Add(upBtn);
+                var actions = new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    HorizontalAlignment = HorizontalAlignment.Right
+                };
+                actions.Children.Add(upBtn);
+                actions.Children.Add(downBtn);
+                editBtn.Margin = new Thickness(4, 0, 0, 0);
+                actions.Children.Add(editBtn);
+                actions.Children.Add(delBtn);
+                Grid.SetColumn(actions, 1);
+                footer.Children.Add(actions);
 
-                list.Children.Add(row);
+                list.Children.Add(card);
             }
             if (hw.EnabledMetrics.Count == 0)
-                list.Children.Add(new TextBlock { Text = "(无指标，点下方按钮添加)", Foreground = fg, FontSize = 11, FontStyle = FontStyles.Italic });
+                list.Children.Add(new Border
+                {
+                    Background = UiKit.FrozenBrush(Color.FromRgb(34, 32, 50)),
+                    CornerRadius = new CornerRadius(8), Padding = new Thickness(10),
+                    Margin = new Thickness(0, 0, 0, 5),
+                    Child = new TextBlock { Text = "暂无指标，点击下方“添加”选择传感器", Foreground = fg, FontSize = 11, TextWrapping = TextWrapping.Wrap }
+                });
         }
 
         static UIElement BuildAddForm(StackPanel metricList, StackPanel addPanel, HardwareMonitorService hw, SolidColorBrush fg)

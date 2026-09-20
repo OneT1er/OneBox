@@ -9,7 +9,7 @@ namespace PowerAudioManager
 {
     internal static partial class SettingsDialog
     {
-        static ScrollViewer BuildTranslateTab(Window owner, Window dlg, SolidColorBrush fg)
+        static FrameworkElement BuildTranslateTab(Window owner, Window dlg, SolidColorBrush fg)
         {
             var stack = new StackPanel { Margin = new Thickness(20) };
             stack.Children.Add(new TextBlock { Text = "百度大模型翻译 API", Foreground = Brushes.White, FontSize = 13, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 0, 0, 12) });

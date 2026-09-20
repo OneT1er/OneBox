@@ -9,7 +9,7 @@ namespace PowerAudioManager
 {
     internal static partial class SettingsDialog
     {
-        static ScrollViewer BuildModulesTab(Window owner, Window dlg, SolidColorBrush fg)
+        static FrameworkElement BuildModulesTab(Window owner, Window dlg, SolidColorBrush fg)
         {
             var stack = new StackPanel { Margin = new Thickness(20) };
             stack.Children.Add(new TextBlock { Text = "悬浮窗板块", Foreground = Brushes.White, FontSize = 13, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 0, 0, 12) });

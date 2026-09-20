@@ -11,7 +11,7 @@ namespace PowerAudioManager
 {
     internal static partial class SettingsDialog
     {
-        static ScrollViewer BuildTempTab(Window owner, Window dlg, SolidColorBrush fg)
+        static FrameworkElement BuildTempTab(Window owner, Window dlg, SolidColorBrush fg)
         {
             var stack = new StackPanel { Margin = new Thickness(20) };
             var hw = HardwareMonitorService.Instance;
@@ -33,12 +33,11 @@ namespace PowerAudioManager
             stats.Inlines.Add($" 控制");
             stack.Children.Add(stats);
 
-            // Card: 指标列表
+            // 每个指标独立成卡片，外层保留分组标题和添加入口。
             var metricList = new StackPanel();
             RefreshMetricList(metricList, hw, fg);
-            var metricCard = new Border { Background = new SolidColorBrush(Color.FromRgb(34, 32, 50)), CornerRadius = new CornerRadius(6), Padding = new Thickness(10), Margin = new Thickness(0, 0, 0, 10) };
-            var metricInner = new StackPanel();
-            metricInner.Children.Add(new TextBlock { Text = "已添加的指标", Foreground = fg, FontSize = 10, Margin = new Thickness(2, 0, 0, 6) });
+            var metricInner = new StackPanel { Margin = new Thickness(0, 0, 0, 14) };
+            metricInner.Children.Add(new TextBlock { Text = "已添加的指标", Foreground = fg, FontSize = 11, Margin = new Thickness(2, 0, 0, 8) });
             metricInner.Children.Add(metricList);
             var addPanel = new StackPanel { Margin = new Thickness(2, 4, 2, 0) };
             var addBtn = new Button { Content = "+ 添加", Height = 26, FontSize = 11, HorizontalAlignment = HorizontalAlignment.Left, Padding = new Thickness(10, 0, 10, 0) };
@@ -46,8 +45,7 @@ namespace PowerAudioManager
             addBtn.Click += (_, _) => { addPanel.Children.Clear(); addPanel.Children.Add(BuildAddForm(metricList, addPanel, hw, fg)); };
             metricInner.Children.Add(addBtn);
             metricInner.Children.Add(addPanel);
-            metricCard.Child = metricInner;
-            stack.Children.Add(metricCard);
+            stack.Children.Add(metricInner);
 
             // Card: 刷新设置
             var setCard = new Border { Background = new SolidColorBrush(Color.FromRgb(34, 32, 50)), CornerRadius = new CornerRadius(6), Padding = new Thickness(12) };

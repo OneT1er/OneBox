@@ -245,7 +245,7 @@ namespace PowerAudioManager
         // Popup lists can be taller than the sensor panel.  Give their
         // ScrollBar an explicit template too; otherwise WPF may materialize a
         // system-light white track even though the ScrollViewer is dark.
-        static Style CreateDarkScrollBarStyle()
+        internal static Style CreateDarkScrollBarStyle()
         {
             const string xaml = @"
 <Style xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'

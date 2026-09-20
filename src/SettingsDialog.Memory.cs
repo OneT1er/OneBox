@@ -9,7 +9,7 @@ namespace PowerAudioManager
 {
     internal static partial class SettingsDialog
     {
-        static ScrollViewer BuildMemoryTab(Window owner, Window dlg, SolidColorBrush fg)
+        static FrameworkElement BuildMemoryTab(Window owner, Window dlg, SolidColorBrush fg)
         {
             var stack = new StackPanel { Margin = new Thickness(20) };
 

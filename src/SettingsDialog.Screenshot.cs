@@ -9,7 +9,7 @@ namespace PowerAudioManager
 {
     internal static partial class SettingsDialog
     {
-        static ScrollViewer BuildScreenshotTab(Window owner, Window dlg, SolidColorBrush fg)
+        static FrameworkElement BuildScreenshotTab(Window owner, Window dlg, SolidColorBrush fg)
         {
             var stack = new StackPanel { Margin = new Thickness(20) };
 

@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
+using System.Windows.Markup;
 using System.Windows.Documents;
 using System.Windows.Media;
 using System.Windows.Shapes;
@@ -28,13 +30,15 @@ namespace PowerAudioManager
             // ---- 侧栏 ----
             var sideBar = new ListBox
             {
-                Width = 130,
+                Width = 118,
                 Background = new SolidColorBrush(Color.FromRgb(24, 22, 36)),
                 BorderBrush = new SolidColorBrush(Color.FromRgb(40, 36, 56)),
                 BorderThickness = new Thickness(0, 0, 1, 0),
                 Margin = new Thickness(0),
                 Padding = new Thickness(0, 10, 0, 0)
             };
+            ScrollViewer.SetHorizontalScrollBarVisibility(sideBar, ScrollBarVisibility.Disabled);
+            sideBar.Resources[typeof(ScrollBar)] = ThemeTokens.CreateDarkScrollBarStyle();
             sideBar.ItemContainerStyle = SidebarItemStyle();
             sideBar.SelectionChanged += (s, e) =>
             {
@@ -48,9 +52,14 @@ namespace PowerAudioManager
                     _contentHost.Content = _tabContents[sideBar.SelectedIndex];
             };
 
-            _contentHost = new ContentControl { Background = new SolidColorBrush(Color.FromRgb(28, 26, 40)) };
+            _contentHost = new ContentControl
+            {
+                Background = new SolidColorBrush(Color.FromRgb(28, 26, 40)),
+                HorizontalContentAlignment = HorizontalAlignment.Stretch,
+                VerticalContentAlignment = VerticalAlignment.Stretch
+            };
 
-            var layout = new Grid();
+            var layout = new Grid { UseLayoutRounding = true, SnapsToDevicePixels = true };
             layout.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             layout.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             Grid.SetColumn(sideBar, 0);
@@ -59,6 +68,11 @@ namespace PowerAudioManager
             layout.Children.Add(_contentHost);
 
             var dlg = OneBoxWindow.Create(owner, "设置", 520, 570, layout, true);
+            dlg.MinWidth = 480;
+            dlg.MinHeight = 400;
+            // 内容背景不能盖住窗口外壳的底部圆角。
+            layout.SizeChanged += (_, _) => layout.Clip = new RectangleGeometry(
+                new Rect(0, 0, layout.ActualWidth, layout.ActualHeight), 8, 8);
 
             _tabContents = new System.Collections.Generic.List<UIElement>
             {
@@ -94,7 +108,7 @@ namespace PowerAudioManager
             var row = new StackPanel { Orientation = Orientation.Horizontal };
             row.Children.Add(IconCatalog.CreateElement(icon, 16, UiKit.FrozenBrush(Color.FromRgb(180, 177, 210))));
             row.Children.Add(new TextBlock { Text = text, FontSize = 13, Foreground = new SolidColorBrush(Color.FromRgb(190, 188, 220)), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0, 0, 0) });
-            return new ListBoxItem { Content = row, Height = 42, Padding = new Thickness(10, 0, 10, 0) };
+            return new ListBoxItem { Content = row, Height = 38, Padding = new Thickness(10, 0, 10, 0) };
         }
 
         static Style SidebarItemStyle()
@@ -102,29 +116,50 @@ namespace PowerAudioManager
             var style = new Style(typeof(ListBoxItem));
             style.Setters.Add(new Setter(ListBoxItem.BackgroundProperty, Brushes.Transparent));
             style.Setters.Add(new Setter(ListBoxItem.BorderBrushProperty, Brushes.Transparent));
-            style.Setters.Add(new Setter(ListBoxItem.BorderThicknessProperty, new Thickness(0)));
+            style.Setters.Add(new Setter(ListBoxItem.BorderThicknessProperty, new Thickness(1)));
             style.Setters.Add(new Setter(ListBoxItem.PaddingProperty, new Thickness(0)));
             style.Setters.Add(new Setter(ListBoxItem.VerticalContentAlignmentProperty, VerticalAlignment.Center));
             style.Setters.Add(new Setter(ListBoxItem.CursorProperty, System.Windows.Input.Cursors.Hand));
             style.Setters.Add(new Setter(ListBoxItem.MarginProperty, new Thickness(6, 2, 6, 2)));
 
-            // 选中态：紫色圆角填充 + 左侧指示点
+            style.Setters.Add(new Setter(Control.HorizontalContentAlignmentProperty, HorizontalAlignment.Stretch));
+            style.Setters.Add(new Setter(Control.FocusVisualStyleProperty, null));
+            var template = new ControlTemplate(typeof(ListBoxItem));
+            var chrome = new FrameworkElementFactory(typeof(Border));
+            chrome.SetValue(Border.CornerRadiusProperty, new CornerRadius(6));
+            chrome.SetValue(Border.BackgroundProperty, new TemplateBindingExtension(Control.BackgroundProperty));
+            chrome.SetValue(Border.BorderBrushProperty, new TemplateBindingExtension(Control.BorderBrushProperty));
+            chrome.SetValue(Border.BorderThicknessProperty, new TemplateBindingExtension(Control.BorderThicknessProperty));
+            chrome.SetValue(Border.PaddingProperty, new TemplateBindingExtension(Control.PaddingProperty));
+            var presenter = new FrameworkElementFactory(typeof(ContentPresenter));
+            presenter.SetValue(ContentPresenter.ContentSourceProperty, "Content");
+            presenter.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Center);
+            chrome.AppendChild(presenter);
+            template.VisualTree = chrome;
+            style.Setters.Add(new Setter(Control.TemplateProperty, template));
+
+            // 悬停先于选中，保持当前页面的紫色选中态。
+            var hover = new Trigger { Property = UIElement.IsMouseOverProperty, Value = true };
+            hover.Setters.Add(new Setter(Control.BackgroundProperty, UiKit.FrozenBrush(Color.FromRgb(45, 42, 62))));
+            style.Triggers.Add(hover);
+
+            // 固定边框厚度，切换选中项时文字不横向跳动。
             var sel = new Trigger { Property = ListBoxItem.IsSelectedProperty, Value = true };
             sel.Setters.Add(new Setter(ListBoxItem.BackgroundProperty, new SolidColorBrush(Color.FromRgb(60, 52, 100))));
             sel.Setters.Add(new Setter(ListBoxItem.BorderBrushProperty, new SolidColorBrush(Color.FromRgb(142, 140, 216))));
-            sel.Setters.Add(new Setter(ListBoxItem.BorderThicknessProperty, new Thickness(3, 0, 0, 0)));
+
             style.Triggers.Add(sel);
 
-            var hover = new Trigger { Property = ListBoxItem.IsMouseOverProperty, Value = true };
-            hover.Setters.Add(new Setter(ListBoxItem.BackgroundProperty, new SolidColorBrush(Color.FromRgb(45, 42, 62))));
-            style.Triggers.Add(hover);
+            var focus = new Trigger { Property = UIElement.IsKeyboardFocusWithinProperty, Value = true };
+            focus.Setters.Add(new Setter(Control.BorderBrushProperty, UiKit.FrozenBrush(ThemeTokens.Accent)));
+            style.Triggers.Add(focus);
 
             return style;
         }
 
         static StackPanel MakeButtons()
         {
-            var btns = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 18, 0, 0) };
+            var btns = new StackPanel { Tag = "SettingsActions", Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 18, 0, 0) };
             var ok = new Button { Content = "确定", Width = 72, Height = 28, FontSize = 12, Margin = new Thickness(0, 0, 8, 0) };
             var cancel = new Button { Content = "取消", Width = 72, Height = 28, FontSize = 12 };
             AppResources.StyleDialogButton(ok, true);
@@ -181,9 +216,34 @@ namespace PowerAudioManager
             return new TextBox { FontSize = 12, Padding = new Thickness(8, 6, 8, 6), Background = new SolidColorBrush(Color.FromRgb(42, 39, 60)), Foreground = Brushes.White, BorderBrush = new SolidColorBrush(Color.FromRgb(80, 75, 120)), BorderThickness = new Thickness(1) };
         }
 
-        static ScrollViewer Scroll(StackPanel stack)
+        static FrameworkElement Scroll(StackPanel stack)
         {
-            return new ScrollViewer { Content = stack, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Padding = new Thickness(0) };
+            var scroll = new ScrollViewer
+            {
+                Content = stack, VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                Padding = new Thickness(0), PanningMode = PanningMode.VerticalOnly
+            };
+            scroll.Resources[typeof(ScrollBar)] = ThemeTokens.CreateDarkScrollBarStyle();
+            // 所有设置页由 MakeButtons 创建同一操作栏，移出滚动区并保留原点击处理。
+            if (stack.Children.Count == 0 || stack.Children[stack.Children.Count - 1] is not StackPanel actions ||
+                !Equals(actions.Tag, "SettingsActions")) return scroll;
+            stack.Children.Remove(actions);
+            actions.Margin = new Thickness(0);
+            var footer = new Border
+            {
+                Background = UiKit.FrozenBrush(ThemeTokens.TitleSurface),
+                BorderBrush = UiKit.FrozenBrush(Color.FromRgb(50, 46, 68)),
+                BorderThickness = new Thickness(0, 1, 0, 0), Padding = new Thickness(16, 10, 16, 10),
+                Child = actions
+            };
+            var page = new Grid();
+            page.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+            page.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            page.Children.Add(scroll);
+            Grid.SetRow(footer, 1);
+            page.Children.Add(footer);
+            return page;
         }
 
         static void ConfirmIfDangerous(CheckBox cb, Window dlg, string message)
