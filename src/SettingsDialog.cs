@@ -83,6 +83,7 @@ namespace PowerAudioManager
                 BuildScreenshotTab(owner, dlg, fg),
                 BuildClipboardTab(owner, dlg, fg),
                 BuildTempTab(owner, dlg, fg),
+                BuildAudioStudioTab(owner, dlg, fg),
                 BuildAboutTab(dlg, fg),
             };
 
@@ -93,6 +94,7 @@ namespace PowerAudioManager
             sideBar.Items.Add(SidebarItem(IconKey.Capture, "截图"));
             sideBar.Items.Add(SidebarItem(IconKey.Clipboard, "剪贴板"));
             sideBar.Items.Add(SidebarItem(IconKey.Performance, "性能"));
+            sideBar.Items.Add(SidebarItem(IconKey.Audio, "麦克风"));
             sideBar.Items.Add(SidebarItem(IconKey.Brand, "关于"));
 
             if (openTab >= 0 && openTab < sideBar.Items.Count)

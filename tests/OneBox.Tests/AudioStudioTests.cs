@@ -61,6 +61,14 @@ public sealed class AudioStudioTests
         settings.Normalize(); Assert.Equal(0, settings.Strength); Assert.Equal(3, settings.MicGain); Assert.Equal(10, settings.Bands.Length); Assert.Equal(4, settings.MonitorPoint);
     }
     [Fact]
+    public void LegacyAndUnavailableModesFallBackSafely()
+    {
+        var legacy = new StudioSettings { Model = "RNNoise" }; legacy.Normalize();
+        Assert.Equal(nameof(DenoiseMode.Eco), legacy.Model);
+        var unavailable = new StudioSettings { Model = "Studio" }; unavailable.Normalize();
+        Assert.Equal(nameof(DenoiseMode.Balanced), unavailable.Model);
+    }
+    [Fact]
     public void BothNativeModelsProduceFiniteAudioAndReduceStationaryNoise()
     {
         var random = new Random(18);
@@ -76,6 +84,49 @@ public sealed class AudioStudioTests
                 if (f > 100) foreach (float x in frame) after += x * x;
             }
             Assert.True(after < before * .85, $"{denoiser.GetType().Name}: noise power {after} should be below {before * .85}");
+        }
+    }
+    [Fact]
+    public void GtcrnStreamingModelProcessesConsecutiveFrames()
+    {
+        using var denoiser = new GtcrnDenoiser();
+        var frame = new float[480];
+        for (int f = 0; f < 30; f++)
+        {
+            for (int i = 0; i < frame.Length; i++)
+                frame[i] = .1f * (float)Math.Sin(2 * Math.PI * 440 * (f * 480 + i) / 48000);
+            denoiser.Process(frame);
+            Assert.All(frame, x => Assert.True(float.IsFinite(x)));
+        }
+    }
+    [Fact]
+    public void BalancedBenchmarkReportsMeasuredPercentiles()
+    {
+        var result = StudioBenchmark.Run(nameof(DenoiseMode.Balanced));
+        Assert.True(double.IsFinite(result.Inference) && result.Inference > 0);
+        Assert.True(result.Pipeline > 0 && result.P50 <= result.P95 && result.P95 <= result.Maximum);
+        Assert.Equal(result.Pipeline / 10, result.Rtf, 8);
+    }
+    [Fact]
+    public void MultiProcessPlayerSelectsTheAudiblePid()
+    {
+        const string path = @"C:\Program Files\Netease\CloudMusic\cloudmusic.exe";
+        var settings = new StudioSettings { ApplicationPath = path, ApplicationPid = 24456 };
+        var applications = new[]
+        {
+            new StudioApplication(24456, path, "CloudMusic", false, 0),
+            new StudioApplication(40640, path, "CloudMusic", true, .013f)
+        };
+        Assert.Equal(40640, StudioController.ResolveApplication(settings, applications));
+    }
+    [Fact]
+    public void EveryVisibleModeCanBeBenchmarked()
+    {
+        foreach (string mode in StudioDenoisers.Factories.Keys)
+        {
+            var result = StudioBenchmark.Run(mode);
+            Assert.True(double.IsFinite(result.Pipeline) && result.Pipeline >= 0, mode);
+            Assert.True(double.IsFinite(result.Rtf) && result.Rtf >= 0, mode);
         }
     }
 }

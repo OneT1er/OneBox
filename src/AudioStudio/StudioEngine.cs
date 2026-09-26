@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading;
@@ -22,12 +23,15 @@ internal sealed class StudioEngine : IDisposable
     public string Error { get; private set; }
     public string Note { get; private set; } = "";
     public float InputPeak, OutputPeak;
+    public float MusicPeak;
     public float[] SpectrumFrame = new float[480];
     public bool Running => _running;
     public int CapturedPid { get; private set; }
     public string InputId => _inputDevice?.ID ?? "";
     public string MonitorId => _monitorDevice?.ID ?? "";
     public bool MonitorFaulted { get; private set; }
+    public string MonitorError { get; private set; }
+    public bool ProcessingTooSlow { get; private set; }
     static BufferedWaveProvider Buffer() => new(WaveFormat.CreateIeeeFloatWaveFormat(48000, 2), TimeSpan.FromMilliseconds(200))
         { DiscardOnBufferOverflow = true, ReadFully = true };
 
@@ -75,9 +79,9 @@ internal sealed class StudioEngine : IDisposable
             _player = new WasapiPlayerBuilder().WithDevice(_outputDevice).WithSharedMode().WithEventSync().WithLatency(40).Build();
             _player.Init(_output);
             _player.PlaybackStopped += (_, args) => { if (args.Exception != null) Error = args.Exception.Message; };
-            bool usbConflict = settings.Monitor && settings.Microphone && StudioDevices.SameUsbDevice(settings.InputId, settings.MonitorId);
-            if (usbConflict) Note = "检测到麦克风与监听共用 USB 设备，已暂停监听；请选择独立耳机 / Shared USB device detected; monitoring paused. Choose separate headphones.";
-            if (settings.Monitor && !usbConflict)
+            // A shared USB container is common for headsets and does not mean that
+            // WASAPI cannot open both endpoints. Let the driver decide.
+            if (settings.Monitor)
             {
                 try
                 {
@@ -88,12 +92,17 @@ internal sealed class StudioEngine : IDisposable
                     throw new InvalidOperationException("监听不能输出到虚拟麦克风 / Monitor cannot feed a virtual microphone");
                 _monitorPlayer = new WasapiPlayerBuilder().WithDevice(_monitorDevice).WithSharedMode().WithEventSync().WithLatency(60).Build();
                 _monitorPlayer.Init(_monitor);
-                _monitorPlayer.PlaybackStopped += (_, args) => { if (args.Exception != null) MonitorFaulted = true; };
+                _monitorPlayer.PlaybackStopped += (_, args) =>
+                {
+                    if (args.Exception == null) return;
+                    MonitorError = args.Exception.Message; MonitorFaulted = true;
+                };
                 }
                 catch (Exception ex)
                 {
                     _monitorPlayer?.Dispose(); _monitorPlayer = null; _monitorDevice?.Dispose(); _monitorDevice = null;
-                    Note = "监听暂不可用，音乐共享继续 / Monitoring unavailable; sharing continues";
+                    MonitorError = ex.Message;
+                    Note = "监听不可用：" + ex.Message + " / Monitoring unavailable: " + ex.Message;
                     AppLog.Log("AudioStudio monitor", ex.Message);
                 }
             }
@@ -120,15 +129,25 @@ internal sealed class StudioEngine : IDisposable
         var output = new float[960]; var monitor = new float[960]; var bytes = new byte[3840];
         try
         {
+            int slowFrames = 0;
             while (_running)
             {
                 if (_output.BufferedBytes >= bytes.Length * 3) { Thread.Sleep(2); continue; }
                 _microphone.Read(stereoMic); _music.Read(music);
+                float musicPeak = 0;
+                for (int i = 0; i < music.Length; i++) musicPeak = Math.Max(musicPeak, Math.Abs(music[i]));
+                MusicPeak = musicPeak;
                 float peak = 0;
                 for (int i = 0; i < 480; i++) { mono[i] = (stereoMic[i * 2] + stereoMic[i * 2 + 1]) * .5f; peak = Math.Max(peak, Math.Abs(mono[i])); }
                 InputPeak = peak;
                 var settings = _settings;
+                var processing = Stopwatch.StartNew();
                 _dsp.Process(mono, music, output, monitor, settings);
+                if (processing.Elapsed.TotalMilliseconds > 10)
+                {
+                    if (++slowFrames >= 10) ProcessingTooSlow = true;
+                }
+                else slowFrames = 0;
                 peak = 0;
                 for (int i = 0; i < 480; i++) { SpectrumFrame[i] = (output[i * 2] + output[i * 2 + 1]) * .5f; peak = Math.Max(peak, Math.Max(Math.Abs(output[i * 2]), Math.Abs(output[i * 2 + 1]))); }
                 OutputPeak = peak;

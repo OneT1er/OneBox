@@ -6,6 +6,7 @@ using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
 using NAudio.CoreAudioApi;
+using NAudio.CoreAudioApi.Interfaces;
 
 namespace PowerAudioManager.AudioStudio;
 
@@ -13,13 +14,44 @@ internal sealed record StudioDevice(string Id, string Name)
 {
     public override string ToString() => Name;
     public bool IsCable => Name.Contains("CABLE", StringComparison.OrdinalIgnoreCase) || Name.Contains("Virtual", StringComparison.OrdinalIgnoreCase);
+    public bool IsVbCableInput => Name.Contains("CABLE Input", StringComparison.OrdinalIgnoreCase)
+        && Name.Contains("VB-Audio", StringComparison.OrdinalIgnoreCase);
 }
-internal sealed record StudioApplication(int Pid, string Path, string Name)
+internal sealed record StudioApplication(int Pid, string Path, string Name, bool Active, float Peak)
 {
-    public override string ToString() => Name;
+    public override string ToString() => Name + (Peak > .00001f ? "  (播放中)" : "");
 }
+internal sealed record StudioCaptureClient(string Application, string Device, bool IsVbCable, bool Active);
 internal static class StudioDevices
 {
+    public static StudioCaptureClient[] CaptureClients()
+    {
+        using var e = new MMDeviceEnumerator();
+        var result = new List<StudioCaptureClient>();
+        foreach (var device in e.EnumerateAudioEndPoints(DataFlow.Capture, DeviceState.Active))
+        using (device)
+        {
+            try
+            {
+                var sessions = device.AudioSessionManager.Sessions;
+                for (int i = 0; i < sessions.Count; i++)
+                using (var session = sessions[i])
+                {
+                    int pid = (int)session.GetProcessID;
+                    if (pid <= 0 || pid == Environment.ProcessId) continue;
+                    string name = Path.GetFileNameWithoutExtension(ProcessPath(pid));
+                    if (!new[] { "oopz", "discord", "qq", "wechat", "teams", "zoom" }
+                        .Any(x => name.Equals(x, StringComparison.OrdinalIgnoreCase))) continue;
+                    result.Add(new StudioCaptureClient(name, device.FriendlyName,
+                        device.FriendlyName.Contains("CABLE Output", StringComparison.OrdinalIgnoreCase) &&
+                        device.FriendlyName.Contains("VB-Audio", StringComparison.OrdinalIgnoreCase),
+                        session.State == AudioSessionState.AudioSessionStateActive));
+                }
+            }
+            catch (Exception ex) { AppLog.Log("AudioStudio capture clients", ex.Message); }
+        }
+        return result.ToArray();
+    }
     public static string DefaultMicrophone()
     {
         try
@@ -53,12 +85,20 @@ internal static class StudioDevices
                 {
                     using var session = sessions[i];
                     int pid = (int)session.GetProcessID;
-                    if (pid == 0 || pid == Environment.ProcessId || result.ContainsKey(pid)) continue;
+                    if (pid == 0 || pid == Environment.ProcessId) continue;
+                    bool active = session.State == AudioSessionState.AudioSessionStateActive;
+                    float peak = 0;
+                    try { peak = session.AudioMeterInformation.MasterPeakValue; } catch { }
+                    if (result.TryGetValue(pid, out var existing))
+                    {
+                        result[pid] = existing with { Active = existing.Active || active, Peak = Math.Max(existing.Peak, peak) };
+                        continue;
+                    }
                     string path = ProcessPath(pid);
                     if (string.IsNullOrEmpty(path)) continue;
                     string name = System.IO.Path.GetFileNameWithoutExtension(path);
                     try { name = FileVersionInfo.GetVersionInfo(path).FileDescription ?? name; } catch { }
-                    result[pid] = new(pid, path, name + " · " + pid);
+                    result[pid] = new(pid, path, name + " · " + pid, active, peak);
                 }
             }
             catch (Exception ex) { AppLog.Log("AudioStudio sessions", ex.Message); }

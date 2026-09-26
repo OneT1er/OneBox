@@ -238,6 +238,24 @@ namespace PowerAudioManager
             UiKit.ApplyFlatStyle(studioButton);
             studioButton.Command = CreateUiCommand(AppCommandId.StudioOpen, CommandSource.MainWindow);
             _audioSection.Children.Add(studioButton);
+            var studioControls = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 3, 0, 2) };
+            var studio = AudioStudio.StudioController.Instance;
+            var share = new Button { Padding = new Thickness(8, 3, 8, 3), Margin = new Thickness(0, 0, 4, 0) };
+            var bgm = new Button { Padding = new Thickness(8, 3, 8, 3), Margin = new Thickness(0, 0, 4, 0) };
+            var monitor = new Button { Padding = new Thickness(8, 3, 8, 3) };
+            UiKit.ApplyFlatStyle(share); UiKit.ApplyFlatStyle(bgm); UiKit.ApplyFlatStyle(monitor);
+            void RefreshStudioButtons()
+            {
+                share.Content = studio.Wanted ? "停止共享" : "开始共享";
+                bgm.Content = studio.Settings.Music ? "BGM 开" : "BGM 关";
+                monitor.Content = studio.Settings.Monitor ? "监听开" : "监听关";
+            }
+            share.Click += async (_, _) => { if (studio.Wanted) await studio.StopAsync(); else await studio.StartAsync(); RefreshStudioButtons(); };
+            bgm.Click += async (_, _) => { await studio.ToggleAsync("Music"); RefreshStudioButtons(); };
+            monitor.Click += async (_, _) => { await studio.ToggleAsync("Monitor"); RefreshStudioButtons(); };
+            studioControls.IsVisibleChanged += (_, _) => RefreshStudioButtons();
+            studioControls.Children.Add(share); studioControls.Children.Add(bgm); studioControls.Children.Add(monitor);
+            RefreshStudioButtons(); _audioSection.Children.Add(studioControls);
 
             var volRow = new DockPanel { Margin = new Thickness(0, 10, 0, 0), LastChildFill = true };
             _muteBtn = new Button {

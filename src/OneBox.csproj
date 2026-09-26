@@ -52,6 +52,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" />
     <ProjectReference Include="OneBox.Contracts\OneBox.Contracts.csproj" />
     <!-- Build the two companion processes before the GUI. Their assemblies
          are intentionally not compile-time references; the target below
@@ -69,13 +70,13 @@
 
   <ItemGroup>
     <None Update="AudioStudio\Native\*" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Update="AudioStudio\Models\*" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
   <!-- A normal solution build must be runnable from the GUI output directory,
        just like the folder-publish output used by Velopack. Build-order-only
        project references ensure these directories exist before this target. -->
-  <Target Name="CopyOneBoxCompanionBuildOutputs" AfterTargets="Build"
-          Condition="'$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true'">
+  <Target Name="CopyOneBoxCompanionBuildOutputs" AfterTargets="Build" Condition="'$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true'">
     <PropertyGroup>
       <_OneBoxServiceOutputDir>$(MSBuildProjectDirectory)\OneBox.Service\bin\$(Configuration)\$(OneBoxWindowsTargetFramework)\$(OneBoxCompanionRuntimeIdentifier)\</_OneBoxServiceOutputDir>
       <_OneBoxHardwareOutputDir>$(MSBuildProjectDirectory)\OneBox.Hardware\bin\$(Configuration)\$(OneBoxWindowsTargetFramework)\$(OneBoxCompanionRuntimeIdentifier)\</_OneBoxHardwareOutputDir>
@@ -86,9 +87,7 @@
       <_OneBoxCompanionArtifacts Include="$(_OneBoxServiceOutputDir)*.exe;$(_OneBoxServiceOutputDir)*.dll;$(_OneBoxServiceOutputDir)*.json;$(_OneBoxServiceOutputDir)*.pdb" />
       <_OneBoxCompanionArtifacts Include="$(_OneBoxHardwareOutputDir)*.exe;$(_OneBoxHardwareOutputDir)*.dll;$(_OneBoxHardwareOutputDir)*.json;$(_OneBoxHardwareOutputDir)*.pdb" />
     </ItemGroup>
-    <Copy SourceFiles="@(_OneBoxCompanionArtifacts)"
-          DestinationFiles="@(_OneBoxCompanionArtifacts->'$(TargetDir)%(Filename)%(Extension)')"
-          SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(_OneBoxCompanionArtifacts)" DestinationFiles="@(_OneBoxCompanionArtifacts->'$(TargetDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
     <Message Importance="Low" Text="Composed OneBox companion outputs into $(TargetDir)" />
   </Target>
 

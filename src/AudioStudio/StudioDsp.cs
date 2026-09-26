@@ -1,14 +1,24 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using NAudio.Dsp;
 
 namespace PowerAudioManager.AudioStudio;
 
+internal readonly record struct DenoiserMetrics(double InferenceMilliseconds, string Label);
+
 internal interface IStudioDenoiser : IDisposable
 {
+    void Initialize() { }
     void Process(float[] frame, float strength = 1);
+    void Reset() { }
+    double LastInferenceMilliseconds => 0;
+    string MetricLabel => "Inference";
+    DenoiserMetrics GetMetrics() => new(LastInferenceMilliseconds, MetricLabel);
 }
+
+internal enum DenoiseMode { Off, Eco, Balanced, Quality }
 
 internal static class StudioDenoisers
 {
@@ -17,28 +27,42 @@ internal static class StudioDenoisers
     public static readonly IReadOnlyDictionary<string, Func<IStudioDenoiser>> Factories =
         new Dictionary<string, Func<IStudioDenoiser>>(StringComparer.Ordinal)
         {
-            ["RNNoise"] = () => new RnNoiseDenoiser(),
-            ["DeepFilterNet3"] = () => new DeepFilterDenoiser()
+            [nameof(DenoiseMode.Off)] = () => new BypassDenoiser(),
+            [nameof(DenoiseMode.Eco)] = () => new RnNoiseDenoiser(),
+            [nameof(DenoiseMode.Balanced)] = () => new GtcrnDenoiser(),
+            [nameof(DenoiseMode.Quality)] = () => new DeepFilterDenoiser()
         };
     public static IStudioDenoiser Create(string name)
     {
-        if (!Environment.Is64BitProcess) throw new NotSupportedException("降噪需要 x64 版 OneBox / Denoising requires OneBox x64");
-        if (!NativeLibrary.TryLoad("vcruntime140.dll", out var runtime))
-            throw new InvalidOperationException("请安装 Microsoft Visual C++ x64 运行库，见使用教程 / Install the Microsoft Visual C++ x64 runtime from the guide");
-        NativeLibrary.Free(runtime);
         if (!Factories.TryGetValue(name, out var factory)) throw new NotSupportedException("Unknown denoising model: " + name);
-        return factory();
+        if (name != nameof(DenoiseMode.Off))
+        {
+            if (!Environment.Is64BitProcess) throw new NotSupportedException("降噪需要 x64 版 OneBox / Denoising requires OneBox x64");
+            if (!NativeLibrary.TryLoad("vcruntime140.dll", out var runtime))
+                throw new InvalidOperationException("请安装 Microsoft Visual C++ x64 运行库，见使用教程 / Install the Microsoft Visual C++ x64 runtime from the guide");
+            NativeLibrary.Free(runtime);
+        }
+        var denoiser = factory(); denoiser.Initialize(); return denoiser;
     }
+}
+
+internal sealed class BypassDenoiser : IStudioDenoiser
+{
+    public void Process(float[] frame, float strength = 1) { }
+    public void Dispose() { }
 }
 
 internal sealed class RnNoiseDenoiser : IStudioDenoiser
 {
     readonly RNNoise.NET.Denoiser _model = new();
     readonly float[] _dry = new float[480], _previous = new float[480];
+    public double LastInferenceMilliseconds { get; private set; }
     public void Process(float[] frame, float strength = 1)
     {
         Array.Copy(frame, _dry, 480);
+        var clock = Stopwatch.StartNew();
         _model.Denoise(frame);
+        LastInferenceMilliseconds = clock.Elapsed.TotalMilliseconds;
         // RNNoise's STFT has one frame of delay. Align the dry branch before blending.
         for (int i = 0; i < 480; i++) frame[i] = frame[i] * strength + _previous[i] * (1 - strength);
         Array.Copy(_dry, _previous, 480);
@@ -57,6 +81,7 @@ internal sealed class StudioDsp : IDisposable
     readonly float[] _voice = new float[Frame];
     float _limiterGain = 1;
     bool _eqWasEnabled;
+    public DenoiserMetrics ModelMetrics => _denoiser.GetMetrics();
     public StudioDsp(IStudioDenoiser denoiser) { _denoiser = denoiser; Array.Fill(_eqGains, float.NaN); }
 
     // Monitor is tapped before BGM except at Final. Music retains its stereo image.

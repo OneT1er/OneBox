@@ -48,14 +48,18 @@ internal sealed class StudioController : IDisposable
         var s = Settings.Copy();
         switch (feature)
         {
-            case "Denoise": s.Denoise = !s.Denoise; break;
+            case "Denoise":
+                s.Denoise = !s.Denoise;
+                if (s.Denoise && s.Model == nameof(DenoiseMode.Off)) s.Model = nameof(DenoiseMode.Balanced);
+                break;
             case "Eq": s.Eq = !s.Eq; break;
             case "Music": s.Music = !s.Music; break;
             case "Explode": s.Explode = !s.Explode; break;
             case "Monitor": s.Monitor = !s.Monitor; break;
         }
+        bool modelChanged = s.Model != Settings.Model;
         Apply(s);
-        if (Wanted && (feature == "Music" || feature == "Monitor")) await StartAsync();
+        if (Wanted && (feature == "Music" || feature == "Monitor" || modelChanged)) await StartAsync();
     }
     public async Task StartAsync()
     {
@@ -77,16 +81,20 @@ internal sealed class StudioController : IDisposable
             var outputs = await Task.Run(() => StudioDevices.List(DataFlow.Render));
             if (string.IsNullOrEmpty(settings.OutputId))
             {
-                settings.OutputId = outputs.FirstOrDefault(x => x.Name.Contains("CABLE Input", StringComparison.OrdinalIgnoreCase))?.Id ?? "";
+                settings.OutputId = outputs.FirstOrDefault(x => x.IsVbCableInput)?.Id ?? "";
                 if (!string.IsNullOrEmpty(settings.OutputId)) Apply(settings);
             }
             var selected = outputs.FirstOrDefault(x => x.Id == settings.OutputId);
             if (selected == null) throw new InvalidOperationException(T("未找到虚拟输出设备。请安装 VB-CABLE，并选择 CABLE Input。", "Virtual output missing. Install VB-CABLE and select CABLE Input."));
-            if (!selected.IsCable) throw new InvalidOperationException(T("共享输出请选择虚拟音频设备；耳机请在监听中选择。", "Choose a virtual device for sharing; choose headphones under Monitor."));
+            if (!selected.IsVbCableInput) throw new InvalidOperationException(T("共享输出请选择 VB-CABLE 的 CABLE Input；耳机请在监听中选择。", "Choose VB-CABLE CABLE Input for sharing; choose headphones under Monitor."));
             if (settings.Music && !OperatingSystem.IsWindowsVersionAtLeast(10, 0, 20348))
                 throw new NotSupportedException(T("按应用共享需要支持 Process Loopback 的 Windows，建议 Windows 11。", "Application sharing requires Process Loopback support. Windows 11 is recommended."));
-            int pid = settings.Music ? (await Task.Run(StudioDevices.Applications)).FirstOrDefault(x =>
-                string.Equals(x.Path, settings.ApplicationPath, StringComparison.OrdinalIgnoreCase))?.Pid ?? 0 : 0;
+            int pid = settings.Music ? ResolveApplication(settings, await Task.Run(StudioDevices.Applications)) : 0;
+            if (pid > 0 && settings.ApplicationPid != pid)
+            {
+                settings.ApplicationPid = pid;
+                Apply(settings);
+            }
             var engine = new StudioEngine();
             await Task.Run(() => engine.StartAsync(settings, pid));
             if (_disposed || !Wanted) { await Task.Run(engine.Dispose); return; }
@@ -116,7 +124,7 @@ internal sealed class StudioController : IDisposable
                     var inputs = await Task.Run(() => StudioDevices.List(DataFlow.Capture));
                     bool available = inputs.Any(x => x.Id == Settings.InputId);
                     reconnect = Settings.Microphone && available != !string.IsNullOrEmpty(Engine.InputId);
-                    if (Settings.Monitor && !(Settings.Microphone && StudioDevices.SameUsbDevice(Settings.InputId, Settings.MonitorId)))
+                    if (Settings.Monitor)
                     {
                         var outputs = await Task.Run(() => StudioDevices.List(DataFlow.Render));
                         bool monitorAvailable = outputs.Any(x => x.Id == Settings.MonitorId && !x.IsCable);
@@ -124,7 +132,7 @@ internal sealed class StudioController : IDisposable
                     }
                     if (Settings.Music)
                     {
-                        int pid = (await Task.Run(StudioDevices.Applications)).FirstOrDefault(x => string.Equals(x.Path, Settings.ApplicationPath, StringComparison.OrdinalIgnoreCase))?.Pid ?? 0;
+                        int pid = ResolveApplication(Settings, await Task.Run(StudioDevices.Applications));
                         reconnect |= pid != Engine.CapturedPid;
                     }
                 }
@@ -152,5 +160,15 @@ internal sealed class StudioController : IDisposable
         _updateCancellation?.Cancel();
         Engine?.Dispose(); Engine = null;
         _window?.Close();
+    }
+    internal static int ResolveApplication(StudioSettings settings, StudioApplication[] applications)
+    {
+        if (string.IsNullOrWhiteSpace(settings.ApplicationPath)) return 0;
+        var candidates = applications.Where(x => string.Equals(x.Path, settings.ApplicationPath, StringComparison.OrdinalIgnoreCase)).ToArray();
+        var audible = candidates.OrderByDescending(x => x.Peak).FirstOrDefault(x => x.Peak > .00001f);
+        return audible?.Pid ?? candidates.FirstOrDefault(x => x.Pid == settings.ApplicationPid && x.Active)?.Pid
+            ?? candidates.FirstOrDefault(x => x.Active)?.Pid
+            ?? candidates.FirstOrDefault(x => x.Pid == settings.ApplicationPid)?.Pid
+            ?? candidates.FirstOrDefault()?.Pid ?? 0;
     }
 }

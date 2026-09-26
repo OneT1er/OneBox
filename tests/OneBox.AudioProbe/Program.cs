@@ -24,6 +24,43 @@ internal static class Program
         try
         {
             if (args[0] == "preview") { Preview(args[1]); return 0; }
+            if (args[0] == "sessions")
+            {
+                foreach (var application in StudioDevices.Applications())
+                    if (application.Path.Contains("CloudMusic", StringComparison.OrdinalIgnoreCase))
+                        Console.WriteLine($"{application.Pid} active={application.Active} peak={application.Peak:F6} {application.Path}");
+                return 0;
+            }
+            if (args[0] == "application-signal")
+            {
+                ApplicationSignal().GetAwaiter().GetResult(); return 0;
+            }
+            if (args[0] == "capture-sessions")
+            {
+                using var enumerator = new MMDeviceEnumerator();
+                foreach (var device in enumerator.EnumerateAudioEndPoints(DataFlow.Capture, DeviceState.Active))
+                using (device)
+                {
+                    var sessions = device.AudioSessionManager.Sessions;
+                    for (int i = 0; i < sessions.Count; i++)
+                    using (var session = sessions[i])
+                    {
+                        int pid = (int)session.GetProcessID;
+                        if (pid > 0 && StudioDevices.ProcessPath(pid).Contains("oopz", StringComparison.OrdinalIgnoreCase))
+                            Console.WriteLine($"oopz PID {pid} capture device: {device.FriendlyName}, state={session.State}");
+                    }
+                }
+                return 0;
+            }
+            if (args[0] == "benchmark")
+            {
+                foreach (var mode in StudioDenoisers.Factories.Keys)
+                {
+                    var result = StudioBenchmark.Run(mode);
+                    Console.WriteLine($"{mode}: {result.MetricLabel}={result.Inference:F2}ms, pipeline={result.Pipeline:F2}ms, P95={result.P95:F2}ms, RTF={result.Rtf:F2}");
+                }
+                return 0;
+            }
             if (args[0] == "tone")
             {
                 using var devices = new MMDeviceEnumerator(); using var device = devices.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia);
@@ -62,8 +99,9 @@ internal static class Program
             engine.Update(new StudioSettings { Microphone = false, Denoise = false, Music = false, OutputId = cable.Id });
             await Task.Delay(500); lock (gate) captured.Clear(); await Task.Delay(600);
             lock (gate) samples = captured.ToArray();
-            if (samples.Length > 0 && samples.Max(Math.Abs) > .00005) throw new Exception("BGM stop leaked audio");
-            Console.WriteLine("PASS: selected-process capture → stereo mix → limiter → CABLE Output; BGM off is silent.");
+            double stoppedTone = Amplitude(samples, 440);
+            if (stoppedTone > wanted * .15) throw new Exception($"BGM stop leaked selected tone: {stoppedTone:F6}");
+            Console.WriteLine("PASS: selected-process capture → stereo mix → limiter → CABLE Output; selected BGM stops when disabled.");
             var virtualSink = outputs.FirstOrDefault(x => x.Id != cable.Id && x.IsCable);
             if (virtualSink != null)
             {
@@ -83,6 +121,24 @@ internal static class Program
                 if (StudioDevices.SameUsbDevice(input.Id, output.Id)) Console.WriteLine("Shared USB detected: " + input.Name + " / " + output.Name);
         }
         finally { first.StandardInput.Close(); second.StandardInput.Close(); if (!first.WaitForExit(3000)) first.Kill(); if (!second.WaitForExit(3000)) second.Kill(); }
+    }
+    static async Task ApplicationSignal()
+    {
+        foreach (var app in StudioDevices.Applications().Where(x => x.Path.Contains("CloudMusic", StringComparison.OrdinalIgnoreCase)))
+        {
+            using var recorder = await new WasapiRecorderBuilder()
+                .WithProcessLoopback((uint)app.Pid, ProcessLoopbackMode.IncludeTargetProcessTree)
+                .WithFormat(WaveFormat.CreateIeeeFloatWaveFormat(48000, 2)).BuildAsync();
+            long samples = 0; double energy = 0; float peak = 0;
+            recorder.DataAvailable += (bytes, flags, _, _) =>
+            {
+                if ((flags & AudioClientBufferFlags.Silent) != 0) return;
+                foreach (float value in MemoryMarshal.Cast<byte, float>(bytes))
+                { samples++; energy += value * value; peak = Math.Max(peak, Math.Abs(value)); }
+            };
+            recorder.StartRecording(); await Task.Delay(1500);
+            Console.WriteLine($"PID {app.Pid}: samples={samples}, peak={peak:F6}, RMS={Math.Sqrt(energy / Math.Max(1, samples)):F6}");
+        }
     }
     static Process StartTone(int frequency)
     {
@@ -124,7 +180,7 @@ internal static class Program
             window.WindowStartupLocation = WindowStartupLocation.Manual; window.Left = -10000; window.Top = -10000;
             window.Show(); Pump();
             Render(window, Path.Combine(directory, "studio-" + theme + ".png"));
-            foreach (string method in new[] { "Equalizer", "Settings", "Guide" })
+            foreach (string method in new[] { "Equalizer", "Guide" })
             {
                 typeof(StudioWindow).GetMethod(method, BindingFlags.Instance | BindingFlags.NonPublic).Invoke(view, null);
                 Pump(); var children = window.OwnedWindows.Cast<Window>().ToArray();

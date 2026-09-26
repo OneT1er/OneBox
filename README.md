@@ -45,21 +45,21 @@
 
 从悬浮窗的「音频输出 → 麦克风工作室」或托盘菜单打开。
 
-1. 从 [VB-Audio 官网](https://vb-audio.com/Cable/)安装 VB-CABLE，按安装器提示重启。
+1. 在工作室点击「下载 VB-CABLE 官方安装包」，解压后以管理员身份运行官方 `VBCABLE_Setup_x64.exe`，按安装器提示重启。也可从 [VB-Audio 官网](https://vb-audio.com/Cable/)手动下载。
 2. 选择真实麦克风、`CABLE Input` 输出及要分享的音乐软件，点击「开始共享」。
 3. 在聊天/游戏中将麦克风选为 `CABLE Output`。本地仍听播放器原来的声音，不需要开启监听。
 
-处理链路：麦克风 → RNNoise / DeepFilterNet3 降噪 → 人声音量 → 10 段 EQ → 指定应用 BGM → 限幅 → 虚拟麦克风。
+处理链路：麦克风 → Off / Eco (RNNoise) / Balanced (GTCRN) / Quality (DeepFilterNet3) → 人声音量 → 10 段 EQ → 指定应用 BGM → 限幅 → 虚拟麦克风。首次启动默认 Balanced。
 
 - 降噪强度 0–100%，四种场景预设 + 自定义；音乐保留立体声，并在降噪后混入。
 - 7 种 EQ 预设、可拖拽曲线、5 个监听点、炸麦失真效果和 5 项可自定义全局快捷键。
-- 自动检测设备变化，按可执行文件路径重新识别音乐应用；不支持进程捕获时不会回退至系统音频。
-- 电平与频谱、中文/English、紫影深色/暖调浅色、托盘后台运行、可选登录后共享和空闲时静默更新。
+- 自动检测设备变化，优先捕获所选应用中实际有声音的进程，并显示 PID 与 BGM 电平；不支持进程捕获时不会回退至系统音频。
+- 电平与频谱、现场延迟测试、中文/English、统一紫影深色界面、托盘后台运行、可选登录后共享和空闲时静默更新。工作室设置位于 OneBox 原有设置侧栏。
 - 关闭工作室窗口继续共享；停止或退出 OneBox 后，聊天软件需切回真实麦克风。音乐可能被聊天软件自身降噪处理，可使用其音乐模式。
 
-按应用捕获要求支持 Windows Process Loopback（本功能检查 build 20348+，建议 Windows 11）。浏览器捕获以进程树为单位，不保证单标签页隔离。监听共用 USB 音频设备时自动暂停监听并提示更换独立设备。DeepFilterNet3 使用官方低延迟模型，通过独立后台进程隔离原生运行时。
+按应用捕获要求支持 Windows Process Loopback（本功能检查 build 20348+，建议 Windows 11）。浏览器捕获以进程树为单位，不保证单标签页隔离。监听会实际尝试打开所选耳机；驱动拒绝时显示错误。DeepFilterNet3 通过独立后台进程隔离原生运行时。按当前产品范围不提供 Studio GPU 档：公开 MossFormer2 48k ONNX 实现以约 20 秒音频块为输入，不适合实时语音通话；FRCRN 公开模型也是非因果结构。
 
-降噪组件需要 Microsoft Visual C++ x64 运行库；缺失时工作室会提示，教程提供微软官方下载链接。首次使用无需另行下载降噪模型。
+降噪组件需要 Microsoft Visual C++ x64 运行库；缺失时工作室会提示，教程提供微软官方下载链接。首次使用无需另行下载降噪模型。延迟测试显示本机实测的模型阶段耗时、管线平均值、P50、P95、最大值和 RTF；Quality 的模型阶段包括子进程往返，测试数据不代表端到端通话延迟。
 
 音频模块测试：`dotnet test tests/OneBox.Tests/OneBox.Tests.csproj`。可选硬件探针：构建 `tests/OneBox.AudioProbe/OneBox.AudioProbe.csproj`，运行 `OneBox.AudioProbe.exe route`；需要已安装 VB-CABLE，会播放低音量测试音并验证指定进程隔离和虚拟麦克风输出，不采集真实麦克风。`preview <目录>` 可生成两种主题的界面预览。
 

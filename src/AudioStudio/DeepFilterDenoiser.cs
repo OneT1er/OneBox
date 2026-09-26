@@ -12,6 +12,8 @@ internal sealed class DeepFilterDenoiser : IStudioDenoiser
 {
     readonly Process _worker;
     readonly byte[] _bytes = new byte[StudioDsp.Frame * sizeof(float)];
+    public double LastInferenceMilliseconds { get; private set; }
+    public string MetricLabel => "Worker round-trip";
     public DeepFilterDenoiser()
     {
         string exe = Path.Combine(AppContext.BaseDirectory, "OneBox.exe");
@@ -31,11 +33,13 @@ internal sealed class DeepFilterDenoiser : IStudioDenoiser
     }
     public void Process(float[] frame, float strength = 1)
     {
+        var clock = Stopwatch.StartNew();
         Buffer.BlockCopy(frame, 0, _bytes, 0, _bytes.Length);
         _worker.StandardInput.BaseStream.Write(BitConverter.GetBytes(Math.Clamp(strength, 0, 1)));
         _worker.StandardInput.BaseStream.Write(_bytes);
         _worker.StandardInput.BaseStream.Flush();
         Read(_bytes, 2000);
+        LastInferenceMilliseconds = clock.Elapsed.TotalMilliseconds;
         Buffer.BlockCopy(_bytes, 0, frame, 0, _bytes.Length);
     }
     void Read(byte[] bytes, int timeout)

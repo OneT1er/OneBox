@@ -5,11 +5,9 @@ using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
 using NAudio.CoreAudioApi;
-using PowerAudioManager.Commands;
 
 namespace PowerAudioManager.AudioStudio;
 
@@ -24,13 +22,13 @@ internal sealed class StudioWindow
     ComboBox _input, _output, _apps, _monitor;
     ComboBox _voicePreset;
     string[] _presetLabels;
-    TextBlock _status, _levels;
+    TextBlock _status, _levels, _chatNotice;
     Button _start;
     StudioSpectrum _spectrum;
     StudioMeter _inputMeter, _outputMeter;
     bool _building, _refreshing;
     int _ticks;
-    bool Light => _controller.Settings.Theme == "light";
+    bool Light => false; // Match the existing OneBox settings and floating window.
     Brush Foreground => Light ? new SolidColorBrush(Color.FromRgb(43, 39, 60)) : ThemeTokens.Brush(ThemeTokens.PrimaryText);
     Brush Muted => Light ? new SolidColorBrush(Color.FromRgb(99, 91, 112)) : ThemeTokens.Brush(ThemeTokens.SecondaryText);
     string T(string zh, string en) => _controller.T(zh, en);
@@ -120,7 +118,12 @@ internal sealed class StudioWindow
             foreach (var child in titleDock.Children) if (child is TextBlock title) title.Text = "  " + _window.Title;
         var s = _controller.Settings;
         var toolbar = new WrapPanel();
-        toolbar.Children.Add(Button(T("设置", "Settings"), Settings));
+        toolbar.Children.Add(Button(T("OneBox 设置", "OneBox settings"), () =>
+        {
+            _window.Hide();
+            try { SettingsDialog.Show(_owner, 7); }
+            finally { Build(); _window.Show(); _window.Activate(); }
+        }));
         toolbar.Children.Add(Button(T("均衡器", "Equalizer"), Equalizer));
         toolbar.Children.Add(Button(T("使用教程", "Guide"), Guide));
         toolbar.Children.Add(Button(T("收起到托盘", "Hide to tray"), () => _window.Hide()));
@@ -131,6 +134,7 @@ internal sealed class StudioWindow
         _start.Background = ThemeTokens.Brush(ThemeTokens.Accent); _start.Foreground = Brushes.White;
         _start.FontWeight = FontWeights.SemiBold; state.Children.Add(_start);
         _levels = Text(""); state.Children.Add(_levels);
+        _chatNotice = Text(""); state.Children.Add(_chatNotice);
         _inputMeter = new StudioMeter { Height = 5, Margin = new Thickness(0, 0, 0, 4), ToolTip = T("麦克风电平", "Microphone level") };
         _outputMeter = new StudioMeter { Height = 5, Margin = new Thickness(0, 0, 0, 8), ToolTip = T("输出电平", "Output level") };
         state.Children.Add(_inputMeter); state.Children.Add(_outputMeter);
@@ -146,7 +150,7 @@ internal sealed class StudioWindow
             Grid.SetColumn(column, col); deviceGrid.Children.Add(column);
         }
         devices.Children.Add(deviceGrid);
-        devices.Children.Add(Button(T("安装 VB-CABLE（官方）", "Install VB-CABLE (official)"), () => Open("https://vb-audio.com/Cable/")));
+        devices.Children.Add(Button(T("下载 VB-CABLE 官方安装包", "Download official VB-CABLE package"), () => _ = VbCableInstaller.DownloadAsync(_window)));
         var voice = Card(T("2  调整人声", "2  Adjust your voice"));
         Toggle(voice, T("混入麦克风", "Include microphone"), x => x.Microphone, (x, v) => x.Microphone = v, true);
         var presets = new[] { T("安静", "Quiet"), T("标准", "Standard"), T("嘈杂", "Noisy"), T("直播", "Live"), T("自定义", "Custom") };
@@ -154,14 +158,20 @@ internal sealed class StudioWindow
         var keys = new[] { "Quiet", "Standard", "Noisy", "Live", "Custom" };
         _voicePreset = Combo(voice, T("场景预设", "Voice preset"), presets, presets[Math.Max(0, Array.IndexOf(keys, s.Preset))], item =>
         { Change(x => { string key = keys[Array.IndexOf(presets, (string)item)]; if (key == "Custom") x.Preset = key; else x.ApplyPreset(key); }, true); Build(); });
-        Combo(voice, T("降噪模型", "Denoising model"), StudioDenoisers.Factories.Keys, s.Model, item => Change(x => { x.Model = (string)item; x.Preset = "Custom"; }, true));
+        Combo(voice, T("降噪模式 · Balanced 推荐", "Denoising mode · Balanced recommended"),
+            StudioDenoisers.Factories.Keys, s.Model, item => Change(x =>
+            { x.Model = (string)item; x.Denoise = x.Model != nameof(DenoiseMode.Off); x.Preset = "Custom"; }, true));
+        var benchmarkOutput = Text("");
+        voice.Children.Add(Button(T("测试各模式延迟", "Test mode latency"), () => _ = BenchmarkAsync(benchmarkOutput)));
+        voice.Children.Add(benchmarkOutput);
         Toggle(voice, T("实时降噪", "Real-time denoising"), x => x.Denoise, (x, v) => x.Denoise = v);
         Slider(voice, T("降噪强度", "Noise reduction"), s.Strength * 100, 100, value => Change(x => { x.Strength = value / 100; x.Preset = "Custom"; }));
         Slider(voice, T("人声音量", "Voice volume"), s.MicGain * 100, 300, value => Change(x => { x.MicGain = value / 100; x.Preset = "Custom"; }));
         Toggle(voice, T("启用 10 段均衡器", "Enable 10-band EQ"), x => x.Eq, (x, v) => x.Eq = v);
         CollapseCard(voice, T("2  人声处理 · 降噪 / 音量 / EQ", "2  Voice · denoise / volume / EQ"));
         var music = Card(T("3  选择音乐软件", "3  Choose a music app"), T("只分享所选应用。你仍通过播放器正常听音乐。", "Only the selected app is shared. Keep listening through your player as usual."));
-        _apps = Combo(music, T("先播放音乐，再选择应用", "Play music, then select the app"), Array.Empty<object>(), null, item => Change(x => x.ApplicationPath = ((StudioApplication)item).Path, true));
+        _apps = Combo(music, T("先播放音乐，再选择应用", "Play music, then select the app"), Array.Empty<object>(), null, item => Change(x =>
+        { x.ApplicationPath = ((StudioApplication)item).Path; x.ApplicationPid = ((StudioApplication)item).Pid; }, true));
         Toggle(music, T("分享应用音乐", "Share application music"), x => x.Music, (x, v) => x.Music = v, true);
         Slider(music, T("朋友听到的音乐音量", "Music volume for friends"), s.MusicGain * 100, 200, value => Change(x => x.MusicGain = value / 100));
         var advanced = Card(T("监听与音效", "Monitoring and effects"), T("日常听音乐无需开启监听；最终输出包含你的人声和音乐。", "Monitoring is optional; Final output includes your voice and music."));
@@ -180,20 +190,49 @@ internal sealed class StudioWindow
         panel.Children.RemoveAt(0); border.Child = null;
         border.Child = new Expander { Header = title, Foreground = Foreground, FontSize = 14, Content = panel, IsExpanded = false };
     }
+    async Task BenchmarkAsync(TextBlock output)
+    {
+        if (_controller.Wanted)
+        {
+            output.Text = T("请先停止共享，以免测试影响通话声音。", "Stop sharing before benchmarking to avoid affecting your call.");
+            return;
+        }
+        output.Text = T("正在现场测量…", "Measuring on this device…");
+        var lines = new List<string>();
+        foreach (string mode in StudioDenoisers.Factories.Keys)
+        {
+            try
+            {
+                var value = await Task.Run(() => StudioBenchmark.Run(mode));
+                lines.Add($"{mode}: {value.MetricLabel} {value.Inference:F2} ms · Pipeline {value.Pipeline:F2} ms · " +
+                    $"P50 {value.P50:F2} · P95 {value.P95:F2} · Max {value.Maximum:F2} ms · RTF {value.Rtf:F2}");
+            }
+            catch (Exception ex) { lines.Add(mode + ": " + ex.Message); }
+            output.Text = string.Join("\n", lines);
+        }
+    }
     async Task RefreshDevices()
     {
         if (_refreshing) return; _refreshing = true;
         try
         {
-            var devices = await Task.Run(() => (StudioDevices.List(DataFlow.Capture), StudioDevices.List(DataFlow.Render), StudioDevices.Applications()));
+            var devices = await Task.Run(() => (StudioDevices.List(DataFlow.Capture), StudioDevices.List(DataFlow.Render),
+                StudioDevices.Applications(), StudioDevices.CaptureClients()));
             if (_window.Dispatcher.HasShutdownStarted) return;
             var s = _controller.Settings;
-            Set(_input, devices.Item1, s.InputId); Set(_output, devices.Item2.Where(x => x.IsCable).ToArray(), s.OutputId);
+            Set(_input, devices.Item1, s.InputId); Set(_output, devices.Item2.Where(x => x.IsVbCableInput).ToArray(), s.OutputId);
             Set(_monitor, devices.Item2.Where(x => !x.IsCable).ToArray(), s.MonitorId);
+            var chat = devices.Item4.FirstOrDefault(x => x.Active && !x.IsVbCable)
+                ?? devices.Item4.FirstOrDefault(x => x.Active && x.IsVbCable);
+            _chatNotice.Text = chat == null ? "" : chat.IsVbCable
+                ? T($"{chat.Application} 正在使用 CABLE Output 作为麦克风。", $"{chat.Application} is using CABLE Output as its microphone.")
+                : T($"{chat.Application} 正在使用“{chat.Device}”；请在通话软件中改选 CABLE Output。",
+                    $"{chat.Application} is using {chat.Device}; select CABLE Output in the chat app.");
             if (!_apps.IsDropDownOpen)
             {
                 _apps.ItemsSource = devices.Item3;
-                _apps.SelectedItem = devices.Item3.FirstOrDefault(x => string.Equals(x.Path, s.ApplicationPath, StringComparison.OrdinalIgnoreCase));
+                _apps.SelectedItem = devices.Item3.FirstOrDefault(x => x.Pid == s.ApplicationPid && string.Equals(x.Path, s.ApplicationPath, StringComparison.OrdinalIgnoreCase))
+                    ?? devices.Item3.FirstOrDefault(x => string.Equals(x.Path, s.ApplicationPath, StringComparison.OrdinalIgnoreCase));
             }
         }
         catch (Exception ex) { _status.Text = ex.Message; }
@@ -220,7 +259,17 @@ internal sealed class StudioWindow
         var e = _controller.Engine;
         _inputMeter.Value = Math.Clamp(20 * Math.Log10(Math.Max(.000001, e?.InputPeak ?? 0)) + 60, 0, 60);
         _outputMeter.Value = Math.Clamp(20 * Math.Log10(Math.Max(.000001, e?.OutputPeak ?? 0)) + 60, 0, 60);
-        _levels.Text = T("麦克风", "Microphone") + $"  {Db(e?.InputPeak ?? 0)} dB    " + T("输出", "Output") + $"  {Db(e?.OutputPeak ?? 0)} dB";
+        _levels.Text = T("麦克风", "Microphone") + $"  {Db(e?.InputPeak ?? 0)} dB    " +
+            "BGM  " + $"{Db(e?.MusicPeak ?? 0)} dB    " + T("输出", "Output") + $"  {Db(e?.OutputPeak ?? 0)} dB";
+        if (e != null && _controller.Settings.Music)
+            _levels.Text += "\n" + (e.CapturedPid > 0
+                ? T("正在捕获进程 PID ", "Capturing process PID ") + e.CapturedPid
+                : T("尚未找到所选软件的音频进程；请先播放音乐再重新选择。", "No audio process found. Play music and select the application again."));
+        if (e?.ProcessingTooSlow == true)
+            _levels.Text += "\n" + T("当前降噪模式处理超时；请在空闲时测试延迟，或手动切换到 Eco。",
+                "This mode is missing real-time deadlines. Test latency when idle or switch to Eco.");
+        if (!string.IsNullOrEmpty(e?.MonitorError))
+            _levels.Text += "\n" + T("监听设备错误：", "Monitor device error: ") + e.MonitorError;
         _spectrum.Update(e?.SpectrumFrame ?? new float[480]);
         static string Db(float v) => v < .00001f ? "−∞" : (20 * Math.Log10(v)).ToString("F1");
     }
@@ -233,7 +282,8 @@ internal sealed class StudioWindow
     {
         var panel = new StackPanel { Margin = new Thickness(22) };
         panel.Children.Add(Text(T("三步开始共享", "Start sharing in three steps"), 20));
-        panel.Children.Add(Text(T("1. 从 VB-Audio 官方网站安装 VB-CABLE。安装需要管理员权限，按提示重启电脑。\n\n2. 在 OneBox 选择真实麦克风，输出选择 CABLE Input。播放音乐，选择对应软件，然后开始共享。\n\n3. 在聊天或游戏的语音设置中，将麦克风改为 CABLE Output。耳机输出保持原样。", "1. Install VB-CABLE from VB-Audio. Administrator access and a restart may be needed.\n\n2. Select your microphone and CABLE Input in OneBox. Play music, choose the app, then start sharing.\n\n3. Select CABLE Output as the microphone in your chat or game. Keep your normal headphone output.")));
+        panel.Children.Add(Text(T("1. 下载 VB-Audio 官方安装包，解压后以管理员身份运行 VBCABLE_Setup_x64.exe，按提示重启。\n\n2. 在 OneBox 选择真实麦克风、CABLE Input 和音乐软件，再开始共享。\n\n3. 在 Oopz 等通话软件中将麦克风选为 CABLE Output。耳机输出保持原样。", "1. Download the official VB-Audio package, extract it, run VBCABLE_Setup_x64.exe as administrator, and restart if prompted.\n\n2. Select your microphone, CABLE Input, and music app in OneBox, then start sharing.\n\n3. Select CABLE Output as the microphone in your chat app. Keep your normal headphone output.")));
+        panel.Children.Add(Button(T("下载 VB-CABLE 官方安装包", "Download official VB-CABLE package"), () => _ = VbCableInstaller.DownloadAsync(_window)));
         panel.Children.Add(Button(T("打开 VB-CABLE 官网", "Open VB-CABLE website"), () => Open("https://vb-audio.com/Cable/")));
         panel.Children.Add(Button(T("降噪运行库 · Microsoft 官方", "Denoising runtime · Microsoft official"), () => Open("https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist")));
         panel.Children.Add(Text(T("常见问题", "FAQ"), 17));
@@ -242,74 +292,6 @@ internal sealed class StudioWindow
         panel.Children.Add(Button("RNNoise", () => Open("https://github.com/xiph/rnnoise")));
         panel.Children.Add(Button("DeepFilterNet3", () => Open("https://github.com/Rikorose/DeepFilterNet")));
         Dialog(T("使用教程", "Guide"), panel, 650);
-    }
-    void Settings()
-    {
-        var panel = new StackPanel { Margin = new Thickness(20) };
-        var window = Dialog(T("音频设置", "Audio settings"), panel, 650);
-        Combo(panel, T("语言", "Language"), new[] { "中文", "English" }, _controller.Settings.Language == "en" ? "English" : "中文", item =>
-        { Change(s => s.Language = (string)item == "English" ? "en" : "zh"); window.Close(); Build(); });
-        Combo(panel, T("外观 · OneBox 紫影", "Appearance · OneBox violet"), new[] { T("深色", "Dark"), T("浅色暖调", "Warm light") }, Light ? T("浅色暖调", "Warm light") : T("深色", "Dark"), item =>
-        { Change(s => s.Theme = (string)item == T("深色", "Dark") ? "dark" : "light"); window.Close(); Build(); });
-        var auto = new CheckBox { Content = T("开机启动 OneBox", "Launch OneBox at sign-in"), Foreground = Foreground, IsChecked = AutoStartService.GetCurrent() != AutoStartMethod.None, Margin = new Thickness(0, 10, 0, 10) };
-        auto.Click += async (_, _) =>
-        {
-            var result = await _owner.ExecuteCommandAsync(AppCommandId.AutoStartApply, CommandSource.Settings,
-                new AutoStartApplyPayload(auto.IsChecked == true, AppPrefs.Get(PreferenceKeys.AutoStart.LastMethod)));
-            if (!result.Success) auto.IsChecked = AutoStartService.GetCurrent() != AutoStartMethod.None;
-        };
-        panel.Children.Add(auto);
-        AddSetting(T("OneBox 启动后自动共享", "Start sharing when OneBox launches"), s => s.AutoStartAudio, (s, v) => s.AutoStartAudio = v);
-        AddSetting(T("未共享时自动检查、下载并安装更新", "Automatically check, download and install updates while idle"), s => s.AutoUpdate, (s, v) => s.AutoUpdate = v);
-        panel.Children.Add(Button(T("立即检查 OneBox 更新", "Check OneBox updates now"), () => _ = _owner.ExecuteCommandAsync(AppCommandId.UpdateCheck, CommandSource.Settings, new UpdateCheckPayload(true))));
-        panel.Children.Add(Text(T("全局快捷键 · 支持单键或组合键", "Global shortcuts · single keys or combinations"), 15));
-        string[] keys = { "Denoise", "Eq", "Music", "Explode", "Monitor" };
-        string[] names = { T("降噪", "Denoise"), "EQ", "BGM", T("炸麦", "Distortion"), T("监听", "Monitor") };
-        for (int i = 0; i < keys.Length; i++)
-        {
-            string key = "AudioStudio.Hotkey." + keys[i], name = names[i];
-            var row = new WrapPanel();
-            int encoded = AppPrefs.GetInt(key, 0);
-            var button = Button(name + " · " + (encoded == 0 ? T("无", "None") : HotkeyCaptureDialog.Format(encoded)), () => { });
-            button.Click += (_, _) =>
-            {
-                int old = AppPrefs.GetInt(key, 0);
-                int? value = CaptureShortcut(window, old);
-                if (!value.HasValue || value.Value == old) return;
-                bool duplicate = HotkeyDefinitions.All.Any(x => x.PreferenceKey != key && HotkeyDefinitions.ResolveEncoded(x) == value.Value);
-                if (duplicate || !_owner.TestHotkey(value.Value)) { MessageBox.Show(window, T("此快捷键已被占用", "This shortcut is already in use")); return; }
-                if (!AppPrefs.SetInt(key, value.Value)) { MessageBox.Show(window, T("保存失败", "Save failed")); return; }
-                _owner.RefreshHotkeys(); button.Content = name + " · " + HotkeyCaptureDialog.Format(value.Value);
-            };
-            row.Children.Add(button);
-            row.Children.Add(Button(T("清除", "Clear"), () => { if (AppPrefs.SetInt(key, 0)) { _owner.RefreshHotkeys(); button.Content = name + " · " + T("无", "None"); } }));
-            panel.Children.Add(row);
-        }
-        void AddSetting(string title, Func<StudioSettings, bool> get, Action<StudioSettings, bool> set)
-        {
-            var box = new CheckBox { Content = title, IsChecked = get(_controller.Settings), Foreground = Foreground, Margin = new Thickness(0, 8, 0, 8) };
-            box.Click += (_, _) => Change(s => set(s, box.IsChecked == true)); panel.Children.Add(box);
-        }
-    }
-    int? CaptureShortcut(Window owner, int current)
-    {
-        int value = current;
-        var panel = new StackPanel { Margin = new Thickness(20) };
-        var text = Text(T("按下单键或组合键，Esc 取消", "Press a key or combination; Esc cancels")); panel.Children.Add(text);
-        var dialog = OneBoxWindow.Create(owner, T("设置快捷键", "Set shortcut"), 360, 170, panel, false); ApplyShell(dialog);
-        panel.Children.Add(Button(T("保存", "Save"), () => { dialog.DialogResult = value != 0; }));
-        dialog.PreviewKeyDown += (_, e) =>
-        {
-            Key key = e.Key == Key.System ? e.SystemKey : e.Key;
-            if (key == Key.Escape) { dialog.DialogResult = false; return; }
-            if (key is Key.LeftCtrl or Key.RightCtrl or Key.LeftShift or Key.RightShift or Key.LeftAlt or Key.RightAlt or Key.LWin or Key.RWin) return;
-            var mods = Keyboard.Modifiers;
-            int encodedMods = (mods.HasFlag(ModifierKeys.Alt) ? 1 : 0) | (mods.HasFlag(ModifierKeys.Control) ? 2 : 0) | (mods.HasFlag(ModifierKeys.Shift) ? 4 : 0) | (mods.HasFlag(ModifierKeys.Windows) ? 8 : 0);
-            value = (encodedMods << 16) | KeyInterop.VirtualKeyFromKey(key); text.Text = HotkeyCaptureDialog.Format(value); e.Handled = true;
-        };
-        _owner?.PauseHotkeys();
-        try { return dialog.ShowDialog() == true ? value : null; }
-        finally { _owner?.RefreshHotkeys(); }
     }
     void Equalizer()
     {
