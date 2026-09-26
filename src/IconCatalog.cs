@@ -18,7 +18,8 @@ namespace PowerAudioManager
         ChevronUp, Close, Performance, MemoryClean, Translate, Clipboard,
         Gallery, Launcher, Url, Folder, Add, Edit, Delete, Settings, Modules,
         Dashboard, Temperature, Capture, Error, Success, Warning, Cpu, Gpu,
-        Hot, Vram, Dram, Disk, Fan, Control, Motherboard, DefaultMetric
+        Hot, Vram, Dram, Disk, Fan, Control, Motherboard, DefaultMetric,
+        OneMic, ShareStart, ShareStop, Noise, Equalizer, Music, Explode, Monitor
     }
 
     public static class IconCatalog
@@ -29,6 +30,14 @@ namespace PowerAudioManager
             [IconKey.Brand] = "M4,7.5 L12,4 L20,7.5 L20,16.5 L12,20 L4,16.5 Z M4,7.5 L12,11 L20,7.5 M12,11 L12,20 M8,8.9 L8,13.2 M16,8.9 L16,13.2 M8,13.2 L16,13.2",
             [IconKey.Power] = "M12,3 L12,11 M7.2,5.8 A8,8 0 1 0 16.8,5.8",
             [IconKey.Audio] = "M4,10 L8,10 L13,6 L13,18 L8,14 L4,14 Z M16,9.2 A4,4 0 0 1 16,14.8 M18.7,6.8 A7.5,7.5 0 0 1 18.7,17.2",
+            [IconKey.OneMic] = "M9,5 A3,3 0 0 1 15,5 L15,12 A3,3 0 0 1 9,12 Z M6,10 L6,12 A6,6 0 0 0 18,12 L18,10 M12,18 L12,21 M8,21 L16,21",
+            [IconKey.ShareStart] = "M7,4 L19,12 L7,20 Z",
+            [IconKey.ShareStop] = "M6,6 L18,6 L18,18 L6,18 Z",
+            [IconKey.Noise] = "M3,12 L6,12 L8,7 L11,17 L14,5 L17,15 L19,12 L21,12",
+            [IconKey.Equalizer] = "M5,5 L5,19 M12,5 L12,19 M19,5 L19,19 M3,10 L7,10 M10,15 L14,15 M17,9 L21,9",
+            [IconKey.Music] = "M10,6 L19,4 L19,16 M10,6 L10,18 M10,15 A3,2 0 1 0 10,19 M19,13 A3,2 0 1 0 19,17",
+            [IconKey.Explode] = "M12,2 L14,8 L20,5 L17,11 L22,13 L16,15 L18,21 L12,18 L6,21 L8,15 L2,13 L7,11 L4,5 L10,8 Z",
+            [IconKey.Monitor] = "M4,13 L4,11 A8,8 0 0 1 20,11 L20,13 M4,13 L7,13 L7,19 L5,19 A2,2 0 0 1 3,17 L3,15 A2,2 0 0 1 4,13 M20,13 L17,13 L17,19 L19,19 A2,2 0 0 0 21,17 L21,15 A2,2 0 0 0 20,13",
             [IconKey.Mute] = "M4,10 L8,10 L13,6 L13,18 L8,14 L4,14 Z M4,4 L20,20",
             [IconKey.Lock] = "M5,10 L19,10 L19,20 L5,20 Z M8,10 L8,7 A4,4 0 0 1 16,7 L16,10 M12,14 L12,17",
             [IconKey.Unlock] = "M5,10 L19,10 L19,20 L5,20 Z M8,10 L8,7 A4,4 0 0 1 15.2,4.6 M12,14 L12,17",
@@ -71,6 +80,9 @@ namespace PowerAudioManager
             new ReadOnlyDictionary<IconKey, string>(new Dictionary<IconKey, string>
         {
             [IconKey.Brand] = "OneBox 工具箱", [IconKey.Power] = "电源计划", [IconKey.Audio] = "音频输出",
+            [IconKey.OneMic] = "OneMic", [IconKey.ShareStart] = "开始共享", [IconKey.ShareStop] = "停止共享",
+            [IconKey.Noise] = "降噪", [IconKey.Equalizer] = "均衡器", [IconKey.Music] = "音乐共享",
+            [IconKey.Explode] = "一键炸麦", [IconKey.Monitor] = "监听",
             [IconKey.Mute] = "静音", [IconKey.Lock] = "锁定窗口位置", [IconKey.Unlock] = "解除窗口位置锁定",
             [IconKey.ChevronRight] = "展开", [IconKey.ChevronDown] = "折叠", [IconKey.ChevronUp] = "上移",
             [IconKey.Close] = "关闭", [IconKey.Performance] = "性能趋势", [IconKey.MemoryClean] = "内存清理",

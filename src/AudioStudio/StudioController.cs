@@ -5,7 +5,6 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Threading;
 using NAudio.CoreAudioApi;
-using PowerAudioManager.Commands;
 
 namespace PowerAudioManager.AudioStudio;
 
@@ -22,9 +21,7 @@ internal sealed class StudioController : IDisposable
     readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromSeconds(3) };
     StudioWindow _window;
     bool _disposed, _initialized, _polling;
-    DateTime _lastUpdate = DateTime.MinValue;
-    CancellationTokenSource _updateCancellation;
-    public string T(string zh, string en) => Settings.Language == "en" ? en : zh;
+    public string T(string zh, string en) => zh;
     public void Initialize()
     {
         if (_initialized) return; _initialized = true;
@@ -63,7 +60,6 @@ internal sealed class StudioController : IDisposable
     }
     public async Task StartAsync()
     {
-        _updateCancellation?.Cancel();
         Wanted = true;
         await _gate.WaitAsync();
         try
@@ -138,26 +134,13 @@ internal sealed class StudioController : IDisposable
                 }
                 if (reconnect && Wanted && !Busy) await StartAsync();
             }
-            // Reuse the OneBox signed-package update workflow. Never restart an active call.
-            if (!Wanted && Settings.AutoUpdate && DateTime.UtcNow - _lastUpdate > TimeSpan.FromHours(6))
-            {
-                _lastUpdate = DateTime.UtcNow;
-                using var cancellation = new CancellationTokenSource();
-                _updateCancellation = cancellation;
-                var workflow = new UpdateWorkflow(new VelopackUpdateClient(), new UpdateServiceCoordinator());
-                var check = await workflow.CheckAsync(cancellation.Token);
-                if (check.Success && check.UpdateAvailable && !Wanted)
-                    await workflow.DownloadAndApplyAsync(check.Candidate, new Progress<int>(), cancellation.Token);
-                _updateCancellation = null;
-            }
         }
         catch (Exception ex) { AppLog.Log("AudioStudio recovery", ex); }
-        finally { _updateCancellation = null; _polling = false; }
+        finally { _polling = false; }
     }
     public void Dispose()
     {
         _disposed = true; Wanted = false; _timer.Stop();
-        _updateCancellation?.Cancel();
         Engine?.Dispose(); Engine = null;
         _window?.Close();
     }

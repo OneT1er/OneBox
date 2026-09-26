@@ -26,10 +26,7 @@ internal sealed class StudioSettings
     public float ExplodeStrength { get; set; } = .1f;
     public bool Monitor { get; set; }
     public int MonitorPoint { get; set; } = 4;
-    public string Language { get; set; } = "zh";
-    public string Theme { get; set; } = "light";
     public bool AutoStartAudio { get; set; }
-    public bool AutoUpdate { get; set; }
 
     public StudioSettings Copy() => JsonSerializer.Deserialize<StudioSettings>(JsonSerializer.Serialize(this));
     public void Normalize()
@@ -50,8 +47,6 @@ internal sealed class StudioSettings
             _ => nameof(DenoiseMode.Balanced)
         };
         if (Model == nameof(DenoiseMode.Off)) Denoise = false;
-        if (Language != "en") Language = "zh";
-        if (Theme != "light") Theme = "dark";
     }
     static float Clamp(float v, float min, float max) => float.IsFinite(v) ? Math.Clamp(v, min, max) : min;
     public static StudioSettings Load()

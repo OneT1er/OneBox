@@ -19,7 +19,8 @@ namespace PowerAudioManager.Tests
                 "Brand", "Power", "Audio", "Mute", "Lock", "Unlock", "ChevronRight", "ChevronDown", "ChevronUp", "Close",
                 "Performance", "MemoryClean", "Translate", "Clipboard", "Gallery", "Launcher", "Url", "Folder", "Add", "Edit",
                 "Delete", "Settings", "Modules", "Dashboard", "Temperature", "Capture", "Error", "Success", "Warning", "Cpu",
-                "Gpu", "Hot", "Vram", "Dram", "Disk", "Fan", "Control", "Motherboard", "DefaultMetric"
+                "Gpu", "Hot", "Vram", "Dram", "Disk", "Fan", "Control", "Motherboard", "DefaultMetric",
+                "OneMic", "ShareStart", "ShareStop", "Noise", "Equalizer", "Music", "Explode", "Monitor"
             };
             var actual = IconCatalog.Keys.Select(k => k.ToString()).OrderBy(x => x).ToArray();
             Assert.Equal(expected.OrderBy(x => x), actual);

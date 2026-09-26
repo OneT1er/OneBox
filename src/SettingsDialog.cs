@@ -11,10 +11,11 @@ using System.Windows.Shapes;
 
 namespace PowerAudioManager
 {
-    // 设置对话框：侧栏 + 8 个 tab。各 tab 构建逻辑按文件拆分（partial）：
-    //   SettingsDialog.General / Modules / Memory / Translate / Screenshot / Clipboard / Temp / Metrics
+    // 设置对话框：侧栏 + 9 个页面。各页面构建逻辑按文件拆分（partial）。
     internal static partial class SettingsDialog
     {
+        internal const int OneMicTabIndex = 7;
+        internal const int AboutTabIndex = 8;
         static List<UIElement> _tabContents;
         static ContentControl _contentHost;
         public static void Show(Window owner)
@@ -40,16 +41,36 @@ namespace PowerAudioManager
             ScrollViewer.SetHorizontalScrollBarVisibility(sideBar, ScrollBarVisibility.Disabled);
             sideBar.Resources[typeof(ScrollBar)] = ThemeTokens.CreateDarkScrollBarStyle();
             sideBar.ItemContainerStyle = SidebarItemStyle();
+            var aboutBar = new ListBox
+            {
+                Width = 118,
+                Background = new SolidColorBrush(Color.FromRgb(24, 22, 36)),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(40, 36, 56)),
+                BorderThickness = new Thickness(0, 1, 1, 0),
+                Padding = new Thickness(0, 3, 0, 8)
+            };
+            aboutBar.ItemContainerStyle = SidebarItemStyle();
+            void UpdateSelectionColors(ListBox list)
+            {
+                foreach (ListBoxItem item in list.Items)
+                {
+                    var label = (item.Content as StackPanel)?.Children[1] as TextBlock;
+                    if (label != null) label.Foreground = item.IsSelected ? Brushes.White : new SolidColorBrush(Color.FromRgb(180, 177, 210));
+                }
+            }
             sideBar.SelectionChanged += (s, e) =>
             {
-                foreach (ListBoxItem item in sideBar.Items)
-                {
-                    var tb = (item.Content as StackPanel)?.Children[1] as TextBlock;
-                    if (tb != null)
-                        tb.Foreground = item.IsSelected ? Brushes.White : new SolidColorBrush(Color.FromRgb(180, 177, 210));
-                }
-                if (sideBar.SelectedIndex >= 0)
-                    _contentHost.Content = _tabContents[sideBar.SelectedIndex];
+                UpdateSelectionColors(sideBar);
+                if (sideBar.SelectedIndex < 0) return;
+                aboutBar.SelectedIndex = -1;
+                _contentHost.Content = _tabContents[sideBar.SelectedIndex];
+            };
+            aboutBar.SelectionChanged += (s, e) =>
+            {
+                UpdateSelectionColors(aboutBar);
+                if (aboutBar.SelectedIndex < 0) return;
+                sideBar.SelectedIndex = -1;
+                _contentHost.Content = _tabContents[AboutTabIndex];
             };
 
             _contentHost = new ContentControl
@@ -62,9 +83,13 @@ namespace PowerAudioManager
             var layout = new Grid { UseLayoutRounding = true, SnapsToDevicePixels = true };
             layout.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             layout.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            Grid.SetColumn(sideBar, 0);
+            var sideColumn = new DockPanel { Width = 118 };
+            DockPanel.SetDock(aboutBar, Dock.Bottom);
+            sideColumn.Children.Add(aboutBar);
+            sideColumn.Children.Add(sideBar);
+            Grid.SetColumn(sideColumn, 0);
             Grid.SetColumn(_contentHost, 1);
-            layout.Children.Add(sideBar);
+            layout.Children.Add(sideColumn);
             layout.Children.Add(_contentHost);
 
             var dlg = OneBoxWindow.Create(owner, "设置", 520, 570, layout, true);
@@ -94,10 +119,14 @@ namespace PowerAudioManager
             sideBar.Items.Add(SidebarItem(IconKey.Capture, "截图"));
             sideBar.Items.Add(SidebarItem(IconKey.Clipboard, "剪贴板"));
             sideBar.Items.Add(SidebarItem(IconKey.Performance, "性能"));
-            sideBar.Items.Add(SidebarItem(IconKey.Audio, "麦克风"));
-            sideBar.Items.Add(SidebarItem(IconKey.Brand, "关于"));
+            sideBar.Items.Add(SidebarItem(IconKey.OneMic, "OneMic"));
+            aboutBar.Items.Add(SidebarItem(IconKey.Brand, "关于"));
 
-            if (openTab >= 0 && openTab < sideBar.Items.Count)
+            if (openTab == AboutTabIndex)
+            {
+                aboutBar.SelectedIndex = 0;
+            }
+            else if (openTab >= 0 && openTab < sideBar.Items.Count)
             {
                 sideBar.SelectedIndex = openTab;
                 _contentHost.Content = _tabContents[openTab];

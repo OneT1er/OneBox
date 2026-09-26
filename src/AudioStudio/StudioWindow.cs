@@ -27,17 +27,17 @@ internal sealed class StudioWindow
     StudioSpectrum _spectrum;
     StudioMeter _inputMeter, _outputMeter;
     bool _building, _refreshing;
+    bool _voiceExpanded, _effectsExpanded;
     int _ticks;
-    bool Light => false; // Match the existing OneBox settings and floating window.
-    Brush Foreground => Light ? new SolidColorBrush(Color.FromRgb(43, 39, 60)) : ThemeTokens.Brush(ThemeTokens.PrimaryText);
-    Brush Muted => Light ? new SolidColorBrush(Color.FromRgb(99, 91, 112)) : ThemeTokens.Brush(ThemeTokens.SecondaryText);
+    Brush Foreground => ThemeTokens.Brush(ThemeTokens.PrimaryText);
+    Brush Muted => ThemeTokens.Brush(ThemeTokens.SecondaryText);
     string T(string zh, string en) => _controller.T(zh, en);
     public event EventHandler Closed;
     public StudioWindow(MainWindow owner, StudioController controller)
     {
         _owner = owner; _controller = controller;
         var scroll = new ScrollViewer { Content = _body, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
-        _window = OneBoxWindow.Create(owner, T("麦克风工作室", "Microphone Studio"), 660, 830, scroll, true);
+        _window = OneBoxWindow.Create(owner, "OneMic", 660, 830, scroll, true);
         _window.MinWidth = 560; _window.MinHeight = 500;
         _window.Closed += (_, _) => { _timer.Stop(); _controller.Changed -= Sync; Closed?.Invoke(this, EventArgs.Empty); };
         _window.StateChanged += (_, _) => { if (_window.WindowState == WindowState.Minimized) { _window.Hide(); _window.WindowState = WindowState.Normal; } };
@@ -70,14 +70,14 @@ internal sealed class StudioWindow
     {
         var panel = new StackPanel(); var heading = Text(title, 15); heading.FontWeight = FontWeights.SemiBold; panel.Children.Add(heading);
         if (subtitle != null) { var t = Text(subtitle); t.Foreground = Muted; panel.Children.Add(t); }
-        _body.Children.Add(new Border { Background = Light ? Brushes.White : ThemeTokens.Brush(ThemeTokens.Card), CornerRadius = new CornerRadius(10), Padding = new Thickness(15), Margin = new Thickness(0, 0, 0, 12), Child = panel });
+        _body.Children.Add(new Border { Background = ThemeTokens.Brush(ThemeTokens.Card), CornerRadius = new CornerRadius(10), Padding = new Thickness(15), Margin = new Thickness(0, 0, 0, 12), Child = panel });
         return panel;
     }
     ComboBox Combo(Panel parent, string label, IEnumerable<object> items, object selected, Action<object> changed)
     {
         parent.Children.Add(Text(label));
         var combo = new ComboBox { ItemsSource = items, SelectedItem = selected, MinHeight = 30, Margin = new Thickness(0, 0, 0, 8) };
-        combo.Style = ThemeTokens.CreateDarkComboBoxStyle(Light);
+        combo.Style = ThemeTokens.CreateDarkComboBoxStyle(false);
         combo.SelectionChanged += (_, _) => { if (!_building && !_refreshing && combo.SelectedItem != null) changed(combo.SelectedItem); };
         parent.Children.Add(combo); return combo;
     }
@@ -98,10 +98,10 @@ internal sealed class StudioWindow
     {
         if (window.Content is Border border)
         {
-            border.Background = Light ? new SolidColorBrush(Color.FromRgb(247, 244, 240)) : ThemeTokens.Brush(ThemeTokens.Background);
+            border.Background = ThemeTokens.Brush(ThemeTokens.Background);
             if (border.Child is Grid grid && grid.Children[0] is Border title)
             {
-                title.Background = Light ? new SolidColorBrush(Color.FromRgb(234, 229, 239)) : ThemeTokens.Brush(ThemeTokens.TitleSurface);
+                title.Background = ThemeTokens.Brush(ThemeTokens.TitleSurface);
                 if (title.Child is DockPanel dock) foreach (var child in dock.Children)
                 {
                     if (child is TextBlock text) text.Foreground = Foreground;
@@ -113,7 +113,7 @@ internal sealed class StudioWindow
     void Build()
     {
         _building = true; _body.Children.Clear(); _toggles.Clear(); ApplyShell(_window);
-        _window.Title = T("麦克风工作室", "Microphone Studio");
+        _window.Title = "OneMic";
         if (_window.Content is Border shell && shell.Child is Grid shellGrid && shellGrid.Children[0] is Border titleBar && titleBar.Child is DockPanel titleDock)
             foreach (var child in titleDock.Children) if (child is TextBlock title) title.Text = "  " + _window.Title;
         var s = _controller.Settings;
@@ -121,7 +121,7 @@ internal sealed class StudioWindow
         toolbar.Children.Add(Button(T("OneBox 设置", "OneBox settings"), () =>
         {
             _window.Hide();
-            try { SettingsDialog.Show(_owner, 7); }
+            try { SettingsDialog.Show(_owner, SettingsDialog.OneMicTabIndex); }
             finally { Build(); _window.Show(); _window.Activate(); }
         }));
         toolbar.Children.Add(Button(T("均衡器", "Equalizer"), Equalizer));
@@ -157,7 +157,12 @@ internal sealed class StudioWindow
         _presetLabels = presets;
         var keys = new[] { "Quiet", "Standard", "Noisy", "Live", "Custom" };
         _voicePreset = Combo(voice, T("场景预设", "Voice preset"), presets, presets[Math.Max(0, Array.IndexOf(keys, s.Preset))], item =>
-        { Change(x => { string key = keys[Array.IndexOf(presets, (string)item)]; if (key == "Custom") x.Preset = key; else x.ApplyPreset(key); }, true); Build(); });
+        {
+            Change(x => { string key = keys[Array.IndexOf(presets, (string)item)]; if (key == "Custom") x.Preset = key; else x.ApplyPreset(key); }, true);
+            // Recreate model and slider controls after the selection event has
+            // completed, keeping the expanded voice panel in place.
+            _window.Dispatcher.BeginInvoke((Action)Build);
+        });
         Combo(voice, T("降噪模式 · Balanced 推荐", "Denoising mode · Balanced recommended"),
             StudioDenoisers.Factories.Keys, s.Model, item => Change(x =>
             { x.Model = (string)item; x.Denoise = x.Model != nameof(DenoiseMode.Off); x.Preset = "Custom"; }, true));
@@ -168,7 +173,7 @@ internal sealed class StudioWindow
         Slider(voice, T("降噪强度", "Noise reduction"), s.Strength * 100, 100, value => Change(x => { x.Strength = value / 100; x.Preset = "Custom"; }));
         Slider(voice, T("人声音量", "Voice volume"), s.MicGain * 100, 300, value => Change(x => { x.MicGain = value / 100; x.Preset = "Custom"; }));
         Toggle(voice, T("启用 10 段均衡器", "Enable 10-band EQ"), x => x.Eq, (x, v) => x.Eq = v);
-        CollapseCard(voice, T("2  人声处理 · 降噪 / 音量 / EQ", "2  Voice · denoise / volume / EQ"));
+        CollapseCard(voice, T("2  人声处理 · 降噪 / 音量 / EQ", "2  Voice · denoise / volume / EQ"), true);
         var music = Card(T("3  选择音乐软件", "3  Choose a music app"), T("只分享所选应用。你仍通过播放器正常听音乐。", "Only the selected app is shared. Keep listening through your player as usual."));
         _apps = Combo(music, T("先播放音乐，再选择应用", "Play music, then select the app"), Array.Empty<object>(), null, item => Change(x =>
         { x.ApplicationPath = ((StudioApplication)item).Path; x.ApplicationPid = ((StudioApplication)item).Pid; }, true));
@@ -181,14 +186,18 @@ internal sealed class StudioWindow
         Toggle(advanced, T("开启监听", "Enable monitoring"), x => x.Monitor, (x, v) => x.Monitor = v, true);
         Toggle(advanced, T("炸麦音效", "Distortion effect"), x => x.Explode, (x, v) => x.Explode = v);
         Slider(advanced, T("炸麦强度", "Distortion intensity"), s.ExplodeStrength * 100, 100, value => Change(x => x.ExplodeStrength = value / 100), 1);
-        CollapseCard(advanced, T("监听与炸麦音效", "Monitoring and distortion"));
+        CollapseCard(advanced, T("监听与炸麦音效", "Monitoring and distortion"), false);
         _building = false; Sync(); _ = RefreshDevices();
     }
-    void CollapseCard(StackPanel panel, string title)
+    void CollapseCard(StackPanel panel, string title, bool voice)
     {
         if (panel.Parent is not Border border) return;
         panel.Children.RemoveAt(0); border.Child = null;
-        border.Child = new Expander { Header = title, Foreground = Foreground, FontSize = 14, Content = panel, IsExpanded = false };
+        var expander = new Expander { Header = title, Foreground = Foreground, FontSize = 14,
+            Content = panel, IsExpanded = voice ? _voiceExpanded : _effectsExpanded };
+        expander.Expanded += (_, _) => { if (voice) _voiceExpanded = true; else _effectsExpanded = true; };
+        expander.Collapsed += (_, _) => { if (voice) _voiceExpanded = false; else _effectsExpanded = false; };
+        border.Child = expander;
     }
     async Task BenchmarkAsync(TextBlock output)
     {
@@ -248,7 +257,7 @@ internal sealed class StudioWindow
         if (_status == null) return;
         string status = _controller.Status;
         int separator = status.IndexOf(" / ", StringComparison.Ordinal);
-        _status.Text = separator < 0 ? status : _controller.Settings.Language == "en" ? status.Substring(separator + 3) : status.Substring(0, separator);
+        _status.Text = separator < 0 ? status : status.Substring(0, separator);
         _start.Content = _controller.Wanted ? T("停止共享", "Stop sharing") : T("开始共享", "Start sharing");
         _start.IsEnabled = true;
         foreach (var (box, read) in _toggles) box.IsChecked = read(_controller.Settings);

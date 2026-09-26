@@ -44,7 +44,7 @@ namespace PowerAudioManager.Commands
             D(AppCommandId.RuntimeRestartAutoClean, "刷新自动内存清理"),
             D<GeneralRuntimePayload>(AppCommandId.RuntimeApplyGeneral, "应用常规设置"),
             D(AppCommandId.RuntimeRebuildModules, "应用模块设置"),
-            D(AppCommandId.StudioOpen, "麦克风工作室"),
+            D(AppCommandId.StudioOpen, "OneMic"),
             D(AppCommandId.StudioDenoise, "切换降噪"),
             D(AppCommandId.StudioEq, "切换均衡器"),
             D(AppCommandId.StudioMusic, "切换音乐共享", busy: true),

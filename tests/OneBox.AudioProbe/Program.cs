@@ -8,6 +8,7 @@ using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
@@ -24,6 +25,7 @@ internal static class Program
         try
         {
             if (args[0] == "preview") { Preview(args[1]); return 0; }
+            if (args[0] == "settings-preview") { PreviewSettings(args[1]); return 0; }
             if (args[0] == "sessions")
             {
                 foreach (var application in StudioDevices.Applications())
@@ -170,16 +172,24 @@ internal static class Program
         var application = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
         ThemeTokens.Apply(application);
         using var controller = new StudioController();
-        foreach (string theme in new[] { "light", "dark", "english" })
+        foreach (string theme in new[] { "dark" })
         {
-            controller.Settings.Theme = theme == "english" ? "dark" : theme;
-            controller.Settings.Language = theme == "english" ? "en" : "zh";
             var view = new StudioWindow(null, controller);
             var field = typeof(StudioWindow).GetField("_window", BindingFlags.Instance | BindingFlags.NonPublic);
             var window = (Window)field.GetValue(view);
             window.WindowStartupLocation = WindowStartupLocation.Manual; window.Left = -10000; window.Top = -10000;
             window.Show(); Pump();
             Render(window, Path.Combine(directory, "studio-" + theme + ".png"));
+            var body = (System.Windows.Controls.StackPanel)typeof(StudioWindow)
+                .GetField("_body", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(view);
+            Expander VoicePanel() => body.Children.OfType<Border>()
+                .Select(x => x.Child).OfType<Expander>()
+                .First(x => x.Header?.ToString()?.StartsWith("2  ") == true);
+            VoicePanel().IsExpanded = true;
+            typeof(StudioWindow).GetMethod("Build", BindingFlags.Instance | BindingFlags.NonPublic).Invoke(view, null);
+            Pump();
+            if (!VoicePanel().IsExpanded) throw new Exception("OneMic voice controls collapsed after rebuilding");
+            Render(window, Path.Combine(directory, "studio-voice-expanded.png"));
             foreach (string method in new[] { "Equalizer", "Guide" })
             {
                 typeof(StudioWindow).GetMethod(method, BindingFlags.Instance | BindingFlags.NonPublic).Invoke(view, null);
@@ -189,6 +199,28 @@ internal static class Program
             view.Close();
         }
         application.Shutdown(); Console.WriteLine("Rendered UI previews to " + directory);
+    }
+    static void PreviewSettings(string directory)
+    {
+        Directory.CreateDirectory(directory);
+        var application = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
+        ThemeTokens.Apply(application);
+        foreach (int tab in new[] { 7, 8 })
+        {
+            var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(400) };
+            timer.Tick += (_, _) =>
+            {
+                var window = application.Windows.Cast<Window>().FirstOrDefault(x => x.IsVisible);
+                if (window == null) return;
+                timer.Stop();
+                Render(window, Path.Combine(directory, tab == 7 ? "settings-onemic.png" : "settings-about.png"));
+                window.Close();
+            };
+            timer.Start();
+            SettingsDialog.Show(null, tab);
+        }
+        application.Shutdown();
+        Console.WriteLine("Rendered settings previews to " + directory);
     }
     static void Pump()
     {
