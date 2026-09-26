@@ -20,6 +20,7 @@ namespace PowerAudioManager.Commands
         {
             public static readonly PreferenceDefinition<bool> Power = new("UI.ShowPower", true);
             public static readonly PreferenceDefinition<bool> Audio = new("UI.ShowAudio", true);
+            public static readonly PreferenceDefinition<bool> OneMic = new("UI.ShowOneMic", true);
             public static readonly PreferenceDefinition<bool> Memory = new("UI.ShowMem", true);
             public static readonly PreferenceDefinition<bool> Translate = new("UI.ShowTranslate", true);
             public static readonly PreferenceDefinition<bool> Launcher = new("UI.ShowLauncher", true);

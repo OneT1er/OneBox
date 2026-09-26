@@ -243,6 +243,7 @@ public sealed class PreferenceDefinitionTests
     [InlineData("Power.CycleHotkey")]
     [InlineData("UI.ShowPower")]
     [InlineData("UI.ShowAudio")]
+    [InlineData("UI.ShowOneMic")]
     [InlineData("UI.ShowMem")]
     [InlineData("UI.ShowTranslate")]
     [InlineData("UI.ShowLauncher")]

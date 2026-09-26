@@ -16,6 +16,7 @@ namespace PowerAudioManager
 
             var cbPower = MakeCb("电源计划", "Power");
             var cbAudio = MakeCb("音频输出", "Audio");
+            var cbOneMic = MakeCb("OneMic", "OneMic");
             var cbMem = MakeCb("内存清理", "Mem");
             var cbTr = MakeCb("翻译", "Translate");
             var cbLaunch = MakeCb("快捷启动", "Launcher");
@@ -24,6 +25,7 @@ namespace PowerAudioManager
             var cbTemp = MakeCb("性能趋势", "Temp");
             stack.Children.Add(cbPower);
             stack.Children.Add(cbAudio);
+            stack.Children.Add(cbOneMic);
             stack.Children.Add(cbMem);
             stack.Children.Add(cbTr);
             stack.Children.Add(cbLaunch);
@@ -47,6 +49,7 @@ namespace PowerAudioManager
                 if (!TryPersist(dlg,
                     () => AppPrefs.Set(PreferenceKeys.Modules.Power, cbPower.IsChecked == true),
                     () => AppPrefs.Set(PreferenceKeys.Modules.Audio, cbAudio.IsChecked == true),
+                    () => AppPrefs.Set(PreferenceKeys.Modules.OneMic, cbOneMic.IsChecked == true),
                     () => AppPrefs.Set(PreferenceKeys.Modules.Memory, cbMem.IsChecked == true),
                     () => AppPrefs.Set(PreferenceKeys.Modules.Translate, cbTr.IsChecked == true),
                     () => AppPrefs.Set(PreferenceKeys.Modules.Launcher, cbLaunch.IsChecked == true),

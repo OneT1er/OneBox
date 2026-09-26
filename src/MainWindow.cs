@@ -46,6 +46,7 @@ namespace PowerAudioManager
         private StackPanel _powerSection;
         private StackPanel _audioSection;
         private StackPanel _audioDeviceSection;
+        private StackPanel _oneMicSection;
         private bool _isExpanded = true;
         private bool _collapsedManually; // 通过按钮收起时为 true（非自动收起）
         internal bool _topmost = false;
@@ -277,6 +278,7 @@ namespace PowerAudioManager
             {
                 case "Power": return AppPrefs.Get(PreferenceKeys.Modules.Power);
                 case "Audio": return AppPrefs.Get(PreferenceKeys.Modules.Audio);
+                case "OneMic": return AppPrefs.Get(PreferenceKeys.Modules.OneMic);
                 case "Mem": return AppPrefs.Get(PreferenceKeys.Modules.Memory);
                 case "Translate": return AppPrefs.Get(PreferenceKeys.Modules.Translate);
                 case "Launcher": return AppPrefs.Get(PreferenceKeys.Modules.Launcher);
@@ -294,6 +296,7 @@ namespace PowerAudioManager
             _powerSection = null;
             _audioSection = null;
             _audioDeviceSection = null;
+            _oneMicSection = null;
             _memStatusLabel = null;
             _root = null;
             _mainBorder = null;

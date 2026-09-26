@@ -24,14 +24,21 @@ public class OneMicFloatingControlsTests
                 window = new MainWindow();
                 var sectionField = typeof(MainWindow).GetField("_audioSection", BindingFlags.Instance | BindingFlags.NonPublic);
                 var devicesField = typeof(MainWindow).GetField("_audioDeviceSection", BindingFlags.Instance | BindingFlags.NonPublic);
+                var oneMicField = typeof(MainWindow).GetField("_oneMicSection", BindingFlags.Instance | BindingFlags.NonPublic);
+                var contentField = typeof(MainWindow).GetField("_contentPanel", BindingFlags.Instance | BindingFlags.NonPublic);
                 var render = typeof(MainWindow).GetMethod("RenderDevices", BindingFlags.Instance | BindingFlags.NonPublic);
                 var section = Assert.IsType<StackPanel>(sectionField.GetValue(window));
                 var devices = Assert.IsType<StackPanel>(devicesField.GetValue(window));
+                var oneMic = Assert.IsType<StackPanel>(oneMicField.GetValue(window));
+                var content = Assert.IsType<StackPanel>(contentField.GetValue(window));
 
                 render.Invoke(window, new object[] { null });
 
-                Assert.Contains(section.Children.OfType<TextBlock>(), x => x.Text == "OneMic");
-                Assert.Equal(8, section.Children.OfType<WrapPanel>().Single().Children.OfType<Button>().Count());
+                Assert.DoesNotContain(oneMic, section.Children.Cast<UIElement>());
+                Assert.Contains(oneMic, content.Children.Cast<UIElement>());
+                Assert.Contains(content.Children.OfType<DockPanel>(), panel =>
+                    panel.Children.OfType<TextBlock>().Any(label => label.Text == "OneMic"));
+                Assert.Equal(8, oneMic.Children.OfType<WrapPanel>().Single().Children.OfType<Button>().Count());
                 Assert.Contains(devices.Children.OfType<TextBlock>(), x => x.Text == "未找到音频输出");
             }
             catch (Exception ex)

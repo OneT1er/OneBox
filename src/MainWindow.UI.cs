@@ -215,12 +215,13 @@ namespace PowerAudioManager
             // 板块可见性（用户可在设置中隐藏）。每个板块自带头部分割线（第一个除外），隐藏不会遗留孤立分割线。
             bool showPower = ModuleVisible("Power");
             bool showAudio = ModuleVisible("Audio");
+            bool showOneMic = ModuleVisible("OneMic");
             bool showMem   = ModuleVisible("Mem");
             bool showTr    = ModuleVisible("Translate");
 
             if (showPower)
             {
-            var powerHeader = MakeCollapsibleHeader("电源计划", IconKey.Power, () => _powerSection, AppPrefs.GetBool("UI.PowerCollapsed", false));
+            var powerHeader = MakeCollapsibleHeader("电源计划", IconKey.Power, () => _powerSection, "UI.PowerCollapsed");
             contentPanel.Children.Add(powerHeader);
             _powerSection = new StackPanel { Margin = new Thickness(0, 0, 0, 4) };
             contentPanel.Children.Add(_powerSection);
@@ -230,70 +231,10 @@ namespace PowerAudioManager
             {
             if (contentPanel.Children.Count > 0) contentPanel.Children.Add(UiKit.MakeDivider());
 
-            var audioHeader = MakeCollapsibleHeader("音频输出", IconKey.Audio, () => _audioSection, AppPrefs.GetBool("UI.AudioCollapsed", false));
+            var audioHeader = MakeCollapsibleHeader("音频输出", IconKey.Audio, () => _audioSection, "UI.AudioCollapsed");
             contentPanel.Children.Add(audioHeader);
             _audioSection = new StackPanel();
             contentPanel.Children.Add(_audioSection);
-            _audioSection.Children.Add(new TextBlock { Text = "OneMic", Foreground = UiKit.FrozenBrush(UiKit.AccentColor),
-                FontSize = 12, FontWeight = FontWeights.SemiBold, Margin = new Thickness(2, 7, 0, 4) });
-            var studioControls = new WrapPanel { Margin = new Thickness(0, 0, 0, 3) };
-            var studio = AudioStudio.StudioController.Instance;
-            Button OneMicButton(IconKey key, string tooltip)
-            {
-                var button = new Button { Width = 30, Height = 30, Margin = new Thickness(0, 0, 4, 4),
-                    Foreground = UiKit.FrozenBrush(UiKit.TextSecondary), Background = Brushes.Transparent,
-                    BorderBrush = Brushes.Transparent, Cursor = Cursors.Hand };
-                UiKit.ApplyIconButtonStyle(button);
-                return IconCatalog.ConfigureIconButton(button, key, tooltip, 17);
-            }
-            var openMic = OneMicButton(IconKey.OneMic, "打开 OneMic");
-            var share = OneMicButton(IconKey.ShareStart, "开始共享");
-            var denoise = OneMicButton(IconKey.Noise, "切换降噪");
-            var eq = OneMicButton(IconKey.Equalizer, "切换均衡器");
-            var bgm = OneMicButton(IconKey.Music, "切换 BGM");
-            var explode = OneMicButton(IconKey.Explode, "一键炸麦");
-            var monitor = OneMicButton(IconKey.Monitor, "切换监听");
-            var settings = OneMicButton(IconKey.Settings, "OneMic 设置");
-            void SetState(Button button, IconKey icon, bool active, string tooltip)
-            {
-                button.Foreground = UiKit.FrozenBrush(active ? UiKit.AccentColor : UiKit.TextSecondary);
-                button.Background = active ? UiKit.FrozenBrush(UiKit.ActiveBg) : Brushes.Transparent;
-                button.Content = IconCatalog.CreateElement(icon, 17, button.Foreground);
-                button.ToolTip = tooltip;
-                AutomationProperties.SetName(button, tooltip);
-            }
-            void RefreshStudioButtons()
-            {
-                SetState(share, studio.Wanted ? IconKey.ShareStop : IconKey.ShareStart, studio.Wanted,
-                    studio.Wanted ? "停止共享" : "开始共享");
-                SetState(denoise, IconKey.Noise, studio.Settings.Denoise, studio.Settings.Denoise ? "关闭降噪" : "开启降噪");
-                SetState(eq, IconKey.Equalizer, studio.Settings.Eq, studio.Settings.Eq ? "关闭均衡器" : "开启均衡器");
-                SetState(bgm, IconKey.Music, studio.Settings.Music, studio.Settings.Music ? "关闭 BGM" : "开启 BGM");
-                SetState(explode, IconKey.Explode, studio.Settings.Explode, studio.Settings.Explode ? "关闭炸麦" : "一键炸麦");
-                SetState(monitor, IconKey.Monitor, studio.Settings.Monitor, studio.Settings.Monitor ? "关闭监听" : "开启监听");
-                share.IsEnabled = denoise.IsEnabled = eq.IsEnabled = bgm.IsEnabled = explode.IsEnabled = monitor.IsEnabled = !studio.Busy;
-            }
-            openMic.Command = CreateUiCommand(AppCommandId.StudioOpen, CommandSource.MainWindow);
-            share.Click += async (_, _) => { studio.Initialize(); if (studio.Wanted) await studio.StopAsync(); else await studio.StartAsync(); RefreshStudioButtons(); };
-            denoise.Command = CreateUiCommand(AppCommandId.StudioDenoise, CommandSource.MainWindow);
-            eq.Command = CreateUiCommand(AppCommandId.StudioEq, CommandSource.MainWindow);
-            bgm.Command = CreateUiCommand(AppCommandId.StudioMusic, CommandSource.MainWindow);
-            explode.Command = CreateUiCommand(AppCommandId.StudioExplode, CommandSource.MainWindow);
-            monitor.Command = CreateUiCommand(AppCommandId.StudioMonitor, CommandSource.MainWindow);
-            settings.Command = CreateUiCommand(AppCommandId.SettingsOpen, CommandSource.MainWindow,
-                () => new SettingsOpenPayload(SettingsDialog.OneMicTabIndex));
-            void StudioChanged()
-            {
-                if (Dispatcher.CheckAccess()) RefreshStudioButtons();
-                else Dispatcher.BeginInvoke((Action)RefreshStudioButtons);
-            }
-            bool listening = false;
-            studioControls.Loaded += (_, _) => { if (!listening) { studio.Changed += StudioChanged; listening = true; } RefreshStudioButtons(); };
-            studioControls.Unloaded += (_, _) => { if (listening) { studio.Changed -= StudioChanged; listening = false; } };
-            studioControls.Children.Add(openMic); studioControls.Children.Add(share);
-            studioControls.Children.Add(denoise); studioControls.Children.Add(eq); studioControls.Children.Add(bgm);
-            studioControls.Children.Add(explode); studioControls.Children.Add(monitor); studioControls.Children.Add(settings);
-            RefreshStudioButtons(); _audioSection.Children.Add(studioControls);
             _audioDeviceSection = new StackPanel();
             _audioSection.Children.Add(_audioDeviceSection);
 
@@ -343,7 +284,17 @@ namespace PowerAudioManager
             _volumeInputReady = false;
             _volSlider.Loaded += (s, e) => _volumeInputReady = true;
             volRow.Children.Add(_volSlider);
-            contentPanel.Children.Add(volRow);
+            _audioSection.Children.Add(volRow);
+            }
+
+            if (showOneMic)
+            {
+                if (contentPanel.Children.Count > 0) contentPanel.Children.Add(UiKit.MakeDivider());
+                contentPanel.Children.Add(MakeCollapsibleHeader("OneMic", IconKey.OneMic,
+                    () => _oneMicSection, "UI.OneMicCollapsed"));
+                _oneMicSection = new StackPanel { Margin = new Thickness(0, 0, 0, 4) };
+                _oneMicSection.Children.Add(BuildOneMicControls());
+                contentPanel.Children.Add(_oneMicSection);
             }
 
             if (showMem)
@@ -402,6 +353,69 @@ namespace PowerAudioManager
             if (IsLoaded) _volumeInputReady = true;
         }
 
+        WrapPanel BuildOneMicControls()
+        {
+            var controls = new WrapPanel { Margin = new Thickness(0, 2, 0, 3) };
+            var studio = AudioStudio.StudioController.Instance;
+            Button IconButton(IconKey key, string tooltip)
+            {
+                var button = new Button { Width = 30, Height = 30, Margin = new Thickness(0, 0, 4, 4),
+                    Foreground = UiKit.FrozenBrush(UiKit.TextSecondary), Background = Brushes.Transparent,
+                    BorderBrush = Brushes.Transparent, Cursor = Cursors.Hand };
+                UiKit.ApplyIconButtonStyle(button);
+                return IconCatalog.ConfigureIconButton(button, key, tooltip, 17);
+            }
+            var openMic = IconButton(IconKey.OneMic, "打开 OneMic");
+            var share = IconButton(IconKey.ShareStart, "开始共享");
+            var denoise = IconButton(IconKey.Noise, "切换降噪");
+            var eq = IconButton(IconKey.Equalizer, "切换均衡器");
+            var bgm = IconButton(IconKey.Music, "切换 BGM");
+            var explode = IconButton(IconKey.Explode, "一键炸麦");
+            var monitor = IconButton(IconKey.Monitor, "切换监听");
+            var settings = IconButton(IconKey.Settings, "OneMic 设置");
+            void SetState(Button button, IconKey icon, bool active, string tooltip)
+            {
+                button.Foreground = UiKit.FrozenBrush(active ? UiKit.AccentColor : UiKit.TextSecondary);
+                button.Background = active ? UiKit.FrozenBrush(UiKit.ActiveBg) : Brushes.Transparent;
+                button.Content = IconCatalog.CreateElement(icon, 17, button.Foreground);
+                button.ToolTip = tooltip;
+                AutomationProperties.SetName(button, tooltip);
+            }
+            void RefreshButtons()
+            {
+                SetState(share, studio.Wanted ? IconKey.ShareStop : IconKey.ShareStart, studio.Wanted,
+                    studio.Wanted ? "停止共享" : "开始共享");
+                SetState(denoise, IconKey.Noise, studio.Settings.Denoise, studio.Settings.Denoise ? "关闭降噪" : "开启降噪");
+                SetState(eq, IconKey.Equalizer, studio.Settings.Eq, studio.Settings.Eq ? "关闭均衡器" : "开启均衡器");
+                SetState(bgm, IconKey.Music, studio.Settings.Music, studio.Settings.Music ? "关闭 BGM" : "开启 BGM");
+                SetState(explode, IconKey.Explode, studio.Settings.Explode, studio.Settings.Explode ? "关闭炸麦" : "一键炸麦");
+                SetState(monitor, IconKey.Monitor, studio.Settings.Monitor, studio.Settings.Monitor ? "关闭监听" : "开启监听");
+                share.IsEnabled = denoise.IsEnabled = eq.IsEnabled = bgm.IsEnabled = explode.IsEnabled = monitor.IsEnabled = !studio.Busy;
+            }
+            openMic.Command = CreateUiCommand(AppCommandId.StudioOpen, CommandSource.MainWindow);
+            share.Click += async (_, _) => { studio.Initialize(); if (studio.Wanted) await studio.StopAsync(); else await studio.StartAsync(); RefreshButtons(); };
+            denoise.Command = CreateUiCommand(AppCommandId.StudioDenoise, CommandSource.MainWindow);
+            eq.Command = CreateUiCommand(AppCommandId.StudioEq, CommandSource.MainWindow);
+            bgm.Command = CreateUiCommand(AppCommandId.StudioMusic, CommandSource.MainWindow);
+            explode.Command = CreateUiCommand(AppCommandId.StudioExplode, CommandSource.MainWindow);
+            monitor.Command = CreateUiCommand(AppCommandId.StudioMonitor, CommandSource.MainWindow);
+            settings.Command = CreateUiCommand(AppCommandId.SettingsOpen, CommandSource.MainWindow,
+                () => new SettingsOpenPayload(SettingsDialog.OneMicTabIndex));
+            void StudioChanged()
+            {
+                if (Dispatcher.CheckAccess()) RefreshButtons();
+                else Dispatcher.BeginInvoke((Action)RefreshButtons);
+            }
+            bool listening = false;
+            controls.Loaded += (_, _) => { if (!listening) { studio.Changed += StudioChanged; listening = true; } RefreshButtons(); };
+            controls.Unloaded += (_, _) => { if (listening) { studio.Changed -= StudioChanged; listening = false; } };
+            controls.Children.Add(openMic); controls.Children.Add(share);
+            controls.Children.Add(denoise); controls.Children.Add(eq); controls.Children.Add(bgm);
+            controls.Children.Add(explode); controls.Children.Add(monitor); controls.Children.Add(settings);
+            RefreshButtons();
+            return controls;
+        }
+
         void BuildClipboardButton(StackPanel contentPanel)
         {
             var cbContent = IconLabel(IconKey.Clipboard, "剪贴板历史");
@@ -443,8 +457,9 @@ namespace PowerAudioManager
             return row;
         }
 
-        FrameworkElement MakeCollapsibleHeader(string title, IconKey iconKey, Func<UIElement> sectionGetter, bool initiallyCollapsed)
+        FrameworkElement MakeCollapsibleHeader(string title, IconKey iconKey, Func<UIElement> sectionGetter, string prefKey)
         {
+            bool initiallyCollapsed = AppPrefs.GetBool(prefKey, false);
             var dock = new DockPanel {
                 Margin = new Thickness(0, 0, 0, 6),
                 LastChildFill = true,
@@ -478,7 +493,6 @@ namespace PowerAudioManager
                 sec.Visibility = initiallyCollapsed ? Visibility.Collapsed : Visibility.Visible;
             }), System.Windows.Threading.DispatcherPriority.Loaded);
 
-            string prefKey = title.Contains("电源") ? "UI.PowerCollapsed" : "UI.AudioCollapsed";
             dock.MouseLeftButtonUp += (s, e) => {
                 var sec = sectionGetter() as FrameworkElement;
                 if (sec == null) return;
