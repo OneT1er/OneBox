@@ -54,6 +54,7 @@ namespace PowerAudioManager
                 };
                 _menu = CreateTrayMenu();
                 AddMenuItem("显示窗口", async (_, __) => await _owner.ExecuteCommandAsync(AppCommandId.WindowShow, CommandSource.Tray));
+                AddMenuItem("麦克风工作室...", async (_, __) => await _owner.ExecuteCommandAsync(AppCommandId.StudioOpen, CommandSource.Tray));
                 _autoStartItem = new MenuItem { Header = "开机自启", IsCheckable = true, IsChecked = AutoStartService.GetCurrent() != AutoStartMethod.None };
                 _autoStartItem.Click += async (_, __) =>
                 {

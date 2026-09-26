@@ -48,6 +48,16 @@ namespace PowerAudioManager
             request.CancellationToken.ThrowIfCancellationRequested();
             switch (request.CommandId)
             {
+                case AppCommandId.StudioOpen:
+                    AudioStudio.StudioController.Instance.Show(this);
+                    return CommandResult.Ok();
+                case AppCommandId.StudioDenoise:
+                case AppCommandId.StudioEq:
+                case AppCommandId.StudioMusic:
+                case AppCommandId.StudioExplode:
+                case AppCommandId.StudioMonitor:
+                    await AudioStudio.StudioController.Instance.ToggleAsync(request.CommandId.ToString().Substring(6));
+                    return CommandResult.Ok();
                 case AppCommandId.WindowShow:
                     ShowWindow();
                     return CommandResult.Ok();

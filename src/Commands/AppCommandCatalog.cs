@@ -43,7 +43,13 @@ namespace PowerAudioManager.Commands
             D(AppCommandId.RuntimeRefreshHotkeys, "刷新全局快捷键"),
             D(AppCommandId.RuntimeRestartAutoClean, "刷新自动内存清理"),
             D<GeneralRuntimePayload>(AppCommandId.RuntimeApplyGeneral, "应用常规设置"),
-            D(AppCommandId.RuntimeRebuildModules, "应用模块设置")
+            D(AppCommandId.RuntimeRebuildModules, "应用模块设置"),
+            D(AppCommandId.StudioOpen, "麦克风工作室"),
+            D(AppCommandId.StudioDenoise, "切换降噪"),
+            D(AppCommandId.StudioEq, "切换均衡器"),
+            D(AppCommandId.StudioMusic, "切换音乐共享", busy: true),
+            D(AppCommandId.StudioExplode, "切换炸麦"),
+            D(AppCommandId.StudioMonitor, "切换监听", busy: true)
         };
 
         static readonly Dictionary<AppCommandId, AppCommandDefinition> _byId = BuildIndex();

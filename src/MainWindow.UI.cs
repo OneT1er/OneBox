@@ -234,6 +234,10 @@ namespace PowerAudioManager
             contentPanel.Children.Add(audioHeader);
             _audioSection = new StackPanel();
             contentPanel.Children.Add(_audioSection);
+            var studioButton = new Button { Content = "麦克风工作室", Margin = new Thickness(0, 6, 0, 2), HorizontalAlignment = HorizontalAlignment.Stretch };
+            UiKit.ApplyFlatStyle(studioButton);
+            studioButton.Command = CreateUiCommand(AppCommandId.StudioOpen, CommandSource.MainWindow);
+            _audioSection.Children.Add(studioButton);
 
             var volRow = new DockPanel { Margin = new Thickness(0, 10, 0, 0), LastChildFill = true };
             _muteBtn = new Button {

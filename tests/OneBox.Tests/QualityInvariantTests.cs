@@ -170,7 +170,8 @@ public sealed class QualityInvariantTests
         Assert.Contains("Popup.AllowsTransparencyProperty", theme, StringComparison.Ordinal);
         Assert.Contains("ComboBox.IsDropDownOpenProperty", theme, StringComparison.Ordinal);
         Assert.Contains("Selector.IsSelectedProperty", theme, StringComparison.Ordinal);
-        Assert.Contains("ScrollViewer.BackgroundProperty, Brush(Card)", theme, StringComparison.Ordinal);
+        Assert.Contains("CreateDarkComboBoxStyle(bool light = false)", theme, StringComparison.Ordinal);
+        Assert.Contains("ScrollViewer.BackgroundProperty, light ? Brushes.White : Brush(Card)", theme, StringComparison.Ordinal);
         Assert.Contains("StyleDarkComboBox(typeCombo)", metrics, StringComparison.Ordinal);
         Assert.Contains("StyleDarkComboBox(sensorCombo)", metrics, StringComparison.Ordinal);
     }

@@ -60,10 +60,15 @@
     <ProjectReference Include="OneBox.Hardware\OneBox.Hardware.csproj" ReferenceOutputAssembly="false" />
     <PackageReference Include="CommunityToolkit.Mvvm" />
     <PackageReference Include="NAudio" />
+    <PackageReference Include="YellowDogMan.RRNoise.NET" />
     <PackageReference Include="Vortice.DXGI" />
     <PackageReference Include="H.NotifyIcon.Wpf" />
     <PackageReference Include="System.ServiceProcess.ServiceController" />
     <PackageReference Include="Velopack" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="AudioStudio\Native\*" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
   <!-- A normal solution build must be runnable from the GUI output directory,

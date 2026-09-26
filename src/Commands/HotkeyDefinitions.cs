@@ -12,6 +12,11 @@ namespace PowerAudioManager.Commands
 
         static readonly HotkeyDefinition[] _all =
         {
+            new(AppCommandId.StudioDenoise, "AudioStudio.Hotkey.Denoise", 0xBF80, 0, () => true),
+            new(AppCommandId.StudioEq, "AudioStudio.Hotkey.Eq", 0xBF81, 0, () => true),
+            new(AppCommandId.StudioMusic, "AudioStudio.Hotkey.Music", 0xBF82, 0, () => true),
+            new(AppCommandId.StudioExplode, "AudioStudio.Hotkey.Explode", 0xBF83, 0, () => true),
+            new(AppCommandId.StudioMonitor, "AudioStudio.Hotkey.Monitor", 0xBF84, 0, () => true),
             new(AppCommandId.TranslateText, null, Native.HOTKEY_ID_TRANSLATE,
                 FixedTranslateEncoded, () => true),
             new(AppCommandId.ScreenshotForeground, PreferenceKeys.Hotkeys.Screenshot.Key,

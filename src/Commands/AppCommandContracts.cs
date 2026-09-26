@@ -40,7 +40,13 @@ namespace PowerAudioManager.Commands
         RuntimeRefreshHotkeys,
         RuntimeRestartAutoClean,
         RuntimeApplyGeneral,
-        RuntimeRebuildModules
+        RuntimeRebuildModules,
+        StudioOpen,
+        StudioDenoise,
+        StudioEq,
+        StudioMusic,
+        StudioExplode,
+        StudioMonitor
     }
 
     public enum CommandSource

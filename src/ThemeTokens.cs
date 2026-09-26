@@ -94,19 +94,19 @@ namespace PowerAudioManager
         // against OneBox's purple-shadow palette.  Keep the complete control
         // in code so every dynamically-created settings form gets the same
         // dark surface without relying on an external theme resource.
-        internal static Style CreateDarkComboBoxStyle()
+        internal static Style CreateDarkComboBoxStyle(bool light = false)
         {
             var style = new Style(typeof(ComboBox));
-            style.Setters.Add(new Setter(Control.BackgroundProperty, Brush(Card)));
-            style.Setters.Add(new Setter(Control.ForegroundProperty, Brush(Color.FromRgb(230, 228, 250))));
+            style.Setters.Add(new Setter(Control.BackgroundProperty, light ? Brushes.White : Brush(Card)));
+            style.Setters.Add(new Setter(Control.ForegroundProperty, Brush(light ? Color.FromRgb(43, 39, 60) : Color.FromRgb(230, 228, 250))));
             style.Setters.Add(new Setter(Control.BorderBrushProperty, Brush(Border)));
             style.Setters.Add(new Setter(Control.BorderThicknessProperty, new Thickness(1)));
             style.Setters.Add(new Setter(Control.PaddingProperty, new Thickness(8, 0, 8, 0)));
             style.Setters.Add(new Setter(Control.HorizontalContentAlignmentProperty, HorizontalAlignment.Left));
             style.Setters.Add(new Setter(Control.VerticalContentAlignmentProperty, VerticalAlignment.Center));
             style.Setters.Add(new Setter(Control.FocusVisualStyleProperty, null));
-            style.Setters.Add(new Setter(Control.TemplateProperty, CreateComboBoxTemplate()));
-            style.Setters.Add(new Setter(ItemsControl.ItemContainerStyleProperty, CreateDarkComboBoxItemStyle()));
+            style.Setters.Add(new Setter(Control.TemplateProperty, CreateComboBoxTemplate(light)));
+            style.Setters.Add(new Setter(ItemsControl.ItemContainerStyleProperty, CreateDarkComboBoxItemStyle(light)));
 
             var disabled = new Trigger { Property = UIElement.IsEnabledProperty, Value = false };
             disabled.Setters.Add(new Setter(UIElement.OpacityProperty, 0.48));
@@ -114,11 +114,11 @@ namespace PowerAudioManager
             return style;
         }
 
-        internal static Style CreateDarkComboBoxItemStyle()
+        internal static Style CreateDarkComboBoxItemStyle(bool light = false)
         {
             var style = new Style(typeof(ComboBoxItem));
-            style.Setters.Add(new Setter(Control.BackgroundProperty, Brush(Card)));
-            style.Setters.Add(new Setter(Control.ForegroundProperty, Brush(Color.FromRgb(235, 233, 252))));
+            style.Setters.Add(new Setter(Control.BackgroundProperty, light ? Brushes.White : Brush(Card)));
+            style.Setters.Add(new Setter(Control.ForegroundProperty, Brush(light ? Color.FromRgb(43, 39, 60) : Color.FromRgb(235, 233, 252))));
             style.Setters.Add(new Setter(Control.BorderBrushProperty, Brushes.Transparent));
             style.Setters.Add(new Setter(Control.BorderThicknessProperty, new Thickness(1)));
             style.Setters.Add(new Setter(Control.PaddingProperty, new Thickness(8, 5, 8, 5)));
@@ -143,7 +143,7 @@ namespace PowerAudioManager
             return style;
         }
 
-        static ControlTemplate CreateComboBoxTemplate()
+        static ControlTemplate CreateComboBoxTemplate(bool light = false)
         {
             var template = new ControlTemplate(typeof(ComboBox));
             var chrome = new FrameworkElementFactory(typeof(BorderElement));
@@ -217,7 +217,7 @@ namespace PowerAudioManager
 
             var popupBorder = new FrameworkElementFactory(typeof(BorderElement));
             popupBorder.Name = "DropDownChrome";
-            popupBorder.SetValue(BorderElement.BackgroundProperty, Brush(Card));
+            popupBorder.SetValue(BorderElement.BackgroundProperty, light ? Brushes.White : Brush(Card));
             popupBorder.SetValue(BorderElement.BorderBrushProperty, Brush(Accent));
             popupBorder.SetValue(BorderElement.BorderThicknessProperty, new Thickness(1));
             popupBorder.SetValue(BorderElement.CornerRadiusProperty, new CornerRadius(6));
@@ -226,7 +226,7 @@ namespace PowerAudioManager
             var scroll = new FrameworkElementFactory(typeof(ScrollViewer));
             var scrollStyle = new Style(typeof(ScrollViewer));
             scrollStyle.Resources.Add(typeof(ScrollBar), CreateDarkScrollBarStyle());
-            scrollStyle.Setters.Add(new Setter(ScrollViewer.BackgroundProperty, Brush(Card)));
+            scrollStyle.Setters.Add(new Setter(ScrollViewer.BackgroundProperty, light ? Brushes.White : Brush(Card)));
             scrollStyle.Setters.Add(new Setter(ScrollViewer.BorderBrushProperty, Brushes.Transparent));
             scrollStyle.Setters.Add(new Setter(ScrollViewer.HorizontalScrollBarVisibilityProperty, ScrollBarVisibility.Disabled));
             scrollStyle.Setters.Add(new Setter(ScrollViewer.VerticalScrollBarVisibilityProperty, ScrollBarVisibility.Auto));

@@ -427,7 +427,7 @@ namespace PowerAudioManager
                 WindowStyle = WindowStyle.None,
                 AllowsTransparency = true,
                 Background = Brushes.Transparent,
-                FontFamily = owner != null ? owner.FontFamily : null
+                FontFamily = owner != null ? owner.FontFamily : SystemFonts.MessageFontFamily
             };
 
             var fg = new SolidColorBrush(Color.FromRgb(190, 188, 220));

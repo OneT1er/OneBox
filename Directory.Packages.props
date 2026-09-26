@@ -10,6 +10,7 @@
     <PackageVersion Include="H.NotifyIcon.Wpf" Version="2.4.1" />
     <PackageVersion Include="CommunityToolkit.Mvvm" Version="8.4.2" />
     <PackageVersion Include="NAudio" Version="3.0.0" />
+    <PackageVersion Include="YellowDogMan.RRNoise.NET" Version="0.1.9" />
     <PackageVersion Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.11" />
     <PackageVersion Include="System.Diagnostics.EventLog" Version="10.0.11" />
     <PackageVersion Include="System.ServiceProcess.ServiceController" Version="10.0.11" />

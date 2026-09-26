@@ -16,6 +16,7 @@ onebox-emoji-test.png
 *.exe
 *.pdb
 *.dll
+!src/AudioStudio/Native/deep_filter_ladspa.dll
 
 # Visual Studio / Rider
 .vs/

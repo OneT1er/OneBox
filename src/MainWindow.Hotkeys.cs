@@ -62,6 +62,8 @@ namespace PowerAudioManager
                 Native.UnregisterHotKey(_hotkeyHwnd, definition.NativeId);
         }
 
+        internal void PauseHotkeys() => UnregisterAllHotkeys();
+
         internal bool TestHotkey(int encoded)
         {
             if (_hotkeyHwnd == IntPtr.Zero || encoded == 0) return true;
@@ -83,6 +85,7 @@ namespace PowerAudioManager
                 int encoded = HotkeyDefinitions.ResolveEncoded(definition);
                 if (encoded == 0) continue;
                 HotkeyDefinitions.Decode(encoded, out uint modifiers, out uint virtualKey);
+                if (definition.PreferenceKey?.StartsWith("AudioStudio.", StringComparison.Ordinal) == true) modifiers |= 0x4000; // MOD_NOREPEAT
                 if (!Native.RegisterHotKey(_hotkeyHwnd, definition.NativeId, modifiers, virtualKey))
                     AppLog.Log("Hotkey", "register failed: " + definition.CommandId);
             }

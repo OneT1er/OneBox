@@ -165,7 +165,13 @@ try {
         'OneBox.Contracts.dll',
         'Velopack.dll',
         'LibreHardwareMonitorLib.dll',
-        'Microsoft.Extensions.Hosting.dll'
+        'Microsoft.Extensions.Hosting.dll',
+        'RNNoise.NET.dll',
+        'rnnoise.dll',
+        'AudioStudio/Native/deep_filter_ladspa.dll',
+        'AudioStudio/Native/DeepFilterNet.LICENSE.txt',
+        'AudioStudio/Native/RNNoise.LICENSE.txt',
+        'AudioStudio/Native/RNNoise.NET.LICENSE.txt'
     )
     Assert-CleanPayloadDirectory -Root $stagingDirectory -Label 'Publish staging'
 

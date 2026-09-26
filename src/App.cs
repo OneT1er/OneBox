@@ -30,6 +30,11 @@ namespace PowerAudioManager
         [STAThread]
         public static void Main(string[] args)
         {
+            if (args.Length == 1 && args[0] == "--audio-denoise-worker")
+            {
+                Environment.Exit(AudioStudio.DeepFilterDenoiser.WorkerMain());
+                return;
+            }
             VelopackApp.Build()
                 .SetAutoApplyOnStartup(false)
                 .OnBeforeUpdateFastCallback(_ => UpdateLifecycleHooks.BeforeUpdateFastCallback())

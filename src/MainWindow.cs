@@ -208,6 +208,7 @@ namespace PowerAudioManager
                     0, 0, 0, 0,
                     Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE);
                 try { _tray = new TrayController(this, ExitApp); _tray.Init(); } catch { }
+                AudioStudio.StudioController.Instance.Initialize();
                 // UpdateIcon 调用 MemoryCleaner.GetStatus() 首次创建 PerformanceCounter ~400ms，推迟到 Idle 执行避免阻塞 OnLoaded。
                 Dispatcher.BeginInvoke(new Action(() => { try { if (_tray != null) _tray.UpdateIcon(); } catch { } }),
                     System.Windows.Threading.DispatcherPriority.ApplicationIdle);
@@ -342,6 +343,7 @@ namespace PowerAudioManager
             try { _deviceWatcher?.Stop(); } catch { }
             _deviceWatcher = null;
             try { VolumeControl.Shutdown(); } catch { }
+            try { AudioStudio.StudioController.Instance.Dispose(); } catch { }
             if (_scaling != null)
             {
                 try { Microsoft.Win32.SystemEvents.DisplaySettingsChanged -= _scaling.OnDisplaySettingsChanged; } catch { }
