@@ -45,6 +45,7 @@ namespace PowerAudioManager
         private StackPanel _root;
         private StackPanel _powerSection;
         private StackPanel _audioSection;
+        private StackPanel _audioDeviceSection;
         private bool _isExpanded = true;
         private bool _collapsedManually; // 通过按钮收起时为 true（非自动收起）
         internal bool _topmost = false;
@@ -292,6 +293,7 @@ namespace PowerAudioManager
             _contentPanel = null;
             _powerSection = null;
             _audioSection = null;
+            _audioDeviceSection = null;
             _memStatusLabel = null;
             _root = null;
             _mainBorder = null;

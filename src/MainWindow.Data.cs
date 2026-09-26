@@ -101,11 +101,11 @@ namespace PowerAudioManager
                 _audioDevices = devices ?? new List<AudioDeviceInfo>();
                 var defaultDev = _audioDevices.Find(d => d.IsDefault);
                 if (defaultDev != null) _currentDeviceId = defaultDev.Id;
-                if (_audioSection == null) return; // module hidden
-                _audioSection.Children.Clear();
+                if (_audioDeviceSection == null) return; // module hidden
+                _audioDeviceSection.Children.Clear();
                 if (_audioDevices.Count == 0)
                 {
-                    _audioSection.Children.Add(new TextBlock
+                    _audioDeviceSection.Children.Add(new TextBlock
                     {
                         Text = "未找到音频输出",
                         Foreground = new SolidColorBrush(UiKit.TextSecondary),
@@ -115,7 +115,7 @@ namespace PowerAudioManager
                 else
                 {
                     foreach (var dev in _audioDevices) if (!dev.IsHidden)
-                        _audioSection.Children.Add(CreateDeviceButton(dev));
+                        _audioDeviceSection.Children.Add(CreateDeviceButton(dev));
                 }
             }
             catch { }

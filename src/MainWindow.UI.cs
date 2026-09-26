@@ -294,6 +294,8 @@ namespace PowerAudioManager
             studioControls.Children.Add(denoise); studioControls.Children.Add(eq); studioControls.Children.Add(bgm);
             studioControls.Children.Add(explode); studioControls.Children.Add(monitor); studioControls.Children.Add(settings);
             RefreshStudioButtons(); _audioSection.Children.Add(studioControls);
+            _audioDeviceSection = new StackPanel();
+            _audioSection.Children.Add(_audioDeviceSection);
 
             var volRow = new DockPanel { Margin = new Thickness(0, 10, 0, 0), LastChildFill = true };
             _muteBtn = new Button {
