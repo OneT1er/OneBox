@@ -353,17 +353,22 @@ namespace PowerAudioManager
             if (IsLoaded) _volumeInputReady = true;
         }
 
-        WrapPanel BuildOneMicControls()
+        Grid BuildOneMicControls()
         {
-            var controls = new WrapPanel { Margin = new Thickness(0, 2, 0, 3) };
+            var controls = new Grid { Margin = new Thickness(0, 2, 0, 3) };
+            for (int i = 0; i < 4; i++) controls.ColumnDefinitions.Add(new ColumnDefinition());
+            for (int i = 0; i < 2; i++) controls.RowDefinitions.Add(new RowDefinition { Height = new GridLength(52) });
             var studio = AudioStudio.StudioController.Instance;
             Button IconButton(IconKey key, string tooltip)
             {
-                var button = new Button { Width = 30, Height = 30, Margin = new Thickness(0, 0, 4, 4),
+                var button = new Button { Width = 42, Height = 42,
+                    HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
                     Foreground = UiKit.FrozenBrush(UiKit.TextSecondary), Background = Brushes.Transparent,
                     BorderBrush = Brushes.Transparent, Cursor = Cursors.Hand };
                 UiKit.ApplyIconButtonStyle(button);
-                return IconCatalog.ConfigureIconButton(button, key, tooltip, 17);
+                ToolTipService.SetInitialShowDelay(button, 250);
+                ToolTipService.SetShowDuration(button, 8000);
+                return IconCatalog.ConfigureIconButton(button, key, tooltip, 19);
             }
             var openMic = IconButton(IconKey.OneMic, "打开 OneMic");
             var share = IconButton(IconKey.ShareStart, "开始共享");
@@ -373,13 +378,30 @@ namespace PowerAudioManager
             var explode = IconButton(IconKey.Explode, "一键炸麦");
             var monitor = IconButton(IconKey.Monitor, "切换监听");
             var settings = IconButton(IconKey.Settings, "OneMic 设置");
+            explode.BorderBrush = UiKit.FrozenBrush(Color.FromRgb(206, 128, 140));
+            var displayedStates = new Dictionary<Button, (IconKey Icon, bool Active, string Tooltip)>();
+            var toggleButtons = new[] { share, denoise, eq, bgm, explode, monitor };
             void SetState(Button button, IconKey icon, bool active, string tooltip)
             {
-                button.Foreground = UiKit.FrozenBrush(active ? UiKit.AccentColor : UiKit.TextSecondary);
-                button.Background = active ? UiKit.FrozenBrush(UiKit.ActiveBg) : Brushes.Transparent;
-                button.Content = IconCatalog.CreateElement(icon, 17, button.Foreground);
-                button.ToolTip = tooltip;
-                AutomationProperties.SetName(button, tooltip);
+                bool known = displayedStates.TryGetValue(button, out var previous);
+                if (known && previous.Icon == icon && previous.Active == active && previous.Tooltip == tooltip) return;
+                if (!known || previous.Active != active)
+                {
+                    var foreground = UiKit.FrozenBrush(active ? UiKit.AccentColor : UiKit.TextSecondary);
+                    button.Foreground = foreground;
+                    button.Background = active ? UiKit.FrozenBrush(UiKit.ActiveBg) : Brushes.Transparent;
+                    if (button.Content is System.Windows.Shapes.Path path) path.Stroke = foreground;
+                }
+                // Only the share action swaps its glyph. Replacing every icon on each
+                // Changed event invalidated layout and interrupted hover transitions.
+                if (!known || previous.Icon != icon)
+                    button.Content = IconCatalog.CreateElement(icon, 19, button.Foreground);
+                if (!known || previous.Tooltip != tooltip)
+                {
+                    button.ToolTip = tooltip;
+                    AutomationProperties.SetName(button, tooltip);
+                }
+                displayedStates[button] = (icon, active, tooltip);
             }
             void RefreshButtons()
             {
@@ -388,9 +410,11 @@ namespace PowerAudioManager
                 SetState(denoise, IconKey.Noise, studio.Settings.Denoise, studio.Settings.Denoise ? "关闭降噪" : "开启降噪");
                 SetState(eq, IconKey.Equalizer, studio.Settings.Eq, studio.Settings.Eq ? "关闭均衡器" : "开启均衡器");
                 SetState(bgm, IconKey.Music, studio.Settings.Music, studio.Settings.Music ? "关闭 BGM" : "开启 BGM");
-                SetState(explode, IconKey.Explode, studio.Settings.Explode, studio.Settings.Explode ? "关闭炸麦" : "一键炸麦");
+                SetState(explode, IconKey.Explode, studio.Settings.Explode, studio.Settings.Explode ? "关闭炸麦音效" : "炸麦音效（慎用）");
                 SetState(monitor, IconKey.Monitor, studio.Settings.Monitor, studio.Settings.Monitor ? "关闭监听" : "开启监听");
-                share.IsEnabled = denoise.IsEnabled = eq.IsEnabled = bgm.IsEnabled = explode.IsEnabled = monitor.IsEnabled = !studio.Busy;
+                bool enabled = !studio.Busy;
+                foreach (var button in toggleButtons)
+                    if (button.IsEnabled != enabled) button.IsEnabled = enabled;
             }
             openMic.Command = CreateUiCommand(AppCommandId.StudioOpen, CommandSource.MainWindow);
             share.Click += async (_, _) => { studio.Initialize(); if (studio.Wanted) await studio.StopAsync(); else await studio.StartAsync(); RefreshButtons(); };
@@ -401,17 +425,27 @@ namespace PowerAudioManager
             monitor.Command = CreateUiCommand(AppCommandId.StudioMonitor, CommandSource.MainWindow);
             settings.Command = CreateUiCommand(AppCommandId.SettingsOpen, CommandSource.MainWindow,
                 () => new SettingsOpenPayload(SettingsDialog.OneMicTabIndex));
+            bool listening = false;
+            int refreshQueued = 0;
             void StudioChanged()
             {
-                if (Dispatcher.CheckAccess()) RefreshButtons();
-                else Dispatcher.BeginInvoke((Action)RefreshButtons);
+                if (System.Threading.Interlocked.Exchange(ref refreshQueued, 1) != 0) return;
+                Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    System.Threading.Interlocked.Exchange(ref refreshQueued, 0);
+                    if (listening) RefreshButtons();
+                }), DispatcherPriority.Render);
             }
-            bool listening = false;
             controls.Loaded += (_, _) => { if (!listening) { studio.Changed += StudioChanged; listening = true; } RefreshButtons(); };
             controls.Unloaded += (_, _) => { if (listening) { studio.Changed -= StudioChanged; listening = false; } };
-            controls.Children.Add(openMic); controls.Children.Add(share);
-            controls.Children.Add(denoise); controls.Children.Add(eq); controls.Children.Add(bgm);
-            controls.Children.Add(explode); controls.Children.Add(monitor); controls.Children.Add(settings);
+            void Place(Button button, int row, int column)
+            {
+                Grid.SetRow(button, row);
+                Grid.SetColumn(button, column);
+                controls.Children.Add(button);
+            }
+            Place(openMic, 0, 0); Place(share, 0, 1); Place(bgm, 0, 2); Place(monitor, 0, 3);
+            Place(denoise, 1, 0); Place(eq, 1, 1); Place(explode, 1, 2); Place(settings, 1, 3);
             RefreshButtons();
             return controls;
         }

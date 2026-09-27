@@ -26,6 +26,7 @@ internal static class Program
         {
             if (args[0] == "preview") { Preview(args[1]); return 0; }
             if (args[0] == "settings-preview") { PreviewSettings(args[1]); return 0; }
+            if (args[0] == "floating-preview") { PreviewFloating(args[1]); return 0; }
             if (args[0] == "sessions")
             {
                 foreach (var application in StudioDevices.Applications())
@@ -221,6 +222,26 @@ internal static class Program
         }
         application.Shutdown();
         Console.WriteLine("Rendered settings previews to " + directory);
+    }
+    static void PreviewFloating(string directory)
+    {
+        Directory.CreateDirectory(directory);
+        var application = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
+        ThemeTokens.Apply(application);
+        var window = new MainWindow();
+        var content = (FrameworkElement)window.Content;
+        content.Measure(new Size(window.Width, double.PositiveInfinity));
+        content.Arrange(new Rect(0, 0, window.Width, content.DesiredSize.Height));
+        content.UpdateLayout();
+        var bitmap = new RenderTargetBitmap((int)Math.Ceiling(content.ActualWidth),
+            (int)Math.Ceiling(content.ActualHeight), 96, 96, PixelFormats.Pbgra32);
+        bitmap.Render(content);
+        var encoder = new PngBitmapEncoder();
+        encoder.Frames.Add(BitmapFrame.Create(bitmap));
+        using (var stream = File.Create(Path.Combine(directory, "floating-onemic.png"))) encoder.Save(stream);
+        window.Close();
+        application.Shutdown();
+        Console.WriteLine("Rendered floating OneMic preview to " + directory);
     }
     static void Pump()
     {

@@ -38,7 +38,12 @@ public class OneMicFloatingControlsTests
                 Assert.Contains(oneMic, content.Children.Cast<UIElement>());
                 Assert.Contains(content.Children.OfType<DockPanel>(), panel =>
                     panel.Children.OfType<TextBlock>().Any(label => label.Text == "OneMic"));
-                Assert.Equal(8, oneMic.Children.OfType<WrapPanel>().Single().Children.OfType<Button>().Count());
+                var controls = oneMic.Children.OfType<Grid>().Single();
+                var buttons = controls.Children.OfType<Button>().ToArray();
+                Assert.Equal(8, buttons.Length);
+                Assert.All(buttons, button => Assert.True(button.Width >= 40 && button.Height >= 40));
+                Assert.Equal(4, buttons.Count(button => Grid.GetRow(button) == 0));
+                Assert.Equal(4, buttons.Count(button => Grid.GetRow(button) == 1));
                 Assert.Contains(devices.Children.OfType<TextBlock>(), x => x.Text == "未找到音频输出");
             }
             catch (Exception ex)
