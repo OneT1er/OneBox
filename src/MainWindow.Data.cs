@@ -69,10 +69,16 @@ namespace PowerAudioManager
             {
                 // 获取失败时保留上次列表，避免短暂 powercfg 失败清空 UI。
                 if (plans == null) plans = _powerPlans;
+                bool unchanged = _powerPlans != null && plans != null && _powerPlans.Count == plans.Count;
+                if (unchanged)
+                    for (int i = 0; i < plans.Count; i++)
+                        if (_powerPlans[i].Guid != plans[i].Guid || _powerPlans[i].Name != plans[i].Name ||
+                            _powerPlans[i].IsActive != plans[i].IsActive) { unchanged = false; break; }
                 _powerPlans = plans ?? new List<PowerPlanInfo>();
                 var active = _powerPlans.Find(p => p.IsActive);
                 if (active != null) _currentPlanId = active.Guid;
                 if (_powerSection == null) return; // module hidden
+                if (unchanged && _powerSection.Children.Count > 0) return;
                 _powerSection.Children.Clear();
                 if (_powerPlans.Count == 0)
                 {
@@ -98,10 +104,17 @@ namespace PowerAudioManager
             {
                 // 获取失败保留上次列表，避免短暂错误清空音频设备名称。
                 if (devices == null) devices = _audioDevices;
+                bool unchanged = _audioDevices != null && devices != null && _audioDevices.Count == devices.Count;
+                if (unchanged)
+                    for (int i = 0; i < devices.Count; i++)
+                        if (_audioDevices[i].Id != devices[i].Id || _audioDevices[i].Name != devices[i].Name ||
+                            _audioDevices[i].IsDefault != devices[i].IsDefault || _audioDevices[i].IsHidden != devices[i].IsHidden ||
+                            _audioDevices[i].HotkeyIndex != devices[i].HotkeyIndex) { unchanged = false; break; }
                 _audioDevices = devices ?? new List<AudioDeviceInfo>();
                 var defaultDev = _audioDevices.Find(d => d.IsDefault);
                 if (defaultDev != null) _currentDeviceId = defaultDev.Id;
                 if (_audioDeviceSection == null) return; // module hidden
+                if (unchanged && _audioDeviceSection.Children.Count > 0) return;
                 _audioDeviceSection.Children.Clear();
                 if (_audioDevices.Count == 0)
                 {

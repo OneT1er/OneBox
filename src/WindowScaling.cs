@@ -39,6 +39,7 @@ namespace PowerAudioManager
         readonly Window _window;
         readonly Func<Border> _getMainBorder;
         double _currentScale = -1; // -1 强制首次应用
+        Border _appliedBorder;
         double? _manualScale;
         double _lastAutoScale = 1.0;
 
@@ -100,13 +101,13 @@ namespace PowerAudioManager
                 // 旧的除法在 1080p+150% DPI、4K+200% DPI 等常见组合下会被钳到下限，缩放功能对绝大多数用户失效。
                 // 视觉效果：4K@200% DPI 用户得到 1.52x 额外缩放 + 2.0x DPI 缩放 = 较大的悬浮窗，符合高分辨率预期。
                 var mainBorder = _getMainBorder();
-                if (mainBorder != null && Math.Abs(scale - _currentScale) < 0.005 && mainBorder.LayoutTransform != null)
-                {
-                    // 缩放未变但 Border 可能被重建（RebuildUI），仍要同步视觉属性。
-                    ApplyBorderVisuals(mainBorder, scale);
-                    return;
-                }
+                // The display poll runs every two seconds. Reassigning the same border,
+                // corner radius and shadow invalidates the entire transparent window,
+                // visibly restarting hover effects even though the scale is unchanged.
+                if (mainBorder != null && Math.Abs(scale - _currentScale) < 0.005 &&
+                    ReferenceEquals(mainBorder, _appliedBorder)) return;
                 _currentScale = scale;
+                _appliedBorder = mainBorder;
                 _window.Width = BaseWindowWidth * scale;
                 if (mainBorder != null)
                 {
