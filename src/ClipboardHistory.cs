@@ -43,7 +43,7 @@ namespace PowerAudioManager
 
         public static void Start()
         {
-            Stop();
+            if (_poll != null) return;
             Load();
             _poll = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
             _poll.Tick += (s, e) => CaptureIfNew();
@@ -54,9 +54,13 @@ namespace PowerAudioManager
         {
             var poll = _poll;
             _poll = null;
-            if (poll == null) return;
-            try { poll.Stop(); } catch { }
-            try { Save(); } catch { }
+            if (poll != null)
+            {
+                try { poll.Stop(); } catch { }
+                try { Save(); } catch { }
+            }
+            lock (_lock) _items = new List<ClipItem>();
+            _lastHash = "";
         }
 
         static void Load()

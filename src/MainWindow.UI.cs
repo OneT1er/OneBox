@@ -160,11 +160,7 @@ namespace PowerAudioManager
             titleBar.ToolTip = tip;
             titleBar.ToolTipOpening += (s, ev) => {
                 if (_isExpanded) { ev.Handled = true; return; }
-                string plan = "(无)", dev = "(无)";
-                try { if (_powerPlans != null) { var p = _powerPlans.Find(x => x.IsActive || x.Guid == _currentPlanId); if (p != null) plan = p.Name; } } catch { }
-                try { if (_audioDevices != null) { var d = _audioDevices.Find(x => x.IsDefault); if (d != null) dev = d.Name; } } catch { }
-                string mem = ""; try { var ms = MemoryCleaner.GetStatus(); if (ms != null) mem = string.Format(System.Environment.NewLine + "内存: {0:0.0}/{1:0.0} GB ({2}%) · 已缓存 {3:0.0}GB", (ms.TotalBytes - ms.AvailableBytes) / 1073741824.0, ms.TotalBytes / 1073741824.0, ms.MemoryLoadPercent, ms.CachedBytes / 1073741824.0); } catch { }
-                tipBlock.Text = "电源计划: " + plan + System.Environment.NewLine + "音频输出: " + dev + mem;
+                tipBlock.Text = TrayStatusText;
             };
             // 仅位置解锁时可拖动。锁定时位置固定，切换分辨率不移动窗口。
             titleBar.MouseLeftButtonDown += (s, e) => { if (!_lockPosition) try { DragMove(); } catch { } };

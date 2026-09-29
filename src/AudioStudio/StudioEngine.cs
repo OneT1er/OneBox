@@ -11,9 +11,10 @@ namespace PowerAudioManager.AudioStudio;
 
 internal sealed class StudioEngine : IDisposable
 {
-    readonly StudioFifo _microphone = new(), _music = new();
+    StudioFifo _microphone, _music;
     readonly StudioSoundpadPlayer _soundpad = new();
-    readonly BufferedWaveProvider _output = Buffer(), _monitor = Buffer();
+    readonly BufferedWaveProvider _output = Buffer();
+    BufferedWaveProvider _monitor;
     WasapiRecorder _micCapture, _musicCapture;
     WasapiPlayer _player, _monitorPlayer;
     MMDevice _inputDevice, _outputDevice, _monitorDevice;
@@ -50,7 +51,9 @@ internal sealed class StudioEngine : IDisposable
             _outputDevice = enumerator.GetDevice(settings.OutputId);
             if (_outputDevice.DataFlow != DataFlow.Render || _outputDevice.State != DeviceState.Active)
                 throw new InvalidOperationException("输出设备不可用 / Output device unavailable");
-            _dsp = new StudioDsp(StudioDenoisers.Create(settings.Model));
+            _dsp = new StudioDsp(StudioDenoisers.Create(StudioDenoisers.ActiveMode(settings)));
+            if (settings.Microphone) _microphone = new StudioFifo();
+            if (settings.Music) _music = new StudioFifo();
             if (settings.Microphone && string.IsNullOrEmpty(settings.InputId))
                 Note = "没有可用麦克风，音乐仍可共享 / No microphone available; music sharing remains active";
             if (settings.Microphone && !string.IsNullOrEmpty(settings.InputId))
@@ -91,6 +94,7 @@ internal sealed class StudioEngine : IDisposable
             {
                 try
                 {
+                    _monitor = Buffer();
                     string localId = settings.MonitorId;
                     if (string.IsNullOrEmpty(localId) || !StudioDevices.List(DataFlow.Render).Any(x => x.Id == localId && !x.IsCable))
                         localId = StudioDevices.DefaultSpeaker();
@@ -110,6 +114,7 @@ internal sealed class StudioEngine : IDisposable
                 catch (Exception ex)
                 {
                     _monitorPlayer?.Dispose(); _monitorPlayer = null; _monitorDevice?.Dispose(); _monitorDevice = null;
+                    _monitor = null;
                     MonitorError = ex.Message;
                     Note = "本地播放不可用：" + ex.Message + " / Local playback unavailable: " + ex.Message;
                     AppLog.Log("AudioStudio local playback", ex.Message);
@@ -137,7 +142,7 @@ internal sealed class StudioEngine : IDisposable
     {
         var previous = _settings;
         _settings = settings.Copy();
-        if (previous.Music != settings.Music) _music.Clear();
+        if (previous.Music != settings.Music) _music?.Clear();
         string activeId = _soundpad.PlayingId;
         if (activeId.Length > 0)
         {
@@ -155,7 +160,8 @@ internal sealed class StudioEngine : IDisposable
             while (_running)
             {
                 if (_output.BufferedBytes >= bytes.Length * 3) { Thread.Sleep(2); continue; }
-                _microphone.Read(stereoMic); _music.Read(music);
+                if (_microphone == null) Array.Clear(stereoMic); else _microphone.Read(stereoMic);
+                if (_music == null) Array.Clear(music); else _music.Read(music);
                 bool soundActive = _soundpad.Read(sound);
                 float musicPeak = 0;
                 for (int i = 0; i < music.Length; i++) musicPeak = Math.Max(musicPeak, Math.Abs(music[i]));

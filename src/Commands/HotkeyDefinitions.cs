@@ -12,23 +12,23 @@ namespace PowerAudioManager.Commands
 
         static readonly HotkeyDefinition[] _all =
         {
-            new(AppCommandId.StudioDenoise, "AudioStudio.Hotkey.Denoise", 0xBF80, 0, () => true),
-            new(AppCommandId.StudioEq, "AudioStudio.Hotkey.Eq", 0xBF81, 0, () => true),
-            new(AppCommandId.StudioMusic, "AudioStudio.Hotkey.Music", 0xBF82, 0, () => true),
-            new(AppCommandId.StudioExplode, "AudioStudio.Hotkey.Explode", 0xBF83, 0, () => true),
-            new(AppCommandId.StudioMonitor, "AudioStudio.Hotkey.Monitor", 0xBF84, 0, () => true),
+            new(AppCommandId.StudioDenoise, "AudioStudio.Hotkey.Denoise", 0xBF80, 0, () => MainWindow.ModuleVisible("OneMic")),
+            new(AppCommandId.StudioEq, "AudioStudio.Hotkey.Eq", 0xBF81, 0, () => MainWindow.ModuleVisible("OneMic")),
+            new(AppCommandId.StudioMusic, "AudioStudio.Hotkey.Music", 0xBF82, 0, () => MainWindow.ModuleVisible("OneMic")),
+            new(AppCommandId.StudioExplode, "AudioStudio.Hotkey.Explode", 0xBF83, 0, () => MainWindow.ModuleVisible("OneMic")),
+            new(AppCommandId.StudioMonitor, "AudioStudio.Hotkey.Monitor", 0xBF84, 0, () => MainWindow.ModuleVisible("OneMic")),
             new(AppCommandId.TranslateText, null, Native.HOTKEY_ID_TRANSLATE,
-                FixedTranslateEncoded, () => true),
+                FixedTranslateEncoded, () => MainWindow.ModuleVisible("Translate")),
             new(AppCommandId.ScreenshotForeground, PreferenceKeys.Hotkeys.Screenshot.Key,
                 Native.HOTKEY_ID_SCREENSHOT, 0, () => true),
             new(AppCommandId.ClipboardOpen, PreferenceKeys.Hotkeys.Clipboard.Key,
-                Native.HOTKEY_ID_CLIPBOARD, 0, () => true),
+                Native.HOTKEY_ID_CLIPBOARD, 0, () => MainWindow.ModuleVisible("Clipboard")),
             new(AppCommandId.TranslateImageRegion, PreferenceKeys.Hotkeys.ImageTranslate.Key,
-                Native.HOTKEY_ID_IMAGE_TRANSLATE, 0, () => true),
+                Native.HOTKEY_ID_IMAGE_TRANSLATE, 0, () => MainWindow.ModuleVisible("Translate")),
             new(AppCommandId.AudioCycle, PreferenceKeys.Hotkeys.AudioCycle.Key,
-                Native.HOTKEY_ID_AUDIO_CYCLE, 0, () => true),
+                Native.HOTKEY_ID_AUDIO_CYCLE, 0, () => MainWindow.ModuleVisible("Audio")),
             new(AppCommandId.PowerCycle, PreferenceKeys.Hotkeys.PowerCycle.Key,
-                Native.HOTKEY_ID_POWER_CYCLE, 0, () => true)
+                Native.HOTKEY_ID_POWER_CYCLE, 0, () => MainWindow.ModuleVisible("Power"))
         };
 
         public static IReadOnlyList<HotkeyDefinition> All => _all;

@@ -49,6 +49,7 @@ namespace PowerAudioManager
             switch (request.CommandId)
             {
                 case AppCommandId.StudioOpen:
+                    if (!ModuleVisible("OneMic")) return CommandResult.Fail(CommandErrorCode.NotAvailable, "请先在“板块”设置中启用 OneMic。");
                     AudioStudio.StudioController.Instance.Show(this);
                     return CommandResult.Ok();
                 case AppCommandId.StudioDenoise:
@@ -56,6 +57,7 @@ namespace PowerAudioManager
                 case AppCommandId.StudioMusic:
                 case AppCommandId.StudioExplode:
                 case AppCommandId.StudioMonitor:
+                    if (!ModuleVisible("OneMic")) return CommandResult.Fail(CommandErrorCode.NotAvailable, "请先在“板块”设置中启用 OneMic。");
                     await AudioStudio.StudioController.Instance.ToggleAsync(request.CommandId.ToString().Substring(6));
                     return CommandResult.Ok();
                 case AppCommandId.WindowShow:
@@ -165,8 +167,7 @@ namespace PowerAudioManager
                 case AppCommandId.RuntimeApplyGeneral:
                     return ApplyGeneralRuntime(request.RequirePayload<GeneralRuntimePayload>());
                 case AppCommandId.RuntimeRebuildModules:
-                    RebuildUI();
-                    RefreshHotkeys();
+                    await ApplyModuleRuntimeAsync();
                     return CommandResult.Ok();
                 default:
                     return CommandResult.Fail(CommandErrorCode.UnknownCommand, "不支持的功能指令。");

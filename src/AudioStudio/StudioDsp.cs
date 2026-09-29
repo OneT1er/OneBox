@@ -22,6 +22,9 @@ internal enum DenoiseMode { Off, Eco, Balanced, Quality }
 
 internal static class StudioDenoisers
 {
+    public static string ActiveMode(StudioSettings settings) =>
+        settings.Microphone && settings.Denoise ? settings.Model : nameof(DenoiseMode.Off);
+
     // New models implement IStudioDenoiser and register a factory here. All providers
     // consume 480 normalized mono samples at 48 kHz and preserve state across calls.
     public static readonly IReadOnlyDictionary<string, Func<IStudioDenoiser>> Factories =

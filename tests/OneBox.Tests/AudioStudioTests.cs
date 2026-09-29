@@ -161,6 +161,16 @@ public sealed class AudioStudioTests
         Assert.Equal(nameof(DenoiseMode.Balanced), unavailable.Model);
     }
     [Fact]
+    public void DenoiserIsLoadedOnlyWhenMicrophoneAndNoiseReductionAreEnabled()
+    {
+        var settings = new StudioSettings { Model = nameof(DenoiseMode.Quality), Denoise = false, Microphone = true };
+        Assert.Equal(nameof(DenoiseMode.Off), StudioDenoisers.ActiveMode(settings));
+        settings.Denoise = true; settings.Microphone = false;
+        Assert.Equal(nameof(DenoiseMode.Off), StudioDenoisers.ActiveMode(settings));
+        settings.Microphone = true;
+        Assert.Equal(nameof(DenoiseMode.Quality), StudioDenoisers.ActiveMode(settings));
+    }
+    [Fact]
     public void BothNativeModelsProduceFiniteAudioAndReduceStationaryNoise()
     {
         var random = new Random(18);

@@ -90,6 +90,7 @@ public sealed class IpcResponse
             Success = false,
             ErrorCode = code,
             ErrorMessage = message ?? string.Empty,
+            Result = JsonSerializer.SerializeToElement<object>(null, IpcJson.Options),
         };
     }
 

@@ -16,7 +16,7 @@ namespace PowerAudioManager
             int nativeId = wParam.ToInt32();
             if (nativeId == StudioSoundpadHotkeys.StopNativeId)
             {
-                StudioController.Instance.StopSound();
+                if (ModuleVisible("OneMic")) StudioController.Instance.StopSound();
                 handled = true;
                 return IntPtr.Zero;
             }
@@ -24,13 +24,16 @@ namespace PowerAudioManager
                 nativeId < StudioSoundpadHotkeys.NativeIdBase + StudioSoundpadHotkeys.MaxEffects)
             {
                 int slot = nativeId - StudioSoundpadHotkeys.NativeIdBase;
-                var effects = StudioController.Instance.Settings.SoundEffects;
-                if (slot < effects.Count) _ = PlaySoundpadHotkeyAsync(effects[slot].Id);
+                if (ModuleVisible("OneMic"))
+                {
+                    var effects = StudioController.Instance.Settings.SoundEffects;
+                    if (slot < effects.Count) _ = PlaySoundpadHotkeyAsync(effects[slot].Id);
+                }
                 handled = true;
                 return IntPtr.Zero;
             }
             var definition = HotkeyDefinitions.All.FirstOrDefault(item => item.NativeId == nativeId);
-            if (definition != null)
+            if (definition != null && definition.Enabled())
             {
                 AppLog.Log("Hotkey", definition.CommandId + " triggered");
                 _ = ExecuteCommandAsync(definition.CommandId, CommandSource.Hotkey,
@@ -117,27 +120,33 @@ namespace PowerAudioManager
             }
 
             int nextId = Native.HOTKEY_ID_BASE;
-            foreach (var pair in DevicePrefs.GetAllHotkeys())
+            if (ModuleVisible("Audio"))
             {
-                if (pair.Value == 0) continue;
-                HotkeyDefinitions.Decode(pair.Value, out uint modifiers, out uint virtualKey);
-                int nativeId = nextId++;
-                if (Native.RegisterHotKey(_hotkeyHwnd, nativeId, modifiers, virtualKey))
-                    _hotkeyMap[nativeId] = pair.Key;
+                foreach (var pair in DevicePrefs.GetAllHotkeys())
+                {
+                    if (pair.Value == 0) continue;
+                    HotkeyDefinitions.Decode(pair.Value, out uint modifiers, out uint virtualKey);
+                    int nativeId = nextId++;
+                    if (Native.RegisterHotKey(_hotkeyHwnd, nativeId, modifiers, virtualKey))
+                        _hotkeyMap[nativeId] = pair.Key;
+                }
             }
-            var effects = StudioController.Instance.Settings.SoundEffects;
-            for (int slot = 0; slot < effects.Count; slot++)
+            if (ModuleVisible("OneMic"))
             {
-                int encoded = effects[slot].Hotkey;
-                if (encoded == 0) continue;
-                HotkeyDefinitions.Decode(encoded, out uint modifiers, out uint key);
-                if (!Native.RegisterHotKey(_hotkeyHwnd, StudioSoundpadHotkeys.NativeIdBase + slot,
-                    modifiers | 0x4000, key))
-                    AppLog.Log("Hotkey", "OneMic soundpad shortcut unavailable: " + effects[slot].Path);
+                var effects = StudioController.Instance.Settings.SoundEffects;
+                for (int slot = 0; slot < effects.Count; slot++)
+                {
+                    int encoded = effects[slot].Hotkey;
+                    if (encoded == 0) continue;
+                    HotkeyDefinitions.Decode(encoded, out uint modifiers, out uint key);
+                    if (!Native.RegisterHotKey(_hotkeyHwnd, StudioSoundpadHotkeys.NativeIdBase + slot,
+                        modifiers | 0x4000, key))
+                        AppLog.Log("Hotkey", "OneMic soundpad shortcut unavailable: " + effects[slot].Path);
+                }
+                if (effects.Count > 0 && !Native.RegisterHotKey(_hotkeyHwnd, StudioSoundpadHotkeys.StopNativeId,
+                    Native.MOD_CONTROL | Native.MOD_SHIFT | 0x4000, 0x30))
+                    AppLog.Log("Hotkey", "OneMic soundpad stop unavailable");
             }
-            if (effects.Count > 0 && !Native.RegisterHotKey(_hotkeyHwnd, StudioSoundpadHotkeys.StopNativeId,
-                Native.MOD_CONTROL | Native.MOD_SHIFT | 0x4000, 0x30))
-                AppLog.Log("Hotkey", "OneMic soundpad stop unavailable");
         }
     }
 }

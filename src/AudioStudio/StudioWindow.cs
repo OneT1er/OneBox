@@ -33,6 +33,7 @@ internal sealed class StudioWindow
     StudioSpectrum _spectrum;
     StudioMeter _inputMeter, _outputMeter;
     bool _building, _refreshing;
+    bool _closed;
     bool _voiceExpanded, _effectsExpanded;
     int _ticks;
     Brush Foreground => ThemeTokens.Brush(ThemeTokens.PrimaryText);
@@ -45,7 +46,7 @@ internal sealed class StudioWindow
         var scroll = new ScrollViewer { Content = _body, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
         _window = OneBoxWindow.Create(owner, "OneMic", 660, 830, scroll, true);
         _window.MinWidth = 560; _window.MinHeight = 500;
-        _window.Closed += (_, _) => { _timer.Stop(); _controller.Changed -= Sync; Closed?.Invoke(this, EventArgs.Empty); };
+        _window.Closed += (_, _) => { _closed = true; _timer.Stop(); _controller.Changed -= Sync; Closed?.Invoke(this, EventArgs.Empty); };
         _window.StateChanged += (_, _) => { if (_window.WindowState == WindowState.Minimized) { _window.Hide(); _window.WindowState = WindowState.Normal; } };
         _window.PreviewKeyDown += SoundpadKeyDown;
         _controller.Changed += Sync;
@@ -129,7 +130,13 @@ internal sealed class StudioWindow
         {
             _window.Hide();
             try { SettingsDialog.Show(_owner, SettingsDialog.OneMicTabIndex); }
-            finally { Build(); _window.Show(); _window.Activate(); }
+            finally
+            {
+                if (!_closed && MainWindow.ModuleVisible("OneMic"))
+                {
+                    Build(); _window.Show(); _window.Activate();
+                }
+            }
         }));
         toolbar.Children.Add(Button(T("均衡器", "Equalizer"), Equalizer));
         toolbar.Children.Add(Button(T("使用教程", "Guide"), Guide));
@@ -179,7 +186,7 @@ internal sealed class StudioWindow
         var benchmarkOutput = Text("");
         voice.Children.Add(Button(T("测试各模式延迟", "Test mode latency"), () => _ = BenchmarkAsync(benchmarkOutput)));
         voice.Children.Add(benchmarkOutput);
-        Toggle(voice, T("实时降噪", "Real-time denoising"), x => x.Denoise, (x, v) => x.Denoise = v);
+        Toggle(voice, T("实时降噪", "Real-time denoising"), x => x.Denoise, (x, v) => x.Denoise = v, true);
         Slider(voice, T("降噪强度", "Noise reduction"), s.Strength * 100, 100, value => Change(x => { x.Strength = value / 100; x.Preset = "Custom"; }));
         Slider(voice, T("人声音量", "Voice volume"), s.MicGain * 100, 300, value => Change(x => { x.MicGain = value / 100; x.Preset = "Custom"; }));
         Toggle(voice, T("启用 10 段均衡器", "Enable 10-band EQ"), x => x.Eq, (x, v) => x.Eq = v);

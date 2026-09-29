@@ -128,9 +128,13 @@ namespace PowerAudioManager
             }
             else { Left = screen.Right - Width - 20; Top = screen.Bottom - 200 - 20; }
             BuildUI();
-            MouseWheel += (s, e) => _ = ExecuteCommandAsync(AppCommandId.AudioSetVolume,
-                CommandSource.MainWindow, new AudioVolumePayload(Math.Clamp(
-                    VolumeControl.GetVolume() + (e.Delta > 0 ? 0.02f : -0.02f), 0, 1)));
+            MouseWheel += (s, e) =>
+            {
+                if (!ModuleVisible("Audio")) return;
+                _ = ExecuteCommandAsync(AppCommandId.AudioSetVolume, CommandSource.MainWindow,
+                    new AudioVolumePayload(Math.Clamp(
+                        VolumeControl.GetVolume() + (e.Delta > 0 ? 0.02f : -0.02f), 0, 1)));
+            };
             // LoadData() 推迟到 OnLoaded 异步执行，避免 GetStatus() 首次创建 PerformanceCounter（~300ms）阻塞构造函数。
             AppLog.Log("Startup", "ctor done " + sw.ElapsedMilliseconds + "ms");
             _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(30) };
@@ -210,11 +214,12 @@ namespace PowerAudioManager
                     0, 0, 0, 0,
                     Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE);
                 try { _tray = new TrayController(this, ExitApp); _tray.Init(); } catch { }
-                AudioStudio.StudioController.Instance.Initialize();
+                if (ModuleVisible("OneMic")) AudioStudio.StudioController.Instance.Initialize();
                 // UpdateIcon 调用 MemoryCleaner.GetStatus() 首次创建 PerformanceCounter ~400ms，推迟到 Idle 执行避免阻塞 OnLoaded。
                 Dispatcher.BeginInvoke(new Action(() => { try { if (_tray != null) _tray.UpdateIcon(); } catch { } }),
                     System.Windows.Threading.DispatcherPriority.ApplicationIdle);
-                try { ClipboardHistory.Start(); } catch { }
+                if (ModuleVisible("Clipboard"))
+                    try { ClipboardHistory.Start(); } catch { }
                 try { ScreenshotService.RestartExternalCaptureTakeover(); } catch (Exception ex) { AppLog.Log("Screenshot takeover startup", ex); }
                 _ = RunStartupUpdateCheckAsync();
                 try { RestartAutoCleanTimer(); } catch { }
@@ -223,16 +228,7 @@ namespace PowerAudioManager
                 _hwndSource = System.Windows.Interop.HwndSource.FromHwnd(hwnd);
                 _hwndSource?.AddHook(WndProc);
                 RefreshHotkeys();
-                _deviceWatcher = new AudioDevices.DeviceWatcher();
-                _deviceWatcher.OnChange = () =>
-                {
-                    if (_isExiting || Dispatcher.HasShutdownStarted) return;
-                    Dispatcher.BeginInvoke(new Action(() =>
-                    {
-                        if (_isExiting) return;
-                        VolumeControl.Invalidate(); LoadData(); ScheduleVolumeRefresh();
-                    }));
-                };
+                ConfigureAudioWatcher();
                 Dispatcher.BeginInvoke(new Action(() => { try { TrimWorkingSet(); } catch { } }),
                     System.Windows.Threading.DispatcherPriority.ApplicationIdle);
                 _scaling = new WindowScaling(this, () => _mainBorder);
@@ -298,6 +294,11 @@ namespace PowerAudioManager
             _audioDeviceSection = null;
             _oneMicSection = null;
             _memStatusLabel = null;
+            _volSlider = null;
+            _volLabel = null;
+            _muteBtn = null;
+            _metricRow = null;
+            _collapsedTempLabel = null;
             _root = null;
             _mainBorder = null;
             BuildUI();
@@ -305,6 +306,44 @@ namespace PowerAudioManager
             LoadData();
             if (IsLoaded) RestartTempTimer();
             Left = left; Top = top;
+        }
+
+        void ConfigureAudioWatcher()
+        {
+            if (!ModuleVisible("Audio") || _isExiting)
+            {
+                _deviceWatcher?.Stop();
+                _deviceWatcher = null;
+                return;
+            }
+            if (_deviceWatcher != null) return;
+            _deviceWatcher = new AudioDevices.DeviceWatcher();
+            _deviceWatcher.OnChange = () =>
+            {
+                if (_isExiting || Dispatcher.HasShutdownStarted || !ModuleVisible("Audio")) return;
+                Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    if (_isExiting || !ModuleVisible("Audio")) return;
+                    VolumeControl.Invalidate(); LoadData(); ScheduleVolumeRefresh();
+                }));
+            };
+        }
+
+        async System.Threading.Tasks.Task ApplyModuleRuntimeAsync()
+        {
+            if (ModuleVisible("OneMic")) AudioStudio.StudioController.Instance.Initialize();
+            else await AudioStudio.StudioController.Instance.SuspendAsync();
+            if (ModuleVisible("Clipboard")) ClipboardHistory.Start();
+            else ClipboardHistory.Stop();
+            if (ModuleVisible("Mem")) MemoryCleaner.WarmupCounters();
+            else MemoryCleaner.ReleaseCounters();
+            RestartAutoCleanTimer();
+            ConfigureAudioWatcher();
+            if (!ModuleVisible("Power")) _powerPlans = null;
+            if (!ModuleVisible("Audio")) _audioDevices = null;
+            RebuildUI();
+            RefreshHotkeys();
+            _tray?.RefreshModuleVisibility();
         }
 
         internal void ApplyFont()

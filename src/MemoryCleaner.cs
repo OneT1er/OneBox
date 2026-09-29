@@ -133,11 +133,13 @@ namespace PowerAudioManager
         // 会冻结悬浮窗约 5s。用 WarmupCounters 在后台预热，就绪前 ReadCachedBytes 返回 0。
         static System.Diagnostics.PerformanceCounter _standbyCore, _standbyNormal, _standbyReserve, _modified;
         static volatile bool _countersReady;
+        static volatile bool _countersRequested;
         static readonly object _counterLock = new object();
 
         // 启动时在后台线程预热，UI 线程无需承担 ~5s 创建开销。可多次调用。
         public static void WarmupCounters()
         {
+            _countersRequested = true;
             if (_countersReady) return;
             System.Threading.ThreadPool.QueueUserWorkItem(_ =>
             {
@@ -145,18 +147,48 @@ namespace PowerAudioManager
                 {
                     lock (_counterLock)
                     {
-                        if (_countersReady) return;
+                        if (!_countersRequested || _countersReady) return;
+                        if (_standbyCore != null && _standbyNormal != null && _standbyReserve != null && _modified != null)
+                        {
+                            _countersReady = true;
+                            return;
+                        }
+                        DisposeCounters();
                         _standbyCore = new System.Diagnostics.PerformanceCounter("Memory", "Standby Cache Core Bytes", true);
                         _standbyNormal = new System.Diagnostics.PerformanceCounter("Memory", "Standby Cache Normal Priority Bytes", true);
                         _standbyReserve = new System.Diagnostics.PerformanceCounter("Memory", "Standby Cache Reserve Bytes", true);
                         _modified = new System.Diagnostics.PerformanceCounter("Memory", "Modified Page List Bytes", true);
                         // 预热 NextValue（首次调用约 25ms 初始化），使 UI 线程首次真实读取即时。
                         try { _standbyCore.NextValue(); _standbyNormal.NextValue(); _standbyReserve.NextValue(); _modified.NextValue(); } catch { }
-                        _countersReady = true;
+                        if (_countersRequested) _countersReady = true;
+                        else DisposeCounters();
                     }
                 }
                 catch { /* non-fatal: cached bytes just reads 0 */ }
             });
+        }
+
+        public static void ReleaseCounters()
+        {
+            _countersRequested = false;
+            _countersReady = false;
+            System.Threading.ThreadPool.QueueUserWorkItem(_ =>
+            {
+                lock (_counterLock)
+                {
+                    if (_countersRequested) return;
+                    DisposeCounters();
+                }
+            });
+        }
+
+        static void DisposeCounters()
+        {
+            _countersReady = false;
+            try { _standbyCore?.Dispose(); } catch { } finally { _standbyCore = null; }
+            try { _standbyNormal?.Dispose(); } catch { } finally { _standbyNormal = null; }
+            try { _standbyReserve?.Dispose(); } catch { } finally { _standbyReserve = null; }
+            try { _modified?.Dispose(); } catch { } finally { _modified = null; }
         }
 
         static ulong ReadCachedBytes()

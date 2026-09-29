@@ -21,6 +21,7 @@ namespace PowerAudioManager
 
         internal void LoadData()
         {
+            bool loadPower = ModuleVisible("Power"), loadAudio = ModuleVisible("Audio");
             // A full data/device refresh supersedes a pending drag value. Do
             // this at the refresh boundary, not inside UpdateVolumeUI: the
             // latter is also called after a real user volume command and must
@@ -29,6 +30,7 @@ namespace PowerAudioManager
             try { UpdateVolumeUI(); } catch { }
             try { UpdateMemoryUI(); } catch { }
             try { UpdateTrayTooltip(); } catch { }
+            if (!loadPower && !loadAudio) return;
             // 防止卡死的后台刷新（如 powercfg 在策略刷新时挂起）：超过 10s 认为已死，允许新的一次。
             if (_loading && (DateTime.Now - _loadStartTime).TotalSeconds < 10) return;
             _loading = true;
@@ -38,8 +40,10 @@ namespace PowerAudioManager
             {
                 List<PowerPlanInfo> plans = null;
                 List<AudioDeviceInfo> devices = null;
-                try { plans = PowerPlanService.GetPowerPlans(); } catch (Exception ex) { AppLog.Log("LoadData plans", ex); }
-                try { devices = AudioDevices.GetOutputDevices(); } catch (Exception ex) { AppLog.Log("LoadData devices", ex); }
+                if (loadPower && ModuleVisible("Power"))
+                    try { plans = PowerPlanService.GetPowerPlans(); } catch (Exception ex) { AppLog.Log("LoadData plans", ex); }
+                if (loadAudio && ModuleVisible("Audio"))
+                    try { devices = AudioDevices.GetOutputDevices(); } catch (Exception ex) { AppLog.Log("LoadData devices", ex); }
                 try
                 {
                     if (_isExiting || Dispatcher.HasShutdownStarted)
@@ -51,8 +55,8 @@ namespace PowerAudioManager
                     {
                         if (_isExiting) { _loading = false; return; }
                         _loading = false;
-                        RenderPlans(plans);
-                        RenderDevices(devices);
+                        if (loadPower && ModuleVisible("Power")) RenderPlans(plans);
+                        if (loadAudio && ModuleVisible("Audio")) RenderDevices(devices);
                     }));
                 }
                 catch (Exception ex)
@@ -284,12 +288,22 @@ namespace PowerAudioManager
         {
             get
             {
-                string plan = "(无)", dev = "(无)";
-                try { if (_powerPlans != null) { var p = _powerPlans.Find(x => x.IsActive || x.Guid == _currentPlanId); if (p != null) plan = p.Name; } } catch { }
-                try { if (_audioDevices != null) { var d = _audioDevices.Find(x => x.IsDefault); if (d != null) dev = d.Name; } } catch { }
-                string mem = "";
-                try { var ms = MemoryCleaner.GetStatus(); if (ms != null) mem = string.Format(System.Environment.NewLine + "内存: {0:0.0}/{1:0.0} GB ({2}%) · 已缓存 {3:0.0}GB", (ms.TotalBytes - ms.AvailableBytes) / 1073741824.0, ms.TotalBytes / 1073741824.0, ms.MemoryLoadPercent, ms.CachedBytes / 1073741824.0); } catch { }
-                return "电源计划: " + plan + System.Environment.NewLine + "音频输出: " + dev + mem;
+                var lines = new List<string> { "OneBox" };
+                if (ModuleVisible("Power"))
+                {
+                    string plan = "(无)";
+                    try { if (_powerPlans != null) { var p = _powerPlans.Find(x => x.IsActive || x.Guid == _currentPlanId); if (p != null) plan = p.Name; } } catch { }
+                    lines.Add("电源计划: " + plan);
+                }
+                if (ModuleVisible("Audio"))
+                {
+                    string device = "(无)";
+                    try { if (_audioDevices != null) { var d = _audioDevices.Find(x => x.IsDefault); if (d != null) device = d.Name; } } catch { }
+                    lines.Add("音频输出: " + device);
+                }
+                if (ModuleVisible("Mem"))
+                    try { var ms = MemoryCleaner.GetStatus(); if (ms != null) lines.Add(string.Format("内存: {0:0.0}/{1:0.0} GB ({2}%) · 已缓存 {3:0.0}GB", (ms.TotalBytes - ms.AvailableBytes) / 1073741824.0, ms.TotalBytes / 1073741824.0, ms.MemoryLoadPercent, ms.CachedBytes / 1073741824.0)); } catch { }
+                return string.Join(System.Environment.NewLine, lines);
             }
         }
 

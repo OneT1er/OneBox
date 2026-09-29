@@ -10,11 +10,9 @@ internal sealed class UserRuntime
 {
     private readonly string _userSid;
     private readonly CancellationTokenSource _stop = new();
-    private readonly object _hardwareGate = new();
     private Task _memoryServerTask;
-    private Task _hardwareGuardianTask;
-    private Process _hardwareProcess;
-    private bool _stopping;
+    private Task _hardwareServerTask;
+    private HardwareRelayServer _hardwareServer;
 
     public UserRuntime(string userSid) => _userSid = userSid;
 
@@ -25,7 +23,10 @@ internal sealed class UserRuntime
         // task would otherwise leave this session without memory IPC until
         // the service itself restarted.
         _memoryServerTask = RunMemoryServerAsync(_stop.Token);
-        _hardwareGuardianTask = GuardHardwareAsync(_stop.Token);
+        string helperPath = Path.Combine(AppContext.BaseDirectory, ServiceConstants.HardwareExecutable);
+        CleanupStaleHardwarePipe(helperPath, _userSid);
+        _hardwareServer = new HardwareRelayServer(_userSid, helperPath);
+        _hardwareServerTask = RunHardwareServerAsync(_stop.Token);
     }
 
     private async Task RunMemoryServerAsync(CancellationToken cancellationToken)
@@ -50,60 +51,19 @@ internal sealed class UserRuntime
         }
     }
 
-    private async Task GuardHardwareAsync(CancellationToken cancellationToken)
+    private async Task RunHardwareServerAsync(CancellationToken cancellationToken)
     {
-        string helperPath = Path.Combine(AppContext.BaseDirectory, ServiceConstants.HardwareExecutable);
         while (!cancellationToken.IsCancellationRequested)
         {
-            Process process = null;
             try
             {
-                if (!File.Exists(helperPath))
-                {
-                    ServiceLog.Write("hardware helper missing: " + helperPath);
-                    await Task.Delay(TimeSpan.FromSeconds(10), cancellationToken).ConfigureAwait(false);
-                    continue;
-                }
-                CleanupStaleHardwarePipe(helperPath, _userSid);
-                process = Process.Start(new ProcessStartInfo
-                {
-                    FileName = helperPath,
-                    Arguments = $"--user-sid {_userSid}",
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                    WorkingDirectory = AppContext.BaseDirectory,
-                });
-                if (process == null) throw new InvalidOperationException("Hardware helper did not start.");
-                bool stopImmediately;
-                lock (_hardwareGate)
-                {
-                    stopImmediately = _stopping;
-                    if (!stopImmediately) _hardwareProcess = process;
-                }
-                if (stopImmediately)
-                {
-                    TerminateHardwareProcess(process);
-                    return;
-                }
-                ServiceLog.Write($"hardware helper started sid={_userSid} pid={process.Id}");
-                await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
-                if (cancellationToken.IsCancellationRequested) break;
-                ServiceLog.Write($"hardware helper exited sid={_userSid}; restarting in 3s");
-                await Task.Delay(TimeSpan.FromSeconds(3), cancellationToken).ConfigureAwait(false);
+                await _hardwareServer.RunAsync(cancellationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { break; }
             catch (Exception ex)
             {
-                ServiceLog.Write("hardware guardian error: " + ex.Message);
+                ServiceLog.Write("hardware relay error: " + ex.Message);
                 await Task.Delay(TimeSpan.FromSeconds(3), cancellationToken).ConfigureAwait(false);
-            }
-            finally
-            {
-                lock (_hardwareGate)
-                {
-                    if (ReferenceEquals(_hardwareProcess, process)) _hardwareProcess = null;
-                }
-                process?.Dispose();
             }
         }
     }
@@ -208,26 +168,11 @@ internal sealed class UserRuntime
 
     public async Task StopAsync()
     {
-        Process process;
-        lock (_hardwareGate)
-        {
-            _stopping = true;
-            process = _hardwareProcess;
-        }
-        // Kill and wait before cancellation can make the guardian dispose its
-        // local Process reference. The stopping flag closes the startup race:
-        // a Process.Start that overlaps StopAsync is killed by the creator.
-        TerminateHardwareProcess(process);
         _stop.Cancel();
-        Task[] tasks = new[] { _memoryServerTask, _hardwareGuardianTask }.Where(task => task != null).ToArray();
+        _hardwareServer?.Stop();
+        Task[] tasks = new[] { _memoryServerTask, _hardwareServerTask }.Where(task => task != null).ToArray();
         try { await Task.WhenAll(tasks).WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false); } catch { }
         _stop.Dispose();
     }
 
-    private static void TerminateHardwareProcess(Process process)
-    {
-        if (process == null) return;
-        try { if (!process.HasExited) process.Kill(entireProcessTree: true); } catch { }
-        try { process.WaitForExit(5000); } catch { }
-    }
 }

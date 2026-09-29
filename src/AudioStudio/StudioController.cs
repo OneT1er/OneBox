@@ -25,9 +25,16 @@ internal sealed class StudioController : IDisposable
     public string T(string zh, string en) => zh;
     public void Initialize()
     {
-        if (_initialized) return; _initialized = true;
-        _timer.Tick += async (_, _) => await PollAsync(); _timer.Start();
+        if (_disposed || _timer.IsEnabled) return;
+        if (!_initialized) { _timer.Tick += async (_, _) => await PollAsync(); _initialized = true; }
+        _timer.Start();
         if (Settings.AutoStartAudio) _ = StartAsync();
+    }
+    public async Task SuspendAsync()
+    {
+        _timer.Stop();
+        if (Wanted || Engine != null) await StopAsync();
+        _window?.Close();
     }
     public void Show(MainWindow owner)
     {
@@ -86,7 +93,7 @@ internal sealed class StudioController : IDisposable
         }
         bool modelChanged = s.Model != Settings.Model;
         Apply(s);
-        if (Wanted && (feature == "Music" || feature == "Monitor" || modelChanged)) await StartAsync();
+        if (Wanted && (feature == "Denoise" || feature == "Music" || feature == "Monitor" || modelChanged)) await StartAsync();
     }
     public async Task StartAsync()
     {
@@ -148,9 +155,12 @@ internal sealed class StudioController : IDisposable
                 bool reconnect = Engine == null || !Engine.Running || Engine.Error != null;
                 if (!reconnect)
                 {
-                    var inputs = await Task.Run(() => StudioDevices.List(DataFlow.Capture));
-                    bool available = inputs.Any(x => x.Id == Settings.InputId);
-                    reconnect = Settings.Microphone && available != !string.IsNullOrEmpty(Engine.InputId);
+                    if (Settings.Microphone)
+                    {
+                        var inputs = await Task.Run(() => StudioDevices.List(DataFlow.Capture));
+                        bool available = inputs.Any(x => x.Id == Settings.InputId);
+                        reconnect = available != !string.IsNullOrEmpty(Engine.InputId);
+                    }
                     if (Settings.Monitor || Settings.SoundEffects.Count > 0)
                     {
                         var outputs = await Task.Run(() => StudioDevices.List(DataFlow.Render));

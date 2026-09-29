@@ -23,6 +23,7 @@ namespace PowerAudioManager
         MenuItem _topmostItem;
         MenuItem _lockItem;
         MenuItem _autoStartItem;
+        MenuItem _oneMicItem, _memoryItem, _hiddenAudioItem;
         DispatcherTimer _recreateTimer;
         IDisposable _createdSubscription;
         IDisposable _removedSubscription;
@@ -54,7 +55,7 @@ namespace PowerAudioManager
                 };
                 _menu = CreateTrayMenu();
                 AddMenuItem("显示窗口", async (_, __) => await _owner.ExecuteCommandAsync(AppCommandId.WindowShow, CommandSource.Tray));
-                AddMenuItem("OneMic...", async (_, __) => await _owner.ExecuteCommandAsync(AppCommandId.StudioOpen, CommandSource.Tray));
+                _oneMicItem = AddMenuItem("OneMic...", async (_, __) => await _owner.ExecuteCommandAsync(AppCommandId.StudioOpen, CommandSource.Tray));
                 _autoStartItem = new MenuItem { Header = "开机自启", IsCheckable = true, IsChecked = AutoStartService.GetCurrent() != AutoStartMethod.None };
                 _autoStartItem.Click += async (_, __) =>
                 {
@@ -107,6 +108,7 @@ namespace PowerAudioManager
                 };
                 _menu.Items.Add(_lockItem);
                 var hiddenSub = new MenuItem { Header = "显示已隐藏设备" };
+                _hiddenAudioItem = hiddenSub;
                 hiddenSub.SubmenuOpened += (_, __) =>
                 {
                     hiddenSub.Items.Clear(); bool any = false;
@@ -120,16 +122,21 @@ namespace PowerAudioManager
                 };
                 _menu.Items.Add(hiddenSub);
                 _menu.Items.Add(new Separator());
-                AddMenuItem("内存清理", async (_, __) => await _owner.ExecuteCommandAsync(AppCommandId.MemoryClean, CommandSource.Tray,
+                _memoryItem = AddMenuItem("内存清理", async (_, __) => await _owner.ExecuteCommandAsync(AppCommandId.MemoryClean, CommandSource.Tray,
                     new MemoryCleanPayload(MemoryCleaner.GetSavedFlags())));
                 AddMenuItem("设置...", async (_, __) => await _owner.ExecuteCommandAsync(AppCommandId.SettingsOpen, CommandSource.Tray, new SettingsOpenPayload(0)));
                 AddMenuItem("检查更新...", async (_, __) => await _owner.ExecuteCommandAsync(AppCommandId.UpdateCheck, CommandSource.Tray, new UpdateCheckPayload(true)));
                 _menu.Items.Add(new Separator());
                 AddMenuItem("退出", async (_, __) => await _owner.ExecuteCommandAsync(AppCommandId.AppExit, CommandSource.Tray));
+                _menu.Opened += (_, _) => RefreshModuleVisibility();
+                RefreshModuleVisibility();
                 _tray.ContextMenu = _menu;
                 _tray.TrayLeftMouseDown += (_, __) => _ = _owner.ExecuteCommandAsync(AppCommandId.WindowShow, CommandSource.Tray);
-                _tray.TrayMiddleMouseDown += (_, __) => _ = _owner.ExecuteCommandAsync(AppCommandId.MemoryClean, CommandSource.Tray,
-                    new MemoryCleanPayload(MemoryCleaner.GetSavedFlags()));
+                _tray.TrayMiddleMouseDown += (_, __) =>
+                {
+                    if (MainWindow.ModuleVisible("Mem")) _ = _owner.ExecuteCommandAsync(AppCommandId.MemoryClean, CommandSource.Tray,
+                        new MemoryCleanPayload(MemoryCleaner.GetSavedFlags()));
+                };
                 if (_tray.TrayIcon != null)
                 {
                     _createdSubscription = _tray.TrayIcon.SubscribeToCreated((_, __) =>
@@ -244,11 +251,19 @@ namespace PowerAudioManager
             _menu = null;
         }
 
-        void AddMenuItem(string header, RoutedEventHandler action)
+        MenuItem AddMenuItem(string header, RoutedEventHandler action)
         {
             var item = new MenuItem { Header = header };
             item.Click += action;
             _menu.Items.Add(item);
+            return item;
+        }
+
+        public void RefreshModuleVisibility()
+        {
+            if (_oneMicItem != null) _oneMicItem.Visibility = MainWindow.ModuleVisible("OneMic") ? Visibility.Visible : Visibility.Collapsed;
+            if (_memoryItem != null) _memoryItem.Visibility = MainWindow.ModuleVisible("Mem") ? Visibility.Visible : Visibility.Collapsed;
+            if (_hiddenAudioItem != null) _hiddenAudioItem.Visibility = MainWindow.ModuleVisible("Audio") ? Visibility.Visible : Visibility.Collapsed;
         }
 
         // H.NotifyIcon hosts a WPF ContextMenu in a separate Popup window. The

@@ -120,7 +120,7 @@ namespace PowerAudioManager
         public void RestartAutoCleanTimer()
         {
             if (_autoCleanTimer != null) _autoCleanTimer.Stop();
-            if (!AppPrefs.GetBool("AutoCleanEnabled", false)) return;
+            if (!ModuleVisible("Mem") || !AppPrefs.GetBool("AutoCleanEnabled", false)) return;
             // 每分钟滴答一次，每次判断是否需要清理。
             _autoCleanTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(60) };
             _autoCleanTimer.Tick += (s, e) => AutoCleanCheck();

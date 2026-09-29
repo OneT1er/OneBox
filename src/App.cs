@@ -133,7 +133,8 @@ namespace PowerAudioManager
             }
 
             // 后台预热内存 PerformanceCounter：.NET 10 冷启动首次构造 ~5s，GetStatus() 在 UI 线程执行，提前启动避免界面卡顿。
-            try { PowerAudioManager.MemoryCleaner.WarmupCounters(); } catch { }
+            if (PowerAudioManager.MainWindow.ModuleVisible("Mem"))
+                try { PowerAudioManager.MemoryCleaner.WarmupCounters(); } catch { }
 
             // 单实例守护：第二个启动通过 Mutex.TryOpenExisting 检测已有实例，发信号激活窗口后退出。
             // 使用 TryOpenExisting（仅探测，不获取所有权）+ EventWaitHandle 唤醒第一个实例。

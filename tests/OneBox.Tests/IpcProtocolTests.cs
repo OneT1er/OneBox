@@ -98,6 +98,20 @@ public sealed class IpcProtocolTests
     }
 
     [Fact]
+    public async Task ErrorResponseCanBeFramedWithoutAResultPayload()
+    {
+        var request = IpcRequest.Create(IpcCommand.SubscribeHardware, new HardwareSubscribePayload());
+        var expected = IpcResponse.Error(request, IpcErrorCode.ServiceUnavailable, "Hardware helper is unavailable.");
+        using var stream = new MemoryStream();
+        await IpcFraming.WriteAsync(stream, expected, CancellationToken.None);
+        stream.Position = 0;
+        var actual = await IpcFraming.ReadAsync<IpcResponse>(stream, CancellationToken.None);
+        Assert.False(actual.Success);
+        Assert.Equal(request.RequestId, actual.RequestId);
+        Assert.Equal(IpcErrorCode.ServiceUnavailable, actual.ErrorCode);
+    }
+
+    [Fact]
     public void PipeNames_AreStableAndIsolatedBySid()
     {
         const string first = "S-1-5-21-100-200-300-1001";

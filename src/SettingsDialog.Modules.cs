@@ -13,6 +13,8 @@ namespace PowerAudioManager
         {
             var stack = new StackPanel { Margin = new Thickness(20) };
             stack.Children.Add(new TextBlock { Text = "悬浮窗板块", Foreground = Brushes.White, FontSize = 13, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 0, 0, 12) });
+            stack.Children.Add(new TextBlock { Text = "关闭板块会停用对应后台功能和快捷键；“截图文件夹”只控制入口，截图功能在“截图”页设置。",
+                Foreground = fg, FontSize = 12, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 10) });
 
             var cbPower = MakeCb("电源计划", "Power");
             var cbAudio = MakeCb("音频输出", "Audio");

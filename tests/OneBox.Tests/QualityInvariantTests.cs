@@ -57,10 +57,13 @@ public sealed class QualityInvariantTests
     public void PipeServers_ObserveConnectionHandlerTasks()
     {
         string hardware = ReadSource("src", "OneBox.Hardware", "HardwarePipeServer.cs");
+        string relay = ReadSource("src", "OneBox.Service", "HardwareRelayServer.cs");
         string service = ReadSource("src", "OneBox.Service", "MemoryPipeServer.cs");
         Assert.DoesNotContain("ContinueWith(_ => handlers.Release()", hardware, StringComparison.Ordinal);
+        Assert.DoesNotContain("ContinueWith(_ => handlers.Release()", relay, StringComparison.Ordinal);
         Assert.DoesNotContain("ContinueWith(_ => handlers.Release()", service, StringComparison.Ordinal);
         Assert.Contains("HandleConnectionAndReleaseAsync", hardware, StringComparison.Ordinal);
+        Assert.Contains("HandleAndReleaseAsync", relay, StringComparison.Ordinal);
         Assert.Contains("HandleConnectionAndReleaseAsync", service, StringComparison.Ordinal);
     }
 
@@ -85,16 +88,17 @@ public sealed class QualityInvariantTests
     }
 
     [Fact]
-    public void HardwareRuntime_StopOwnsAndKillsHelperBeforeCancellingGuardian()
+    public void HardwareRuntime_OnlyStartsHelperAfterSubscriptionAndStopsOwnedProcesses()
     {
-        string source = ReadSource("src", "OneBox.Service", "UserRuntime.cs");
-        Assert.Contains("_hardwareGate", source, StringComparison.Ordinal);
-        Assert.Contains("_stopping", source, StringComparison.Ordinal);
-        int stop = source.IndexOf("public async Task StopAsync()", StringComparison.Ordinal);
-        int terminate = source.IndexOf("TerminateHardwareProcess(process);", stop, StringComparison.Ordinal);
-        int cancel = source.IndexOf("_stop.Cancel();", stop, StringComparison.Ordinal);
-        Assert.True(terminate >= 0 && cancel > terminate,
-            "StopAsync must terminate the owned helper before cancelling the guardian.");
+        string runtime = ReadSource("src", "OneBox.Service", "UserRuntime.cs");
+        string relay = ReadSource("src", "OneBox.Service", "HardwareRelayServer.cs");
+        Assert.DoesNotContain("GuardHardwareAsync", runtime, StringComparison.Ordinal);
+        Assert.Contains("_hardwareServer?.Stop();", runtime, StringComparison.Ordinal);
+        int validate = relay.IndexOf("IpcValidator.Validate(request, IpcCommand.SubscribeHardware)", StringComparison.Ordinal);
+        int start = relay.IndexOf("process = Process.Start", StringComparison.Ordinal);
+        Assert.True(validate >= 0 && start > validate, "The helper must start only after a validated subscription.");
+        Assert.Contains("_stopping = true", relay, StringComparison.Ordinal);
+        Assert.Contains("foreach (var process in _processes) Terminate(process)", relay, StringComparison.Ordinal);
     }
 
     [Fact]
