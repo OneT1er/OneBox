@@ -63,6 +63,17 @@ internal static class StudioDevices
         catch { }
         return List(DataFlow.Capture).FirstOrDefault(x => !x.IsCable)?.Id ?? "";
     }
+    public static string DefaultSpeaker()
+    {
+        try
+        {
+            using var enumerator = new MMDeviceEnumerator();
+            using var device = enumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia);
+            if (!new StudioDevice(device.ID, device.FriendlyName).IsCable) return device.ID;
+        }
+        catch { }
+        return List(DataFlow.Render).FirstOrDefault(x => !x.IsCable)?.Id ?? "";
+    }
     public static StudioDevice[] List(DataFlow flow)
     {
         using var e = new MMDeviceEnumerator();

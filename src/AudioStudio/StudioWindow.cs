@@ -1,10 +1,12 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
 using NAudio.CoreAudioApi;
@@ -23,6 +25,9 @@ internal sealed class StudioWindow
     ComboBox _voicePreset;
     string[] _presetLabels;
     TextBlock _status, _levels, _chatNotice;
+    TextBlock _soundpadStatus, _cableStatus;
+    StackPanel _soundpadRows;
+    Button _installCable;
     Button _start;
     StudioSpectrum _spectrum;
     StudioMeter _inputMeter, _outputMeter;
@@ -41,6 +46,7 @@ internal sealed class StudioWindow
         _window.MinWidth = 560; _window.MinHeight = 500;
         _window.Closed += (_, _) => { _timer.Stop(); _controller.Changed -= Sync; Closed?.Invoke(this, EventArgs.Empty); };
         _window.StateChanged += (_, _) => { if (_window.WindowState == WindowState.Minimized) { _window.Hide(); _window.WindowState = WindowState.Normal; } };
+        _window.PreviewKeyDown += SoundpadKeyDown;
         _controller.Changed += Sync;
         Build();
         _timer.Tick += async (_, _) =>
@@ -150,7 +156,10 @@ internal sealed class StudioWindow
             Grid.SetColumn(column, col); deviceGrid.Children.Add(column);
         }
         devices.Children.Add(deviceGrid);
-        devices.Children.Add(Button(T("下载 VB-CABLE 官方安装包", "Download official VB-CABLE package"), () => _ = VbCableInstaller.DownloadAsync(_window)));
+        _cableStatus = Text("正在检查 VB-CABLE…"); _cableStatus.Foreground = Muted;
+        devices.Children.Add(_cableStatus);
+        _installCable = Button("安装 VB-CABLE 官方驱动", () => _ = VbCableInstaller.InstallAsync(_window));
+        devices.Children.Add(_installCable);
         var voice = Card(T("2  调整人声", "2  Adjust your voice"));
         Toggle(voice, T("混入麦克风", "Include microphone"), x => x.Microphone, (x, v) => x.Microphone = v, true);
         var presets = new[] { T("安静", "Quiet"), T("标准", "Standard"), T("嘈杂", "Noisy"), T("直播", "Live"), T("自定义", "Custom") };
@@ -179,8 +188,17 @@ internal sealed class StudioWindow
         { x.ApplicationPath = ((StudioApplication)item).Path; x.ApplicationPid = ((StudioApplication)item).Pid; }, true));
         Toggle(music, T("分享应用音乐", "Share application music"), x => x.Music, (x, v) => x.Music = v, true);
         Slider(music, T("朋友听到的音乐音量", "Music volume for friends"), s.MusicGain * 100, 200, value => Change(x => x.MusicGain = value / 100));
+        var soundpad = Card("4  音效板", "导入音效后点击播放，朋友和你都能听到；无需开启麦克风监听。Ctrl+Shift+1～9 全局播放，Ctrl+Shift+0 停止。");
+        var soundpadActions = new WrapPanel();
+        soundpadActions.Children.Add(Button("添加音效", AddSounds));
+        soundpadActions.Children.Add(Button("停止音效", () => { _controller.StopSound(); _soundpadStatus.Text = "已停止"; }));
+        soundpad.Children.Add(soundpadActions);
+        Slider(soundpad, "音效音量", s.SoundpadGain * 100, 200, value => Change(x => x.SoundpadGain = value / 100));
+        _soundpadStatus = Text(""); _soundpadStatus.Foreground = Muted; soundpad.Children.Add(_soundpadStatus);
+        _soundpadRows = new StackPanel(); soundpad.Children.Add(_soundpadRows);
+        RefreshSoundpadRows();
         var advanced = Card(T("监听与音效", "Monitoring and effects"), T("日常听音乐无需开启监听；最终输出包含你的人声和音乐。", "Monitoring is optional; Final output includes your voice and music."));
-        _monitor = Combo(advanced, T("监听耳机", "Monitor headphones"), Array.Empty<object>(), null, item => Change(x => x.MonitorId = ((StudioDevice)item).Id, true));
+        _monitor = Combo(advanced, "本地音效 / 监听耳机（默认使用系统输出）", Array.Empty<object>(), null, item => Change(x => x.MonitorId = ((StudioDevice)item).Id, true));
         string[] points = { T("原始输入", "Raw input"), T("降噪后", "After denoise"), T("增益后", "After gain"), T("EQ 后", "After EQ"), T("最终输出", "Final output") };
         Combo(advanced, T("监听位置", "Monitor point"), points, points[s.MonitorPoint], item => Change(x => x.MonitorPoint = Array.IndexOf(points, (string)item)));
         Toggle(advanced, T("开启监听", "Enable monitoring"), x => x.Monitor, (x, v) => x.Monitor = v, true);
@@ -198,6 +216,92 @@ internal sealed class StudioWindow
         expander.Expanded += (_, _) => { if (voice) _voiceExpanded = true; else _effectsExpanded = true; };
         expander.Collapsed += (_, _) => { if (voice) _voiceExpanded = false; else _effectsExpanded = false; };
         border.Child = expander;
+    }
+    void AddSounds()
+    {
+        var picker = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = "选择音效文件",
+            Filter = "音频文件|*.wav;*.mp3;*.wma;*.aif;*.aiff;*.m4a|所有文件|*.*",
+            Multiselect = true
+        };
+        if (picker.ShowDialog(_window) != true) return;
+        var settings = _controller.Settings.Copy();
+        int previousCount = settings.SoundpadFiles.Count;
+        foreach (string path in picker.FileNames)
+        {
+            if (settings.SoundpadFiles.Count >= 64) break;
+            if (!settings.SoundpadFiles.Any(x => string.Equals(x, path, StringComparison.OrdinalIgnoreCase)))
+                settings.SoundpadFiles.Add(path);
+        }
+        _controller.Apply(settings);
+        if (previousCount == 0 && settings.SoundpadFiles.Count > 0 && _controller.Wanted)
+            _ = _controller.StartAsync();
+        _owner.RefreshHotkeys();
+        RefreshSoundpadRows();
+    }
+    void RefreshSoundpadRows()
+    {
+        if (_soundpadRows == null) return;
+        _soundpadRows.Children.Clear();
+        var files = _controller.Settings.SoundpadFiles;
+        if (files.Count == 0)
+        {
+            _soundpadRows.Children.Add(Text("还没有音效。支持 WAV、MP3 和 Windows 可解码的音频文件。"));
+            return;
+        }
+        for (int i = 0; i < files.Count; i++)
+        {
+            string path = files[i];
+            var row = new DockPanel { LastChildFill = true, Margin = new Thickness(0, 2, 0, 2) };
+            var remove = Button("移除", () =>
+            {
+                _controller.StopSound();
+                var changed = _controller.Settings.Copy();
+                changed.SoundpadFiles.RemoveAll(x => string.Equals(x, path, StringComparison.OrdinalIgnoreCase));
+                _controller.Apply(changed);
+                _owner.RefreshHotkeys();
+                RefreshSoundpadRows();
+            });
+            DockPanel.SetDock(remove, Dock.Right); row.Children.Add(remove);
+            string label = (i < 9 ? $"Ctrl+Shift+{i + 1}  " : "") + Path.GetFileNameWithoutExtension(path)
+                + (File.Exists(path) ? "" : "  · 文件丢失");
+            var play = Button(label, () => _ = PlaySoundAsync(path));
+            play.HorizontalContentAlignment = HorizontalAlignment.Left;
+            play.ToolTip = path;
+            row.Children.Add(play);
+            _soundpadRows.Children.Add(row);
+        }
+    }
+    async Task PlaySoundAsync(string path)
+    {
+        try
+        {
+            _soundpadStatus.Text = "正在加载音效…";
+            await _controller.PlaySoundAsync(path);
+            _soundpadStatus.Text = "正在播放：" + Path.GetFileNameWithoutExtension(path);
+        }
+        catch (Exception ex)
+        {
+            _soundpadStatus.Text = "播放失败：" + ex.Message;
+            AppLog.Log("OneMic soundpad", ex);
+        }
+    }
+    void SoundpadKeyDown(object sender, KeyEventArgs e)
+    {
+        if (Keyboard.Modifiers != (ModifierKeys.Control | ModifierKeys.Shift)) return;
+        if (e.Key == Key.D0 || e.Key == Key.NumPad0)
+        {
+            e.Handled = true;
+            _controller.StopSound();
+            if (_soundpadStatus != null) _soundpadStatus.Text = "已停止";
+            return;
+        }
+        int index = e.Key >= Key.D1 && e.Key <= Key.D9 ? e.Key - Key.D1
+            : e.Key >= Key.NumPad1 && e.Key <= Key.NumPad9 ? e.Key - Key.NumPad1 : -1;
+        if (index < 0 || index >= _controller.Settings.SoundpadFiles.Count) return;
+        e.Handled = true;
+        _ = PlaySoundAsync(_controller.Settings.SoundpadFiles[index]);
     }
     async Task BenchmarkAsync(TextBlock output)
     {
@@ -229,8 +333,20 @@ internal sealed class StudioWindow
                 StudioDevices.Applications(), StudioDevices.CaptureClients()));
             if (_window.Dispatcher.HasShutdownStarted) return;
             var s = _controller.Settings;
-            Set(_input, devices.Item1, s.InputId); Set(_output, devices.Item2.Where(x => x.IsVbCableInput).ToArray(), s.OutputId);
+            var cables = devices.Item2.Where(x => x.IsVbCableInput).ToArray();
+            if (cables.Length == 1 && !cables.Any(x => x.Id == s.OutputId))
+            {
+                var updated = s.Copy(); updated.OutputId = cables[0].Id;
+                _controller.Apply(updated);
+                s = _controller.Settings;
+                if (_controller.Wanted) _ = _controller.StartAsync();
+            }
+            Set(_input, devices.Item1, s.InputId); Set(_output, cables, s.OutputId);
             Set(_monitor, devices.Item2.Where(x => !x.IsCable).ToArray(), s.MonitorId);
+            _cableStatus.Text = cables.Length > 0
+                ? "已检测到 VB-CABLE。请在 Oopz 中把麦克风选为 CABLE Output。"
+                : "未检测到 VB-CABLE。点击下方按钮下载并打开官方安装程序。";
+            _installCable.Visibility = cables.Length > 0 ? Visibility.Collapsed : Visibility.Visible;
             var chat = devices.Item4.FirstOrDefault(x => x.Active && !x.IsVbCable)
                 ?? devices.Item4.FirstOrDefault(x => x.Active && x.IsVbCable);
             _chatNotice.Text = chat == null ? "" : chat.IsVbCable
@@ -266,6 +382,13 @@ internal sealed class StudioWindow
             bool building = _building; _building = true; _voicePreset.SelectedItem = _presetLabels[4]; _building = building;
         }
         var e = _controller.Engine;
+        if (_soundpadStatus != null && !string.IsNullOrEmpty(e?.PlayingSoundName))
+        {
+            string playing = "正在播放：" + e.PlayingSoundName;
+            if (_soundpadStatus.Text != playing) _soundpadStatus.Text = playing;
+        }
+        else if (_soundpadStatus?.Text.StartsWith("正在播放：", StringComparison.Ordinal) == true)
+            _soundpadStatus.Text = "播放完毕";
         _inputMeter.Value = Math.Clamp(20 * Math.Log10(Math.Max(.000001, e?.InputPeak ?? 0)) + 60, 0, 60);
         _outputMeter.Value = Math.Clamp(20 * Math.Log10(Math.Max(.000001, e?.OutputPeak ?? 0)) + 60, 0, 60);
         _levels.Text = T("麦克风", "Microphone") + $"  {Db(e?.InputPeak ?? 0)} dB    " +
@@ -291,8 +414,8 @@ internal sealed class StudioWindow
     {
         var panel = new StackPanel { Margin = new Thickness(22) };
         panel.Children.Add(Text(T("三步开始共享", "Start sharing in three steps"), 20));
-        panel.Children.Add(Text(T("1. 下载 VB-Audio 官方安装包，解压后以管理员身份运行 VBCABLE_Setup_x64.exe，按提示重启。\n\n2. 在 OneBox 选择真实麦克风、CABLE Input 和音乐软件，再开始共享。\n\n3. 在 Oopz 等通话软件中将麦克风选为 CABLE Output。耳机输出保持原样。", "1. Download the official VB-Audio package, extract it, run VBCABLE_Setup_x64.exe as administrator, and restart if prompted.\n\n2. Select your microphone, CABLE Input, and music app in OneBox, then start sharing.\n\n3. Select CABLE Output as the microphone in your chat app. Keep your normal headphone output.")));
-        panel.Children.Add(Button(T("下载 VB-CABLE 官方安装包", "Download official VB-CABLE package"), () => _ = VbCableInstaller.DownloadAsync(_window)));
+        panel.Children.Add(Text("1. 点击“安装 VB-CABLE 官方驱动”，OneMic 会下载并打开官方安装程序。确认管理员授权，按安装程序提示完成安装并重启。\n\n2. 在 OneMic 选择真实麦克风和 CABLE Input，开始共享。音效板可直接导入音频文件。\n\n3. 在 Oopz 中把麦克风设为 CABLE Output，耳机保持原来的输出设备。"));
+        panel.Children.Add(Button("安装 VB-CABLE 官方驱动", () => _ = VbCableInstaller.InstallAsync(_window)));
         panel.Children.Add(Button(T("打开 VB-CABLE 官网", "Open VB-CABLE website"), () => Open("https://vb-audio.com/Cable/")));
         panel.Children.Add(Button(T("降噪运行库 · Microsoft 官方", "Denoising runtime · Microsoft official"), () => Open("https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist")));
         panel.Children.Add(Text(T("常见问题", "FAQ"), 17));

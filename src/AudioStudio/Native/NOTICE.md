@@ -12,5 +12,6 @@ RNNoise: Xiph / Mozilla (BSD-3-Clause), through YellowDogMan.RRNoise.NET 0.1.9 (
 https://github.com/Yellow-Dog-Man/RNNoise.NET
 https://github.com/xiph/rnnoise
 
-VB-CABLE is not distributed or installed by OneBox. The setup guide opens the author's website:
+VB-CABLE is not bundled with OneBox. On request, OneMic downloads the original
+vendor archive and opens its interactive installer with administrator consent.
 https://vb-audio.com/Cable/

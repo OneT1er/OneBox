@@ -1,5 +1,7 @@
 using System;
+using System.IO;
 using System.Linq;
+using NAudio.Wave;
 using PowerAudioManager.AudioStudio;
 using Xunit;
 
@@ -46,6 +48,51 @@ public sealed class AudioStudioTests
         using var dsp = new StudioDsp(new Identity()); var output = new float[960];
         dsp.Process(new float[480], Enumerable.Repeat(.2f, 960).ToArray(), output, new float[960], new StudioSettings { Music = false });
         Assert.All(output, x => Assert.Equal(0, x));
+    }
+    [Fact]
+    public void SoundpadReachesVirtualMicWithoutMusicAndIsLimited()
+    {
+        using var dsp = new StudioDsp(new Identity());
+        var output = new float[960];
+        var sound = Enumerable.Repeat(.8f, 960).ToArray();
+        dsp.Process(new float[480], new float[960], sound, output, new float[960],
+            new StudioSettings { Microphone = false, Music = false, SoundpadGain = 2 });
+        Assert.Contains(output, x => x > .5f);
+        Assert.All(output, x => Assert.True(float.IsFinite(x) && Math.Abs(x) <= .95001f));
+    }
+    [Fact]
+    public void SoundpadPlaybackStopsAtClipEndAndCanBeReplaced()
+    {
+        var player = new StudioSoundpadPlayer();
+        player.Play(new StudioSoundClip("first", Enumerable.Repeat(.25f, 1200).ToArray()));
+        var frame = new float[960];
+        Assert.True(player.Read(frame));
+        Assert.Equal(.25f, frame[0]);
+        player.Play(new StudioSoundClip("second", Enumerable.Repeat(-.5f, 500).ToArray()));
+        Assert.True(player.Read(frame));
+        Assert.Equal(-.5f, frame[0]);
+        Assert.Equal(0, frame[500]);
+        Assert.False(player.Read(frame));
+        Assert.Equal("", player.PlayingName);
+    }
+    [Fact]
+    public void SoundpadDecoderConvertsMono24kWavToStereo48k()
+    {
+        string path = Path.Combine(Path.GetTempPath(), "onebox-soundpad-" + Guid.NewGuid().ToString("N") + ".wav");
+        try
+        {
+            using (var writer = new WaveFileWriter(path, new WaveFormat(24000, 16, 1)))
+            {
+                var pcm = new byte[480 * 2];
+                for (int i = 0; i < 480; i++) BitConverter.GetBytes((short)8192).CopyTo(pcm, i * 2);
+                writer.Write(pcm, 0, pcm.Length);
+            }
+            var clip = StudioSoundpadDecoder.Decode(path);
+            Assert.InRange(clip.Samples.Length, 1800, 2100);
+            Assert.Equal(clip.Samples[200], clip.Samples[201], 4);
+            Assert.InRange(clip.Samples[200], .15f, .35f);
+        }
+        finally { File.Delete(path); }
     }
     [Fact]
     public void FifoBoundsLatencyAndClearsStoppedAudio()

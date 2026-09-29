@@ -1,6 +1,8 @@
 using System;
 using System.Linq;
+using System.Threading.Tasks;
 using System.Windows;
+using PowerAudioManager.AudioStudio;
 using PowerAudioManager.Commands;
 
 namespace PowerAudioManager
@@ -8,10 +10,23 @@ namespace PowerAudioManager
     // 所有固定/可配置全局热键由 HotkeyDefinitions 单表登记；此处只负责原生注册和命令分发。
     public partial class MainWindow : Window
     {
+        const int SoundpadHotkeyBase = 0xBF90;
         IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
         {
             if (msg != Native.WM_HOTKEY) return IntPtr.Zero;
             int nativeId = wParam.ToInt32();
+            if (nativeId >= SoundpadHotkeyBase && nativeId < SoundpadHotkeyBase + 10)
+            {
+                int slot = nativeId - SoundpadHotkeyBase;
+                if (slot == 9) StudioController.Instance.StopSound();
+                else
+                {
+                    var files = StudioController.Instance.Settings.SoundpadFiles;
+                    if (slot < files.Count) _ = PlaySoundpadHotkeyAsync(files[slot]);
+                }
+                handled = true;
+                return IntPtr.Zero;
+            }
             var definition = HotkeyDefinitions.All.FirstOrDefault(item => item.NativeId == nativeId);
             if (definition != null)
             {
@@ -29,6 +44,12 @@ namespace PowerAudioManager
                 handled = true;
             }
             return IntPtr.Zero;
+        }
+
+        async Task PlaySoundpadHotkeyAsync(string path)
+        {
+            try { await StudioController.Instance.PlaySoundAsync(path); }
+            catch (Exception ex) { AppLog.Log("OneMic soundpad hotkey", ex); }
         }
 
         object CreateHotkeyPayload(AppCommandId commandId)
@@ -60,6 +81,7 @@ namespace PowerAudioManager
             _hotkeyMap.Clear();
             foreach (var definition in HotkeyDefinitions.All)
                 Native.UnregisterHotKey(_hotkeyHwnd, definition.NativeId);
+            for (int slot = 0; slot < 10; slot++) Native.UnregisterHotKey(_hotkeyHwnd, SoundpadHotkeyBase + slot);
         }
 
         internal void PauseHotkeys() => UnregisterAllHotkeys();
@@ -99,6 +121,17 @@ namespace PowerAudioManager
                 if (Native.RegisterHotKey(_hotkeyHwnd, nativeId, modifiers, virtualKey))
                     _hotkeyMap[nativeId] = pair.Key;
             }
+            int sounds = Math.Min(9, StudioController.Instance.Settings.SoundpadFiles.Count);
+            for (int slot = 0; slot < sounds; slot++)
+            {
+                uint key = (uint)(0x31 + slot); // Ctrl+Shift+1 through Ctrl+Shift+9
+                if (!Native.RegisterHotKey(_hotkeyHwnd, SoundpadHotkeyBase + slot,
+                    Native.MOD_CONTROL | Native.MOD_SHIFT | 0x4000, key))
+                    AppLog.Log("Hotkey", "OneMic soundpad slot " + (slot + 1) + " unavailable");
+            }
+            if (sounds > 0 && !Native.RegisterHotKey(_hotkeyHwnd, SoundpadHotkeyBase + 9,
+                Native.MOD_CONTROL | Native.MOD_SHIFT | 0x4000, 0x30))
+                AppLog.Log("Hotkey", "OneMic soundpad stop unavailable");
         }
     }
 }

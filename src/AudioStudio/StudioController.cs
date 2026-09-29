@@ -21,6 +21,7 @@ internal sealed class StudioController : IDisposable
     readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromSeconds(3) };
     StudioWindow _window;
     bool _disposed, _initialized, _polling;
+    int _soundRequest;
     public string T(string zh, string en) => zh;
     public void Initialize()
     {
@@ -39,6 +40,29 @@ internal sealed class StudioController : IDisposable
         settings.Normalize();
         if (!settings.Save()) throw new InvalidOperationException(T("音频设置保存失败", "Could not save audio settings"));
         Settings = settings.Copy(); Engine?.Update(Settings); Changed?.Invoke();
+    }
+    public async Task PlaySoundAsync(string path)
+    {
+        int request = Interlocked.Increment(ref _soundRequest);
+        if (!Wanted) await StartAsync();
+        var clip = await Task.Run(() => StudioSoundpadDecoder.Decode(path));
+        if (request != Volatile.Read(ref _soundRequest)) return;
+        await _gate.WaitAsync();
+        try
+        {
+            if (request != Volatile.Read(ref _soundRequest)) return;
+            var engine = Engine;
+            if (engine == null || !engine.Running) throw new InvalidOperationException(Status);
+            engine.PlaySound(clip);
+        }
+        finally { _gate.Release(); }
+        Changed?.Invoke();
+    }
+    public void StopSound()
+    {
+        Interlocked.Increment(ref _soundRequest);
+        Engine?.StopSound();
+        Changed?.Invoke();
     }
     public async Task ToggleAsync(string feature)
     {
@@ -102,6 +126,7 @@ internal sealed class StudioController : IDisposable
     public async Task StopAsync()
     {
         Wanted = false;
+        Interlocked.Increment(ref _soundRequest);
         await _gate.WaitAsync();
         try { var engine = Engine; Engine = null; if (engine != null) await Task.Run(engine.Dispose); Status = T("已停止 · 通话请切回实体麦克风", "Stopped · select your physical microphone in chat"); }
         finally { _gate.Release(); Changed?.Invoke(); }
@@ -120,11 +145,14 @@ internal sealed class StudioController : IDisposable
                     var inputs = await Task.Run(() => StudioDevices.List(DataFlow.Capture));
                     bool available = inputs.Any(x => x.Id == Settings.InputId);
                     reconnect = Settings.Microphone && available != !string.IsNullOrEmpty(Engine.InputId);
-                    if (Settings.Monitor)
+                    if (Settings.Monitor || Settings.SoundpadFiles.Count > 0)
                     {
                         var outputs = await Task.Run(() => StudioDevices.List(DataFlow.Render));
-                        bool monitorAvailable = outputs.Any(x => x.Id == Settings.MonitorId && !x.IsCable);
-                        reconnect |= monitorAvailable != !string.IsNullOrEmpty(Engine.MonitorId) || Engine.MonitorFaulted;
+                        string localId = Settings.MonitorId;
+                        if (string.IsNullOrEmpty(localId) || !outputs.Any(x => x.Id == localId && !x.IsCable))
+                            localId = await Task.Run(StudioDevices.DefaultSpeaker);
+                        bool monitorAvailable = outputs.Any(x => x.Id == localId && !x.IsCable);
+                        reconnect |= monitorAvailable && (localId != Engine.MonitorId || Engine.MonitorFaulted);
                     }
                     if (Settings.Music)
                     {

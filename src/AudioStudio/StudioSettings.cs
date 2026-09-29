@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Text.Json;
 
 namespace PowerAudioManager.AudioStudio;
@@ -16,6 +17,8 @@ internal sealed class StudioSettings
     public float Strength { get; set; } = .75f;
     public float MicGain { get; set; } = 1;
     public float MusicGain { get; set; } = .6f;
+    public float SoundpadGain { get; set; } = .8f;
+    public List<string> SoundpadFiles { get; set; } = new();
     public bool Microphone { get; set; } = true;
     public bool Music { get; set; }
     public bool Eq { get; set; }
@@ -32,7 +35,11 @@ internal sealed class StudioSettings
     public void Normalize()
     {
         Strength = Clamp(Strength, 0, 1); MicGain = Clamp(MicGain, 0, 3);
-        MusicGain = Clamp(MusicGain, 0, 2); ExplodeStrength = Clamp(ExplodeStrength, .01f, 1);
+        MusicGain = Clamp(MusicGain, 0, 2); SoundpadGain = Clamp(SoundpadGain, 0, 2);
+        SoundpadFiles ??= new List<string>();
+        SoundpadFiles.RemoveAll(string.IsNullOrWhiteSpace);
+        if (SoundpadFiles.Count > 64) SoundpadFiles.RemoveRange(64, SoundpadFiles.Count - 64);
+        ExplodeStrength = Clamp(ExplodeStrength, .01f, 1);
         MonitorPoint = Math.Clamp(MonitorPoint, 0, 4);
         if (Bands == null || Bands.Length != 10) Bands = new float[10];
         for (int i = 0; i < 10; i++) Bands[i] = Clamp(Bands[i], -12, 12);

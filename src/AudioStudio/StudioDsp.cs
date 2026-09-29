@@ -79,6 +79,7 @@ internal sealed class StudioDsp : IDisposable
     readonly float[] _eqGains = new float[10];
     readonly float[] _wet = new float[Frame];
     readonly float[] _voice = new float[Frame];
+    readonly float[] _silentSound = new float[Frame * 2];
     float _limiterGain = 1;
     bool _eqWasEnabled;
     public DenoiserMetrics ModelMetrics => _denoiser.GetMetrics();
@@ -86,6 +87,9 @@ internal sealed class StudioDsp : IDisposable
 
     // Monitor is tapped before BGM except at Final. Music retains its stereo image.
     public void Process(float[] microphone, float[] music, float[] output, float[] monitor, StudioSettings s)
+        => Process(microphone, music, _silentSound, output, monitor, s);
+
+    public void Process(float[] microphone, float[] music, float[] sound, float[] output, float[] monitor, StudioSettings s)
     {
         for (int i = 0; i < Frame; i++) _voice[i] = s.Microphone && float.IsFinite(microphone[i]) ? microphone[i] : 0;
         Tap(0);
@@ -120,8 +124,8 @@ internal sealed class StudioDsp : IDisposable
                 float clipped = Math.Clamp(voice * (1 + 39 * s.ExplodeStrength), -.8f, .8f);
                 voice = voice * (1 - s.ExplodeStrength) + clipped * s.ExplodeStrength;
             }
-            float l = voice + (s.Music ? music[i * 2] * s.MusicGain : 0);
-            float r = voice + (s.Music ? music[i * 2 + 1] * s.MusicGain : 0);
+            float l = voice + (s.Music ? music[i * 2] * s.MusicGain : 0) + sound[i * 2] * s.SoundpadGain;
+            float r = voice + (s.Music ? music[i * 2 + 1] * s.MusicGain : 0) + sound[i * 2 + 1] * s.SoundpadGain;
             if (!float.IsFinite(l)) l = 0; if (!float.IsFinite(r)) r = 0;
             float peak = Math.Max(Math.Abs(l), Math.Abs(r));
             float target = peak > .95f ? .95f / peak : 1;

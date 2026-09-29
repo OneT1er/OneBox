@@ -12,6 +12,7 @@ namespace PowerAudioManager.AudioStudio;
 internal sealed class StudioEngine : IDisposable
 {
     readonly StudioFifo _microphone = new(), _music = new();
+    readonly StudioSoundpadPlayer _soundpad = new();
     readonly BufferedWaveProvider _output = Buffer(), _monitor = Buffer();
     WasapiRecorder _micCapture, _musicCapture;
     WasapiPlayer _player, _monitorPlayer;
@@ -32,6 +33,9 @@ internal sealed class StudioEngine : IDisposable
     public bool MonitorFaulted { get; private set; }
     public string MonitorError { get; private set; }
     public bool ProcessingTooSlow { get; private set; }
+    public string PlayingSoundName => _soundpad.PlayingName;
+    public void PlaySound(StudioSoundClip clip) => _soundpad.Play(clip);
+    public void StopSound() => _soundpad.Stop();
     static BufferedWaveProvider Buffer() => new(WaveFormat.CreateIeeeFloatWaveFormat(48000, 2), TimeSpan.FromMilliseconds(200))
         { DiscardOnBufferOverflow = true, ReadFully = true };
 
@@ -79,36 +83,46 @@ internal sealed class StudioEngine : IDisposable
             _player = new WasapiPlayerBuilder().WithDevice(_outputDevice).WithSharedMode().WithEventSync().WithLatency(40).Build();
             _player.Init(_output);
             _player.PlaybackStopped += (_, args) => { if (args.Exception != null) Error = args.Exception.Message; };
-            // A shared USB container is common for headsets and does not mean that
-            // WASAPI cannot open both endpoints. Let the driver decide.
-            if (settings.Monitor)
+            // Keep a local headphone route ready when sounds are configured,
+            // even when microphone monitoring is off. Never use CABLE here.
+            if (settings.Monitor || settings.SoundpadFiles.Count > 0)
             {
                 try
                 {
-                if (string.IsNullOrEmpty(settings.MonitorId) || settings.MonitorId == settings.OutputId)
-                    throw new InvalidOperationException("请为监听选择独立耳机 / Choose separate headphones for monitoring");
-                _monitorDevice = enumerator.GetDevice(settings.MonitorId);
-                if (new StudioDevice(_monitorDevice.ID, _monitorDevice.FriendlyName).IsCable)
-                    throw new InvalidOperationException("监听不能输出到虚拟麦克风 / Monitor cannot feed a virtual microphone");
-                _monitorPlayer = new WasapiPlayerBuilder().WithDevice(_monitorDevice).WithSharedMode().WithEventSync().WithLatency(60).Build();
-                _monitorPlayer.Init(_monitor);
-                _monitorPlayer.PlaybackStopped += (_, args) =>
-                {
-                    if (args.Exception == null) return;
-                    MonitorError = args.Exception.Message; MonitorFaulted = true;
-                };
+                    string localId = settings.MonitorId;
+                    if (string.IsNullOrEmpty(localId) || !StudioDevices.List(DataFlow.Render).Any(x => x.Id == localId && !x.IsCable))
+                        localId = StudioDevices.DefaultSpeaker();
+                    if (string.IsNullOrEmpty(localId) || localId == settings.OutputId)
+                        throw new InvalidOperationException("请为本地播放选择耳机 / Choose headphones for local playback");
+                    _monitorDevice = enumerator.GetDevice(localId);
+                    if (new StudioDevice(_monitorDevice.ID, _monitorDevice.FriendlyName).IsCable)
+                        throw new InvalidOperationException("本地播放不能选择虚拟麦克风 / Local playback cannot use a virtual microphone");
+                    _monitorPlayer = new WasapiPlayerBuilder().WithDevice(_monitorDevice).WithSharedMode().WithEventSync().WithLatency(60).Build();
+                    _monitorPlayer.Init(_monitor);
+                    _monitorPlayer.PlaybackStopped += (_, args) =>
+                    {
+                        if (args.Exception == null) return;
+                        MonitorError = args.Exception.Message; MonitorFaulted = true;
+                    };
                 }
                 catch (Exception ex)
                 {
                     _monitorPlayer?.Dispose(); _monitorPlayer = null; _monitorDevice?.Dispose(); _monitorDevice = null;
                     MonitorError = ex.Message;
-                    Note = "监听不可用：" + ex.Message + " / Monitoring unavailable: " + ex.Message;
-                    AppLog.Log("AudioStudio monitor", ex.Message);
+                    Note = "本地播放不可用：" + ex.Message + " / Local playback unavailable: " + ex.Message;
+                    AppLog.Log("AudioStudio local playback", ex.Message);
                 }
             }
             _running = true;
             _thread = new Thread(ProcessLoop) { IsBackground = true, Name = "OneBox audio DSP", Priority = ThreadPriority.AboveNormal };
-            _thread.Start(); _player.Play(); _monitorPlayer?.Play();
+            _thread.Start(); _player.Play();
+            try { _monitorPlayer?.Play(); }
+            catch (Exception ex)
+            {
+                MonitorError = ex.Message; MonitorFaulted = true;
+                AppLog.Log("AudioStudio local playback", ex.Message);
+                _monitorPlayer?.Dispose(); _monitorPlayer = null;
+            }
         }
         catch { Dispose(); throw; }
     }
@@ -125,7 +139,7 @@ internal sealed class StudioEngine : IDisposable
     }
     void ProcessLoop()
     {
-        var stereoMic = new float[960]; var mono = new float[480]; var music = new float[960];
+        var stereoMic = new float[960]; var mono = new float[480]; var music = new float[960]; var sound = new float[960];
         var output = new float[960]; var monitor = new float[960]; var bytes = new byte[3840];
         try
         {
@@ -134,6 +148,7 @@ internal sealed class StudioEngine : IDisposable
             {
                 if (_output.BufferedBytes >= bytes.Length * 3) { Thread.Sleep(2); continue; }
                 _microphone.Read(stereoMic); _music.Read(music);
+                bool soundActive = _soundpad.Read(sound);
                 float musicPeak = 0;
                 for (int i = 0; i < music.Length; i++) musicPeak = Math.Max(musicPeak, Math.Abs(music[i]));
                 MusicPeak = musicPeak;
@@ -142,7 +157,10 @@ internal sealed class StudioEngine : IDisposable
                 InputPeak = peak;
                 var settings = _settings;
                 var processing = Stopwatch.StartNew();
-                _dsp.Process(mono, music, output, monitor, settings);
+                _dsp.Process(mono, music, sound, output, monitor, settings);
+                if (!settings.Monitor) Array.Clear(monitor);
+                if (soundActive && (!settings.Monitor || settings.MonitorPoint != 4))
+                    for (int i = 0; i < sound.Length; i++) monitor[i] += sound[i] * settings.SoundpadGain;
                 if (processing.Elapsed.TotalMilliseconds > 10)
                 {
                     if (++slowFrames >= 10) ProcessingTooSlow = true;
@@ -152,7 +170,7 @@ internal sealed class StudioEngine : IDisposable
                 for (int i = 0; i < 480; i++) { SpectrumFrame[i] = (output[i * 2] + output[i * 2 + 1]) * .5f; peak = Math.Max(peak, Math.Max(Math.Abs(output[i * 2]), Math.Abs(output[i * 2 + 1]))); }
                 OutputPeak = peak;
                 System.Buffer.BlockCopy(output, 0, bytes, 0, bytes.Length); _output.AddSamples(bytes, 0, bytes.Length);
-                if (_monitorPlayer != null)
+                if (_monitorPlayer != null && (settings.Monitor || soundActive))
                 {
                     // Monitoring is optional and cannot backpressure the virtual microphone.
                     for (int i = 0; i < monitor.Length; i++) monitor[i] = Math.Clamp(monitor[i] * .7f, -.8f, .8f);
@@ -168,6 +186,7 @@ internal sealed class StudioEngine : IDisposable
     public void Dispose()
     {
         _running = false;
+        _soundpad.Stop();
         _thread?.Join(3000);
         _micCapture?.Dispose(); _musicCapture?.Dispose();
         _player?.Dispose(); _monitorPlayer?.Dispose();
