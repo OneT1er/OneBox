@@ -41,22 +41,28 @@ internal sealed class StudioController : IDisposable
         if (!settings.Save()) throw new InvalidOperationException(T("音频设置保存失败", "Could not save audio settings"));
         Settings = settings.Copy(); Engine?.Update(Settings); Changed?.Invoke();
     }
-    public async Task PlaySoundAsync(string path)
+    public async Task<bool> PlaySoundAsync(string effectId)
     {
         int request = Interlocked.Increment(ref _soundRequest);
+        var effect = Settings.SoundEffects.FirstOrDefault(x => x.Id == effectId);
+        if (effect == null) throw new InvalidOperationException("音效已被移除。");
         if (!Wanted) await StartAsync();
-        var clip = await Task.Run(() => StudioSoundpadDecoder.Decode(path));
-        if (request != Volatile.Read(ref _soundRequest)) return;
+        var clip = await Task.Run(() => StudioSoundpadDecoder.Decode(effect.Path));
+        clip = clip with { Id = effect.Id, Gain = effect.Gain };
+        if (request != Volatile.Read(ref _soundRequest)) return false;
         await _gate.WaitAsync();
         try
         {
-            if (request != Volatile.Read(ref _soundRequest)) return;
+            if (request != Volatile.Read(ref _soundRequest)) return false;
             var engine = Engine;
             if (engine == null || !engine.Running) throw new InvalidOperationException(Status);
-            engine.PlaySound(clip);
+            var latest = Settings.SoundEffects.FirstOrDefault(x => x.Id == effectId);
+            if (latest == null) return false;
+            engine.PlaySound(clip with { Gain = latest.Gain });
         }
         finally { _gate.Release(); }
         Changed?.Invoke();
+        return true;
     }
     public void StopSound()
     {
@@ -145,7 +151,7 @@ internal sealed class StudioController : IDisposable
                     var inputs = await Task.Run(() => StudioDevices.List(DataFlow.Capture));
                     bool available = inputs.Any(x => x.Id == Settings.InputId);
                     reconnect = Settings.Microphone && available != !string.IsNullOrEmpty(Engine.InputId);
-                    if (Settings.Monitor || Settings.SoundpadFiles.Count > 0)
+                    if (Settings.Monitor || Settings.SoundEffects.Count > 0)
                     {
                         var outputs = await Task.Run(() => StudioDevices.List(DataFlow.Render));
                         string localId = Settings.MonitorId;

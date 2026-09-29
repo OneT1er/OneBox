@@ -46,6 +46,9 @@ internal static partial class SettingsDialog
                 for (int i = 0; i < keys.Length; i++)
                 {
                     string preference = "AudioStudio.Hotkey." + keys[i];
+                    if (rows[i].Value != 0 && (rows[i].Value == StudioSoundpadHotkeys.StopEncoded ||
+                        studio.Settings.SoundEffects.Any(x => x.Hotkey == rows[i].Value)))
+                        throw new InvalidOperationException(names[i] + " 快捷键与音效板冲突。");
                     if (rows[i].Value != 0 && rows[i].Value != AppPrefs.GetInt(preference, 0) &&
                         HotkeyDefinitions.All.Any(x => x.PreferenceKey != preference && HotkeyDefinitions.ResolveEncoded(x) == rows[i].Value))
                         throw new InvalidOperationException(names[i] + " 快捷键已被占用。");

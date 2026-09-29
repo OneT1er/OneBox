@@ -34,8 +34,10 @@ internal sealed class StudioEngine : IDisposable
     public string MonitorError { get; private set; }
     public bool ProcessingTooSlow { get; private set; }
     public string PlayingSoundName => _soundpad.PlayingName;
+    public string PlayingSoundId => _soundpad.PlayingId;
     public void PlaySound(StudioSoundClip clip) => _soundpad.Play(clip);
     public void StopSound() => _soundpad.Stop();
+    public void SetSoundGain(string id, float gain) => _soundpad.UpdateGain(id, gain);
     static BufferedWaveProvider Buffer() => new(WaveFormat.CreateIeeeFloatWaveFormat(48000, 2), TimeSpan.FromMilliseconds(200))
         { DiscardOnBufferOverflow = true, ReadFully = true };
 
@@ -85,7 +87,7 @@ internal sealed class StudioEngine : IDisposable
             _player.PlaybackStopped += (_, args) => { if (args.Exception != null) Error = args.Exception.Message; };
             // Keep a local headphone route ready when sounds are configured,
             // even when microphone monitoring is off. Never use CABLE here.
-            if (settings.Monitor || settings.SoundpadFiles.Count > 0)
+            if (settings.Monitor || settings.SoundEffects.Count > 0)
             {
                 try
                 {
@@ -136,6 +138,12 @@ internal sealed class StudioEngine : IDisposable
         var previous = _settings;
         _settings = settings.Copy();
         if (previous.Music != settings.Music) _music.Clear();
+        string activeId = _soundpad.PlayingId;
+        if (activeId.Length > 0)
+        {
+            var effect = settings.SoundEffects.FirstOrDefault(x => x.Id == activeId);
+            if (effect != null) _soundpad.UpdateGain(activeId, effect.Gain);
+        }
     }
     void ProcessLoop()
     {

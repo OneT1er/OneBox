@@ -76,6 +76,51 @@ public sealed class AudioStudioTests
         Assert.Equal("", player.PlayingName);
     }
     [Fact]
+    public void SoundpadGainCanBeChangedForThePlayingEffect()
+    {
+        var player = new StudioSoundpadPlayer();
+        player.Play(new StudioSoundClip("first", Enumerable.Repeat(.4f, 1920).ToArray(), "first", .5f));
+        var frame = new float[960];
+        Assert.True(player.Read(frame));
+        Assert.Equal(.2f, frame[0], 5);
+        player.UpdateGain("other", 0);
+        player.UpdateGain("first", 1.5f);
+        Assert.True(player.Read(frame));
+        Assert.Equal(.6f, frame[0], 5);
+    }
+    [Fact]
+    public void LegacySoundpadFilesBecomeIndependentEffectsWithOriginalShortcuts()
+    {
+        var settings = new StudioSettings { SoundpadFiles = new() { "first.wav", "second.wav" } };
+        settings.Normalize();
+        Assert.Empty(settings.SoundpadFiles);
+        Assert.Equal(2, settings.SoundEffects.Count);
+        Assert.Equal("first.wav", settings.SoundEffects[0].Path);
+        Assert.Equal(1, settings.SoundEffects[0].Gain);
+        Assert.Equal(StudioSoundpadHotkeys.LegacySlot(0), settings.SoundEffects[0].Hotkey);
+        Assert.Equal(StudioSoundpadHotkeys.LegacySlot(1), settings.SoundEffects[1].Hotkey);
+        settings.SoundEffects.Clear();
+        settings.Normalize();
+        Assert.Empty(settings.SoundEffects);
+    }
+    [Fact]
+    public void SoundpadSettingsClampGainAndRemoveConflictingShortcuts()
+    {
+        int shortcut = StudioSoundpadHotkeys.LegacySlot(0);
+        var settings = new StudioSettings { SoundEffects = new()
+        {
+            new() { Path = "a.wav", Gain = 3, Hotkey = shortcut },
+            new() { Path = "b.wav", Gain = -1, Hotkey = shortcut },
+            new() { Path = "c.wav", Hotkey = StudioSoundpadHotkeys.StopEncoded },
+            new() { Path = "d.wav", Hotkey = 0x41 }
+        } };
+        settings.Normalize();
+        Assert.Equal(2, settings.SoundEffects[0].Gain);
+        Assert.Equal(0, settings.SoundEffects[1].Gain);
+        Assert.Equal(shortcut, settings.SoundEffects[0].Hotkey);
+        Assert.All(settings.SoundEffects.Skip(1), x => Assert.Equal(0, x.Hotkey));
+    }
+    [Fact]
     public void SoundpadDecoderConvertsMono24kWavToStereo48k()
     {
         string path = Path.Combine(Path.GetTempPath(), "onebox-soundpad-" + Guid.NewGuid().ToString("N") + ".wav");

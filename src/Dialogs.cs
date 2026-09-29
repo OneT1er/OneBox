@@ -19,7 +19,7 @@ namespace PowerAudioManager
     public static class HotkeyCaptureDialog
     {
         // 返回值编码：高 16 位 = 修饰键（bit0=Alt, bit1=Ctrl, bit2=Shift, bit3=Win），低 16 位 = VK 码；0=无
-        public static int? Show(Window owner, int currentEncoded)
+        public static int? Show(Window owner, int currentEncoded, bool allowSingleFunctionKey = false)
         {
             int captured = currentEncoded;
             var dlg = new Window {
@@ -32,7 +32,9 @@ namespace PowerAudioManager
                 Background = new SolidColorBrush(Color.FromRgb(32,32,32))
             };
             var stack = new StackPanel { Margin = new Thickness(16) };
-            var hint = new TextBlock { Text = "请按下组合键，按 Esc 取消", Foreground = new SolidColorBrush(Color.FromRgb(180,180,180)), FontSize = 12, Margin = new Thickness(0,0,0,12) };
+            var hint = new TextBlock { Text = allowSingleFunctionKey
+                    ? "请按组合键或 F1–F24，按 Esc 取消" : "请按下组合键，按 Esc 取消",
+                Foreground = new SolidColorBrush(Color.FromRgb(180,180,180)), FontSize = 12, Margin = new Thickness(0,0,0,12) };
             var display = new TextBlock {
                 Text = currentEncoded != 0 ? Format(currentEncoded) : "(请按键)",
                 FontSize = 18, Foreground = Brushes.White, FontWeight = FontWeights.SemiBold,
@@ -58,7 +60,7 @@ namespace PowerAudioManager
                 if ((Keyboard.Modifiers & ModifierKeys.Control) != 0) mods |= 2;
                 if ((Keyboard.Modifiers & ModifierKeys.Shift) != 0) mods |= 4;
                 if ((Keyboard.Modifiers & ModifierKeys.Windows) != 0) mods |= 8;
-                if (mods == 0) return; // 至少需要一个修饰键
+                if (mods == 0 && (!allowSingleFunctionKey || e.Key < Key.F1 || e.Key > Key.F24)) return;
                 int vk = KeyInterop.VirtualKeyFromKey(e.Key == Key.System ? e.SystemKey : e.Key);
                 if (vk == 0) return;
                 captured = (mods << 16) | (vk & 0xFFFF);

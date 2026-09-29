@@ -5,7 +5,24 @@ using NAudio.Wave.SampleProviders;
 
 namespace PowerAudioManager.AudioStudio;
 
-internal sealed record StudioSoundClip(string Name, float[] Samples);
+internal static class StudioSoundpadHotkeys
+{
+    public const int NativeIdBase = 0xBF90;
+    public const int StopNativeId = 0xBF8F;
+    public const int MaxEffects = 64;
+    public const int StopEncoded = ((2 | 4) << 16) | 0x30; // Ctrl+Shift+0
+
+    public static int LegacySlot(int index) => index < 9 ? ((2 | 4) << 16) | (0x31 + index) : 0;
+    public static bool IsValid(int encoded)
+    {
+        if (encoded == 0) return true;
+        int modifiers = (encoded >> 16) & 0xFFFF, key = encoded & 0xFFFF;
+        return modifiers <= 15 && key > 0 && key <= 0xFF &&
+            (modifiers != 0 || key >= 0x70 && key <= 0x87); // unmodified F1–F24 only
+    }
+}
+
+internal sealed record StudioSoundClip(string Name, float[] Samples, string Id = "", float Gain = 1);
 
 internal static class StudioSoundpadDecoder
 {
@@ -52,12 +69,19 @@ internal sealed class StudioSoundpadPlayer
     {
         public readonly StudioSoundClip Clip = clip;
         public int Position;
+        public float Gain = clip.Gain;
     }
 
     Playback _current;
     public string PlayingName => System.Threading.Volatile.Read(ref _current)?.Clip.Name ?? "";
+    public string PlayingId => System.Threading.Volatile.Read(ref _current)?.Clip.Id ?? "";
     public void Play(StudioSoundClip clip) => System.Threading.Volatile.Write(ref _current, new Playback(clip));
     public void Stop() => System.Threading.Volatile.Write(ref _current, null);
+    public void UpdateGain(string id, float gain)
+    {
+        var playback = System.Threading.Volatile.Read(ref _current);
+        if (playback?.Clip.Id == id) System.Threading.Volatile.Write(ref playback.Gain, gain);
+    }
     public bool Read(float[] destination)
     {
         Array.Clear(destination);
@@ -69,7 +93,8 @@ internal sealed class StudioSoundpadPlayer
             System.Threading.Interlocked.CompareExchange(ref _current, null, playback);
             return false;
         }
-        Array.Copy(playback.Clip.Samples, playback.Position, destination, 0, available);
+        float gain = System.Threading.Volatile.Read(ref playback.Gain);
+        for (int i = 0; i < available; i++) destination[i] = playback.Clip.Samples[playback.Position + i] * gain;
         playback.Position += available;
         if (playback.Position >= playback.Clip.Samples.Length)
             System.Threading.Interlocked.CompareExchange(ref _current, null, playback);

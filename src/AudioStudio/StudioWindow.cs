@@ -10,6 +10,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
 using NAudio.CoreAudioApi;
+using PowerAudioManager.Commands;
 
 namespace PowerAudioManager.AudioStudio;
 
@@ -188,12 +189,12 @@ internal sealed class StudioWindow
         { x.ApplicationPath = ((StudioApplication)item).Path; x.ApplicationPid = ((StudioApplication)item).Pid; }, true));
         Toggle(music, T("分享应用音乐", "Share application music"), x => x.Music, (x, v) => x.Music = v, true);
         Slider(music, T("朋友听到的音乐音量", "Music volume for friends"), s.MusicGain * 100, 200, value => Change(x => x.MusicGain = value / 100));
-        var soundpad = Card("4  音效板", "导入音效后点击播放，朋友和你都能听到；无需开启麦克风监听。Ctrl+Shift+1～9 全局播放，Ctrl+Shift+0 停止。");
+        var soundpad = Card("4  音效板", "导入音效后点击播放，声音会送到虚拟麦克风并在耳机播放。每条音效可单独调整音量、设置全局快捷键；Ctrl+Shift+0 停止。");
         var soundpadActions = new WrapPanel();
         soundpadActions.Children.Add(Button("添加音效", AddSounds));
         soundpadActions.Children.Add(Button("停止音效", () => { _controller.StopSound(); _soundpadStatus.Text = "已停止"; }));
         soundpad.Children.Add(soundpadActions);
-        Slider(soundpad, "音效音量", s.SoundpadGain * 100, 200, value => Change(x => x.SoundpadGain = value / 100));
+        Slider(soundpad, "总音效音量", s.SoundpadGain * 100, 200, value => Change(x => x.SoundpadGain = value / 100));
         _soundpadStatus = Text(""); _soundpadStatus.Foreground = Muted; soundpad.Children.Add(_soundpadStatus);
         _soundpadRows = new StackPanel(); soundpad.Children.Add(_soundpadRows);
         RefreshSoundpadRows();
@@ -227,15 +228,15 @@ internal sealed class StudioWindow
         };
         if (picker.ShowDialog(_window) != true) return;
         var settings = _controller.Settings.Copy();
-        int previousCount = settings.SoundpadFiles.Count;
+        int previousCount = settings.SoundEffects.Count;
         foreach (string path in picker.FileNames)
         {
-            if (settings.SoundpadFiles.Count >= 64) break;
-            if (!settings.SoundpadFiles.Any(x => string.Equals(x, path, StringComparison.OrdinalIgnoreCase)))
-                settings.SoundpadFiles.Add(path);
+            if (settings.SoundEffects.Count >= StudioSoundpadHotkeys.MaxEffects) break;
+            if (!settings.SoundEffects.Any(x => string.Equals(x.Path, path, StringComparison.OrdinalIgnoreCase)))
+                settings.SoundEffects.Add(new StudioSoundEffect { Path = path });
         }
         _controller.Apply(settings);
-        if (previousCount == 0 && settings.SoundpadFiles.Count > 0 && _controller.Wanted)
+        if (previousCount == 0 && settings.SoundEffects.Count > 0 && _controller.Wanted)
             _ = _controller.StartAsync();
         _owner.RefreshHotkeys();
         RefreshSoundpadRows();
@@ -244,42 +245,121 @@ internal sealed class StudioWindow
     {
         if (_soundpadRows == null) return;
         _soundpadRows.Children.Clear();
-        var files = _controller.Settings.SoundpadFiles;
-        if (files.Count == 0)
+        var effects = _controller.Settings.SoundEffects;
+        if (effects.Count == 0)
         {
             _soundpadRows.Children.Add(Text("还没有音效。支持 WAV、MP3 和 Windows 可解码的音频文件。"));
             return;
         }
-        for (int i = 0; i < files.Count; i++)
+        foreach (var effect in effects)
         {
-            string path = files[i];
-            var row = new DockPanel { LastChildFill = true, Margin = new Thickness(0, 2, 0, 2) };
+            string id = effect.Id;
+            var row = new StackPanel { Margin = new Thickness(0, 0, 0, 8) };
+            var header = new DockPanel { LastChildFill = true };
             var remove = Button("移除", () =>
             {
-                _controller.StopSound();
+                if (_controller.Engine?.PlayingSoundId == id) _controller.StopSound();
                 var changed = _controller.Settings.Copy();
-                changed.SoundpadFiles.RemoveAll(x => string.Equals(x, path, StringComparison.OrdinalIgnoreCase));
+                changed.SoundEffects.RemoveAll(x => x.Id == id);
                 _controller.Apply(changed);
                 _owner.RefreshHotkeys();
                 RefreshSoundpadRows();
             });
-            DockPanel.SetDock(remove, Dock.Right); row.Children.Add(remove);
-            string label = (i < 9 ? $"Ctrl+Shift+{i + 1}  " : "") + Path.GetFileNameWithoutExtension(path)
-                + (File.Exists(path) ? "" : "  · 文件丢失");
-            var play = Button(label, () => _ = PlaySoundAsync(path));
+            DockPanel.SetDock(remove, Dock.Right); header.Children.Add(remove);
+            string label = Path.GetFileNameWithoutExtension(effect.Path)
+                + (File.Exists(effect.Path) ? "" : "  · 文件丢失");
+            var play = Button("播放  " + label, () => _ = PlaySoundAsync(id));
             play.HorizontalContentAlignment = HorizontalAlignment.Left;
-            play.ToolTip = path;
-            row.Children.Add(play);
-            _soundpadRows.Children.Add(row);
+            play.ToolTip = effect.Path;
+            header.Children.Add(play);
+            row.Children.Add(header);
+
+            var controls = new DockPanel { LastChildFill = true };
+            var shortcut = Button(effect.Hotkey == 0 ? "设置快捷键" : HotkeyCaptureDialog.Format(effect.Hotkey),
+                () => SetSoundShortcut(id));
+            shortcut.ToolTip = "设置此音效的全局快捷键；支持 F1–F24 单键或组合键";
+            DockPanel.SetDock(shortcut, Dock.Right); controls.Children.Add(shortcut);
+            if (effect.Hotkey != 0)
+            {
+                var clear = Button("清除", () => ClearSoundShortcut(id));
+                DockPanel.SetDock(clear, Dock.Right); controls.Children.Add(clear);
+            }
+            float pendingGain = effect.Gain;
+            var gainLabel = Text($"音量 {Math.Round(pendingGain * 100)}%");
+            gainLabel.MinWidth = 70; gainLabel.VerticalAlignment = VerticalAlignment.Center;
+            DockPanel.SetDock(gainLabel, Dock.Left); controls.Children.Add(gainLabel);
+            var gain = new System.Windows.Controls.Slider { Minimum = 0, Maximum = 200,
+                Value = pendingGain * 100, Foreground = ThemeTokens.Brush(ThemeTokens.Accent),
+                VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(4, 0, 10, 0) };
+            var saveTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(220) };
+            void SaveGain()
+            {
+                saveTimer.Stop();
+                var changed = _controller.Settings.Copy();
+                var target = changed.SoundEffects.FirstOrDefault(x => x.Id == id);
+                if (target == null || Math.Abs(target.Gain - pendingGain) < .001f) return;
+                target.Gain = pendingGain;
+                _controller.Apply(changed);
+            }
+            saveTimer.Tick += (_, _) => SaveGain();
+            gain.ValueChanged += (_, _) =>
+            {
+                pendingGain = (float)(gain.Value / 100);
+                gainLabel.Text = $"音量 {Math.Round(gain.Value)}%";
+                _controller.Engine?.SetSoundGain(id, pendingGain);
+                saveTimer.Stop(); saveTimer.Start();
+            };
+            gain.PreviewMouseLeftButtonUp += (_, _) => SaveGain();
+            gain.PreviewKeyUp += (_, _) => SaveGain();
+            row.Unloaded += (_, _) => SaveGain();
+            controls.Children.Add(gain);
+            row.Children.Add(controls);
+            _soundpadRows.Children.Add(new Border { Background = ThemeTokens.Brush(ThemeTokens.Card),
+                CornerRadius = new CornerRadius(8), Padding = new Thickness(8, 4, 8, 4), Child = row });
         }
     }
-    async Task PlaySoundAsync(string path)
+    void SetSoundShortcut(string id)
+    {
+        var effect = _controller.Settings.SoundEffects.FirstOrDefault(x => x.Id == id);
+        if (effect == null) return;
+        _owner.PauseHotkeys();
+        try
+        {
+            int? captured = HotkeyCaptureDialog.Show(_window, effect.Hotkey, true);
+            if (!captured.HasValue || captured.Value == effect.Hotkey) return;
+            int encoded = captured.Value;
+            if (!StudioSoundpadHotkeys.IsValid(encoded) || encoded == StudioSoundpadHotkeys.StopEncoded ||
+                _controller.Settings.SoundEffects.Any(x => x.Id != id && x.Hotkey == encoded) ||
+                HotkeyDefinitions.All.Any(x => HotkeyDefinitions.ResolveEncoded(x) == encoded) ||
+                DevicePrefs.GetAllHotkeys().Any(x => x.Value == encoded))
+                throw new InvalidOperationException("快捷键与现有功能冲突，请换一个组合。");
+            if (!_owner.TestHotkey(encoded))
+                throw new InvalidOperationException("快捷键已被其他软件占用，请换一个组合。");
+            var changed = _controller.Settings.Copy();
+            changed.SoundEffects.First(x => x.Id == id).Hotkey = encoded;
+            _controller.Apply(changed);
+        }
+        finally { _owner.RefreshHotkeys(); RefreshSoundpadRows(); }
+    }
+    void ClearSoundShortcut(string id)
+    {
+        var changed = _controller.Settings.Copy();
+        var effect = changed.SoundEffects.FirstOrDefault(x => x.Id == id);
+        if (effect == null) return;
+        effect.Hotkey = 0;
+        _controller.Apply(changed);
+        _owner.RefreshHotkeys();
+        RefreshSoundpadRows();
+    }
+    async Task PlaySoundAsync(string id)
     {
         try
         {
+            var effect = _controller.Settings.SoundEffects.FirstOrDefault(x => x.Id == id);
+            if (effect == null) return;
             _soundpadStatus.Text = "正在加载音效…";
-            await _controller.PlaySoundAsync(path);
-            _soundpadStatus.Text = "正在播放：" + Path.GetFileNameWithoutExtension(path);
+            if (await _controller.PlaySoundAsync(id))
+                _soundpadStatus.Text = "正在播放：" + Path.GetFileNameWithoutExtension(effect.Path);
         }
         catch (Exception ex)
         {
@@ -289,19 +369,24 @@ internal sealed class StudioWindow
     }
     void SoundpadKeyDown(object sender, KeyEventArgs e)
     {
-        if (Keyboard.Modifiers != (ModifierKeys.Control | ModifierKeys.Shift)) return;
-        if (e.Key == Key.D0 || e.Key == Key.NumPad0)
+        int modifiers = 0;
+        if ((Keyboard.Modifiers & ModifierKeys.Alt) != 0) modifiers |= 1;
+        if ((Keyboard.Modifiers & ModifierKeys.Control) != 0) modifiers |= 2;
+        if ((Keyboard.Modifiers & ModifierKeys.Shift) != 0) modifiers |= 4;
+        if ((Keyboard.Modifiers & ModifierKeys.Windows) != 0) modifiers |= 8;
+        int key = KeyInterop.VirtualKeyFromKey(e.Key == Key.System ? e.SystemKey : e.Key);
+        int encoded = (modifiers << 16) | (key & 0xFFFF);
+        if (encoded == StudioSoundpadHotkeys.StopEncoded)
         {
             e.Handled = true;
             _controller.StopSound();
             if (_soundpadStatus != null) _soundpadStatus.Text = "已停止";
             return;
         }
-        int index = e.Key >= Key.D1 && e.Key <= Key.D9 ? e.Key - Key.D1
-            : e.Key >= Key.NumPad1 && e.Key <= Key.NumPad9 ? e.Key - Key.NumPad1 : -1;
-        if (index < 0 || index >= _controller.Settings.SoundpadFiles.Count) return;
+        var effect = _controller.Settings.SoundEffects.FirstOrDefault(x => x.Hotkey != 0 && x.Hotkey == encoded);
+        if (effect == null) return;
         e.Handled = true;
-        _ = PlaySoundAsync(_controller.Settings.SoundpadFiles[index]);
+        _ = PlaySoundAsync(effect.Id);
     }
     async Task BenchmarkAsync(TextBlock output)
     {
@@ -344,7 +429,7 @@ internal sealed class StudioWindow
             Set(_input, devices.Item1, s.InputId); Set(_output, cables, s.OutputId);
             Set(_monitor, devices.Item2.Where(x => !x.IsCable).ToArray(), s.MonitorId);
             _cableStatus.Text = cables.Length > 0
-                ? "已检测到 VB-CABLE。请在 Oopz 中把麦克风选为 CABLE Output。"
+                ? "已检测到 VB-CABLE。请在通话软件中把麦克风选为 CABLE Output。"
                 : "未检测到 VB-CABLE。点击下方按钮下载并打开官方安装程序。";
             _installCable.Visibility = cables.Length > 0 ? Visibility.Collapsed : Visibility.Visible;
             var chat = devices.Item4.FirstOrDefault(x => x.Active && !x.IsVbCable)
@@ -414,7 +499,7 @@ internal sealed class StudioWindow
     {
         var panel = new StackPanel { Margin = new Thickness(22) };
         panel.Children.Add(Text(T("三步开始共享", "Start sharing in three steps"), 20));
-        panel.Children.Add(Text("1. 点击“安装 VB-CABLE 官方驱动”，OneMic 会下载并打开官方安装程序。确认管理员授权，按安装程序提示完成安装并重启。\n\n2. 在 OneMic 选择真实麦克风和 CABLE Input，开始共享。音效板可直接导入音频文件。\n\n3. 在 Oopz 中把麦克风设为 CABLE Output，耳机保持原来的输出设备。"));
+        panel.Children.Add(Text("1. 点击“安装 VB-CABLE 官方驱动”，OneMic 会下载并打开官方安装程序。确认管理员授权，按安装程序提示完成安装并重启。\n\n2. 在 OneMic 选择真实麦克风和 CABLE Input，开始共享。音效板可直接导入音频文件。\n\n3. 在通话软件中把麦克风设为 CABLE Output，耳机保持原来的输出设备。"));
         panel.Children.Add(Button("安装 VB-CABLE 官方驱动", () => _ = VbCableInstaller.InstallAsync(_window)));
         panel.Children.Add(Button(T("打开 VB-CABLE 官网", "Open VB-CABLE website"), () => Open("https://vb-audio.com/Cable/")));
         panel.Children.Add(Button(T("降噪运行库 · Microsoft 官方", "Denoising runtime · Microsoft official"), () => Open("https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist")));

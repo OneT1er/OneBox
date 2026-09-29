@@ -4,6 +4,14 @@ using System.Text.Json;
 
 namespace PowerAudioManager.AudioStudio;
 
+internal sealed class StudioSoundEffect
+{
+    public string Id { get; set; } = Guid.NewGuid().ToString("N");
+    public string Path { get; set; } = "";
+    public float Gain { get; set; } = 1;
+    public int Hotkey { get; set; }
+}
+
 internal sealed class StudioSettings
 {
     public string InputId { get; set; } = "";
@@ -18,6 +26,8 @@ internal sealed class StudioSettings
     public float MicGain { get; set; } = 1;
     public float MusicGain { get; set; } = .6f;
     public float SoundpadGain { get; set; } = .8f;
+    public List<StudioSoundEffect> SoundEffects { get; set; } = new();
+    // Read once for settings written before per-effect volume and hotkeys existed.
     public List<string> SoundpadFiles { get; set; } = new();
     public bool Microphone { get; set; } = true;
     public bool Music { get; set; }
@@ -37,8 +47,31 @@ internal sealed class StudioSettings
         Strength = Clamp(Strength, 0, 1); MicGain = Clamp(MicGain, 0, 3);
         MusicGain = Clamp(MusicGain, 0, 2); SoundpadGain = Clamp(SoundpadGain, 0, 2);
         SoundpadFiles ??= new List<string>();
-        SoundpadFiles.RemoveAll(string.IsNullOrWhiteSpace);
-        if (SoundpadFiles.Count > 64) SoundpadFiles.RemoveRange(64, SoundpadFiles.Count - 64);
+        SoundEffects ??= new List<StudioSoundEffect>();
+        if (SoundEffects.Count == 0)
+            for (int i = 0; i < SoundpadFiles.Count && i < StudioSoundpadHotkeys.MaxEffects; i++)
+                if (!string.IsNullOrWhiteSpace(SoundpadFiles[i]))
+                    SoundEffects.Add(new StudioSoundEffect { Path = SoundpadFiles[i],
+                        Hotkey = StudioSoundpadHotkeys.LegacySlot(i) });
+        SoundpadFiles.Clear();
+        SoundEffects.RemoveAll(x => x == null || string.IsNullOrWhiteSpace(x.Path));
+        if (SoundEffects.Count > StudioSoundpadHotkeys.MaxEffects)
+            SoundEffects.RemoveRange(StudioSoundpadHotkeys.MaxEffects,
+                SoundEffects.Count - StudioSoundpadHotkeys.MaxEffects);
+        var ids = new HashSet<string>(StringComparer.Ordinal);
+        var hotkeys = new HashSet<int>();
+        foreach (var effect in SoundEffects)
+        {
+            if (string.IsNullOrWhiteSpace(effect.Id) || !ids.Add(effect.Id))
+            {
+                effect.Id = Guid.NewGuid().ToString("N");
+                ids.Add(effect.Id);
+            }
+            effect.Gain = Clamp(effect.Gain, 0, 2);
+            if (!StudioSoundpadHotkeys.IsValid(effect.Hotkey) ||
+                effect.Hotkey == StudioSoundpadHotkeys.StopEncoded ||
+                (effect.Hotkey != 0 && !hotkeys.Add(effect.Hotkey))) effect.Hotkey = 0;
+        }
         ExplodeStrength = Clamp(ExplodeStrength, .01f, 1);
         MonitorPoint = Math.Clamp(MonitorPoint, 0, 4);
         if (Bands == null || Bands.Length != 10) Bands = new float[10];
@@ -62,8 +95,9 @@ internal sealed class StudioSettings
         {
             var s = JsonSerializer.Deserialize<StudioSettings>(AppPrefs.GetString("AudioStudio.Settings", "{}")) ?? new StudioSettings();
             string oldModel = s.Model;
+            bool legacySounds = s.SoundpadFiles?.Count > 0;
             s.Normalize(); s.Explode = false;
-            if (oldModel != s.Model) s.Save();
+            if (oldModel != s.Model || legacySounds) s.Save();
             return s;
         }
         catch { return new StudioSettings(); }
