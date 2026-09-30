@@ -53,6 +53,87 @@ namespace PowerAudioManager
             style.Setters.Add(new Setter(FrameworkElement.CursorProperty, Cursors.Hand));
             style.Setters.Add(new Setter(Control.TemplateProperty, CreateButtonTemplate()));
             resources[FlatButtonKey] = style;
+            // An implicit style keeps every slider, including ones created by
+            // OneMic and the floating window, on the same visual language.
+            resources[typeof(Slider)] = CreateUnifiedSliderStyle();
+        }
+
+        internal static Style CreateUnifiedSliderStyle()
+        {
+            const string xaml = @"
+<Style xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'
+       xmlns:x='http://schemas.microsoft.com/winfx/2006/xaml'
+       TargetType='{x:Type Slider}'>
+  <Setter Property='Height' Value='28'/>
+  <Setter Property='MinWidth' Value='80'/>
+  <Setter Property='IsMoveToPointEnabled' Value='True'/>
+  <Setter Property='FocusVisualStyle' Value='{x:Null}'/>
+  <Setter Property='Template'>
+    <Setter.Value>
+      <ControlTemplate TargetType='{x:Type Slider}'>
+        <Grid Height='28' Background='Transparent' SnapsToDevicePixels='True'>
+          <Border Name='Rail' Height='6' Margin='9,0' VerticalAlignment='Center'
+                  Background='#514C70' BorderBrush='Transparent'
+                  BorderThickness='1' CornerRadius='3'/>
+          <Track Name='PART_Track' Margin='9,0' Orientation='Horizontal'
+                 Minimum='{TemplateBinding Minimum}' Maximum='{TemplateBinding Maximum}'
+                 Value='{TemplateBinding Value}'
+                 IsDirectionReversed='{TemplateBinding IsDirectionReversed}'>
+            <Track.DecreaseRepeatButton>
+              <RepeatButton Command='Slider.DecreaseLarge' Focusable='False'>
+                <RepeatButton.Template>
+                  <ControlTemplate TargetType='{x:Type RepeatButton}'>
+                    <Grid Background='Transparent'>
+                      <Border Height='6' VerticalAlignment='Center'
+                              Background='#8E8CD8' CornerRadius='3'/>
+                    </Grid>
+                  </ControlTemplate>
+                </RepeatButton.Template>
+              </RepeatButton>
+            </Track.DecreaseRepeatButton>
+            <Track.Thumb>
+              <Thumb Width='18' Height='18' Cursor='Hand'>
+                <Thumb.Template>
+                  <ControlTemplate TargetType='{x:Type Thumb}'>
+                    <Ellipse Name='Knob' Fill='#8E8CD8' Stroke='#F0EEFF'
+                             StrokeThickness='2'/>
+                    <ControlTemplate.Triggers>
+                      <Trigger Property='IsMouseOver' Value='True'>
+                        <Setter TargetName='Knob' Property='Fill' Value='#AAA8ED'/>
+                        <Setter TargetName='Knob' Property='Stroke' Value='White'/>
+                      </Trigger>
+                      <Trigger Property='IsDragging' Value='True'>
+                        <Setter TargetName='Knob' Property='Fill' Value='#C2C0F4'/>
+                      </Trigger>
+                    </ControlTemplate.Triggers>
+                  </ControlTemplate>
+                </Thumb.Template>
+              </Thumb>
+            </Track.Thumb>
+            <Track.IncreaseRepeatButton>
+              <RepeatButton Command='Slider.IncreaseLarge' Focusable='False'>
+                <RepeatButton.Template>
+                  <ControlTemplate TargetType='{x:Type RepeatButton}'>
+                    <Grid Background='Transparent'/>
+                  </ControlTemplate>
+                </RepeatButton.Template>
+              </RepeatButton>
+            </Track.IncreaseRepeatButton>
+          </Track>
+        </Grid>
+        <ControlTemplate.Triggers>
+          <Trigger Property='IsKeyboardFocusWithin' Value='True'>
+            <Setter TargetName='Rail' Property='BorderBrush' Value='#C2C0F4'/>
+          </Trigger>
+          <Trigger Property='IsEnabled' Value='False'>
+            <Setter Property='Opacity' Value='0.42'/>
+          </Trigger>
+        </ControlTemplate.Triggers>
+      </ControlTemplate>
+    </Setter.Value>
+  </Setter>
+</Style>";
+            return (Style)XamlReader.Parse(xaml);
         }
 
         static ControlTemplate CreateButtonTemplate()

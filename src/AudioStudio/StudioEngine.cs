@@ -31,6 +31,8 @@ internal sealed class StudioEngine : IDisposable
     public int CapturedPid { get; private set; }
     public string InputId => _inputDevice?.ID ?? "";
     public string MonitorId => _monitorDevice?.ID ?? "";
+    public DateTime InputRetryAfterUtc { get; private set; }
+    public DateTime MonitorRetryAfterUtc { get; private set; }
     public bool MonitorFaulted { get; private set; }
     public string MonitorError { get; private set; }
     public bool ProcessingTooSlow { get; private set; }
@@ -71,6 +73,7 @@ internal sealed class StudioEngine : IDisposable
                 catch (Exception ex)
                 {
                     _micCapture?.Dispose(); _micCapture = null; _inputDevice?.Dispose(); _inputDevice = null;
+                    InputRetryAfterUtc = DateTime.UtcNow.AddSeconds(30);
                     Note = "麦克风未连接，音乐仍可共享 / Microphone unavailable; music sharing remains active";
                     AppLog.Log("AudioStudio microphone", ex.Message);
                 }
@@ -109,6 +112,7 @@ internal sealed class StudioEngine : IDisposable
                     {
                         if (args.Exception == null) return;
                         MonitorError = args.Exception.Message; MonitorFaulted = true;
+                        MonitorRetryAfterUtc = DateTime.UtcNow.AddSeconds(30);
                     };
                 }
                 catch (Exception ex)
@@ -116,6 +120,7 @@ internal sealed class StudioEngine : IDisposable
                     _monitorPlayer?.Dispose(); _monitorPlayer = null; _monitorDevice?.Dispose(); _monitorDevice = null;
                     _monitor = null;
                     MonitorError = ex.Message;
+                    MonitorRetryAfterUtc = DateTime.UtcNow.AddSeconds(30);
                     Note = "本地播放不可用：" + ex.Message + " / Local playback unavailable: " + ex.Message;
                     AppLog.Log("AudioStudio local playback", ex.Message);
                 }
@@ -127,6 +132,7 @@ internal sealed class StudioEngine : IDisposable
             catch (Exception ex)
             {
                 MonitorError = ex.Message; MonitorFaulted = true;
+                MonitorRetryAfterUtc = DateTime.UtcNow.AddSeconds(30);
                 AppLog.Log("AudioStudio local playback", ex.Message);
                 _monitorPlayer?.Dispose(); _monitorPlayer = null;
             }
@@ -187,7 +193,8 @@ internal sealed class StudioEngine : IDisposable
                 if (_monitorPlayer != null && (settings.Monitor || soundActive))
                 {
                     // Monitoring is optional and cannot backpressure the virtual microphone.
-                    for (int i = 0; i < monitor.Length; i++) monitor[i] = Math.Clamp(monitor[i] * .7f, -.8f, .8f);
+                    for (int i = 0; i < monitor.Length; i++)
+                        monitor[i] = Math.Clamp(monitor[i] * settings.MonitorGain, -.8f, .8f);
                     System.Buffer.BlockCopy(monitor, 0, bytes, 0, bytes.Length);
                     if (_monitor.BufferedBytes > bytes.Length * 6) _monitor.ClearBuffer();
                     _monitor.AddSamples(bytes, 0, bytes.Length);

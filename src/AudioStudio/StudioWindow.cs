@@ -196,7 +196,7 @@ internal sealed class StudioWindow
         { x.ApplicationPath = ((StudioApplication)item).Path; x.ApplicationPid = ((StudioApplication)item).Pid; }, true));
         Toggle(music, T("分享应用音乐", "Share application music"), x => x.Music, (x, v) => x.Music = v, true);
         Slider(music, T("朋友听到的音乐音量", "Music volume for friends"), s.MusicGain * 100, 200, value => Change(x => x.MusicGain = value / 100));
-        var soundpad = Card("4  音效板", "导入音效后点击播放，声音会送到虚拟麦克风并在耳机播放。每条音效可单独调整音量、设置全局快捷键；Ctrl+Shift+0 停止。");
+        var soundpad = Card("4  音效板", "点击音效即可播放；每条音效的音量和快捷键收在“设置”中。Ctrl+Shift+0 停止。");
         var soundpadActions = new WrapPanel();
         soundpadActions.Children.Add(Button("添加音效", AddSounds));
         soundpadActions.Children.Add(Button("停止音效", () => { _controller.StopSound(); _soundpadStatus.Text = "已停止"; }));
@@ -205,11 +205,13 @@ internal sealed class StudioWindow
         _soundpadStatus = Text(""); _soundpadStatus.Foreground = Muted; soundpad.Children.Add(_soundpadStatus);
         _soundpadRows = new StackPanel(); soundpad.Children.Add(_soundpadRows);
         RefreshSoundpadRows();
-        var advanced = Card(T("监听与音效", "Monitoring and effects"), T("日常听音乐无需开启监听；最终输出包含你的人声和音乐。", "Monitoring is optional; Final output includes your voice and music."));
+        var advanced = Card(T("监听与音效", "Monitoring and effects"), T("本地试听默认只播放人声；选最终输出会把播放器音乐再播一遍。", "Local monitoring defaults to voice only; Final output also replays music from your player."));
         _monitor = Combo(advanced, "本地音效 / 监听耳机（默认使用系统输出）", Array.Empty<object>(), null, item => Change(x => x.MonitorId = ((StudioDevice)item).Id, true));
         string[] points = { T("原始输入", "Raw input"), T("降噪后", "After denoise"), T("增益后", "After gain"), T("EQ 后", "After EQ"), T("最终输出", "Final output") };
         Combo(advanced, T("监听位置", "Monitor point"), points, points[s.MonitorPoint], item => Change(x => x.MonitorPoint = Array.IndexOf(points, (string)item)));
         Toggle(advanced, T("开启监听", "Enable monitoring"), x => x.Monitor, (x, v) => x.Monitor = v, true);
+        Slider(advanced, T("耳机试听音量（不影响朋友）", "Local monitor volume (does not affect friends)"),
+            s.MonitorGain * 100, 100, value => Change(x => x.MonitorGain = value / 100));
         Toggle(advanced, T("炸麦音效", "Distortion effect"), x => x.Explode, (x, v) => x.Explode = v);
         Slider(advanced, T("炸麦强度", "Distortion intensity"), s.ExplodeStrength * 100, 100, value => Change(x => x.ExplodeStrength = value / 100), 1);
         CollapseCard(advanced, T("监听与炸麦音效", "Monitoring and distortion"), false);
@@ -262,6 +264,7 @@ internal sealed class StudioWindow
         {
             string id = effect.Id;
             var row = new StackPanel { Margin = new Thickness(0, 0, 0, 8) };
+            var details = new StackPanel { Visibility = Visibility.Collapsed, Margin = new Thickness(8, 4, 0, 4) };
             var header = new DockPanel { LastChildFill = true };
             var remove = Button("移除", () =>
             {
@@ -273,6 +276,9 @@ internal sealed class StudioWindow
                 RefreshSoundpadRows();
             });
             DockPanel.SetDock(remove, Dock.Right); header.Children.Add(remove);
+            var settingsButton = Button("设置", () => details.Visibility =
+                details.Visibility == Visibility.Visible ? Visibility.Collapsed : Visibility.Visible);
+            DockPanel.SetDock(settingsButton, Dock.Right); header.Children.Add(settingsButton);
             string label = Path.GetFileNameWithoutExtension(effect.Path)
                 + (File.Exists(effect.Path) ? "" : "  · 文件丢失");
             var play = Button("播放  " + label, () => _ = PlaySoundAsync(id));
@@ -281,23 +287,11 @@ internal sealed class StudioWindow
             header.Children.Add(play);
             row.Children.Add(header);
 
-            var controls = new DockPanel { LastChildFill = true };
-            var shortcut = Button(effect.Hotkey == 0 ? "设置快捷键" : HotkeyCaptureDialog.Format(effect.Hotkey),
-                () => SetSoundShortcut(id));
-            shortcut.ToolTip = "设置此音效的全局快捷键；支持 F1–F24 单键或组合键";
-            DockPanel.SetDock(shortcut, Dock.Right); controls.Children.Add(shortcut);
-            if (effect.Hotkey != 0)
-            {
-                var clear = Button("清除", () => ClearSoundShortcut(id));
-                DockPanel.SetDock(clear, Dock.Right); controls.Children.Add(clear);
-            }
             float pendingGain = effect.Gain;
             var gainLabel = Text($"音量 {Math.Round(pendingGain * 100)}%");
-            gainLabel.MinWidth = 70; gainLabel.VerticalAlignment = VerticalAlignment.Center;
-            DockPanel.SetDock(gainLabel, Dock.Left); controls.Children.Add(gainLabel);
-            var gain = new System.Windows.Controls.Slider { Minimum = 0, Maximum = 200,
-                Value = pendingGain * 100, Foreground = ThemeTokens.Brush(ThemeTokens.Accent),
-                VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(4, 0, 10, 0) };
+            details.Children.Add(gainLabel);
+            var gain = new Slider { Minimum = 0, Maximum = 200, Value = pendingGain * 100,
+                Margin = new Thickness(0, 0, 10, 6), ToolTip = "仅调整这个音效的音量" };
             var saveTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(220) };
             void SaveGain()
             {
@@ -319,8 +313,19 @@ internal sealed class StudioWindow
             gain.PreviewMouseLeftButtonUp += (_, _) => SaveGain();
             gain.PreviewKeyUp += (_, _) => SaveGain();
             row.Unloaded += (_, _) => SaveGain();
-            controls.Children.Add(gain);
-            row.Children.Add(controls);
+            details.Children.Add(gain);
+            var controls = new WrapPanel();
+            var shortcut = Button(effect.Hotkey == 0 ? "设置快捷键" : HotkeyCaptureDialog.Format(effect.Hotkey),
+                () => SetSoundShortcut(id));
+            shortcut.ToolTip = "设置此音效的全局快捷键；支持 F1–F24 单键或组合键";
+            controls.Children.Add(shortcut);
+            if (effect.Hotkey != 0)
+            {
+                var clear = Button("清除", () => ClearSoundShortcut(id));
+                controls.Children.Add(clear);
+            }
+            details.Children.Add(controls);
+            row.Children.Add(details);
             _soundpadRows.Children.Add(new Border { Background = ThemeTokens.Brush(ThemeTokens.Card),
                 CornerRadius = new CornerRadius(8), Padding = new Thickness(8, 4, 8, 4), Child = row });
         }

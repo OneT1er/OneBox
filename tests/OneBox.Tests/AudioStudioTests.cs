@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Text.Json;
 using NAudio.Wave;
 using PowerAudioManager.AudioStudio;
 using Xunit;
@@ -76,6 +77,16 @@ public sealed class AudioStudioTests
         Assert.Equal("", player.PlayingName);
     }
     [Fact]
+    public void FailedMicrophoneRetryDoesNotInterruptAnActiveSound()
+    {
+        var now = DateTime.UtcNow;
+        Assert.False(StudioController.ShouldReconnectInput(true, false, now.AddSeconds(30), now));
+        Assert.True(StudioController.ShouldReconnectInput(true, false, now.AddSeconds(-1), now));
+        Assert.True(StudioController.ShouldReconnectInput(false, true, now.AddSeconds(30), now));
+        Assert.True(StudioController.ShouldDeferRecovery(true, false, true));
+        Assert.False(StudioController.ShouldDeferRecovery(true, true, true));
+    }
+    [Fact]
     public void SoundpadGainCanBeChangedForThePlayingEffect()
     {
         var player = new StudioSoundpadPlayer();
@@ -149,8 +160,16 @@ public sealed class AudioStudioTests
     [Fact]
     public void CorruptSettingsAreSanitized()
     {
-        var settings = new StudioSettings { Strength = float.NaN, MicGain = 100, Bands = null, MonitorPoint = 100 };
-        settings.Normalize(); Assert.Equal(0, settings.Strength); Assert.Equal(3, settings.MicGain); Assert.Equal(10, settings.Bands.Length); Assert.Equal(4, settings.MonitorPoint);
+        var settings = new StudioSettings { Strength = float.NaN, MicGain = 100, Bands = null, MonitorPoint = 100, MonitorGain = 3 };
+        settings.Normalize(); Assert.Equal(0, settings.Strength); Assert.Equal(3, settings.MicGain); Assert.Equal(10, settings.Bands.Length); Assert.Equal(4, settings.MonitorPoint); Assert.Equal(1, settings.MonitorGain);
+    }
+    [Fact]
+    public void ExistingMonitorSettingsReceiveSafeLocalVolume()
+    {
+        var existing = JsonSerializer.Deserialize<StudioSettings>("{\"Monitor\":true,\"MonitorPoint\":4}");
+        Assert.Equal(.25f, existing.MonitorGain);
+        Assert.Equal(4, existing.MonitorPoint);
+        Assert.Equal(3, new StudioSettings().MonitorPoint);
     }
     [Fact]
     public void LegacyAndUnavailableModesFallBackSafely()

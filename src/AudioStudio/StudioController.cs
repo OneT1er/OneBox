@@ -159,7 +159,9 @@ internal sealed class StudioController : IDisposable
                     {
                         var inputs = await Task.Run(() => StudioDevices.List(DataFlow.Capture));
                         bool available = inputs.Any(x => x.Id == Settings.InputId);
-                        reconnect = available != !string.IsNullOrEmpty(Engine.InputId);
+                        bool captured = !string.IsNullOrEmpty(Engine.InputId);
+                        reconnect = ShouldReconnectInput(available, captured,
+                            Engine.InputRetryAfterUtc, DateTime.UtcNow);
                     }
                     if (Settings.Monitor || Settings.SoundEffects.Count > 0)
                     {
@@ -168,7 +170,9 @@ internal sealed class StudioController : IDisposable
                         if (string.IsNullOrEmpty(localId) || !outputs.Any(x => x.Id == localId && !x.IsCable))
                             localId = await Task.Run(StudioDevices.DefaultSpeaker);
                         bool monitorAvailable = outputs.Any(x => x.Id == localId && !x.IsCable);
-                        reconnect |= monitorAvailable && (localId != Engine.MonitorId || Engine.MonitorFaulted);
+                        reconnect |= monitorAvailable &&
+                            (localId != Engine.MonitorId || Engine.MonitorFaulted) &&
+                            DateTime.UtcNow >= Engine.MonitorRetryAfterUtc;
                     }
                     if (Settings.Music)
                     {
@@ -176,7 +180,11 @@ internal sealed class StudioController : IDisposable
                         reconnect |= pid != Engine.CapturedPid;
                     }
                 }
-                if (reconnect && Wanted && !Busy) await StartAsync();
+                // A routine device retry must not cut off a sound effect mid-playback.
+                if (reconnect && Wanted && !Busy &&
+                    (Engine == null || !ShouldDeferRecovery(Engine.Running,
+                        Engine.Error != null, !string.IsNullOrEmpty(Engine.PlayingSoundId))))
+                    await StartAsync();
             }
         }
         catch (Exception ex) { AppLog.Log("AudioStudio recovery", ex); }
@@ -188,6 +196,13 @@ internal sealed class StudioController : IDisposable
         Engine?.Dispose(); Engine = null;
         _window?.Close();
     }
+    internal static bool ShouldReconnectInput(bool available, bool captured,
+        DateTime retryAfterUtc, DateTime nowUtc) =>
+        captured && !available || available && !captured && nowUtc >= retryAfterUtc;
+
+    internal static bool ShouldDeferRecovery(bool running, bool faulted, bool soundPlaying) =>
+        running && !faulted && soundPlaying;
+
     internal static int ResolveApplication(StudioSettings settings, StudioApplication[] applications)
     {
         if (string.IsNullOrWhiteSpace(settings.ApplicationPath)) return 0;

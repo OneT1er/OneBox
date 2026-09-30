@@ -26,6 +26,7 @@ internal sealed class StudioSettings
     public float MicGain { get; set; } = 1;
     public float MusicGain { get; set; } = .6f;
     public float SoundpadGain { get; set; } = .8f;
+    public float MonitorGain { get; set; } = .25f;
     public List<StudioSoundEffect> SoundEffects { get; set; } = new();
     // Read once for settings written before per-effect volume and hotkeys existed.
     public List<string> SoundpadFiles { get; set; } = new();
@@ -38,7 +39,7 @@ internal sealed class StudioSettings
     public bool Explode { get; set; }
     public float ExplodeStrength { get; set; } = .1f;
     public bool Monitor { get; set; }
-    public int MonitorPoint { get; set; } = 4;
+    public int MonitorPoint { get; set; } = 3;
     public bool AutoStartAudio { get; set; }
 
     public StudioSettings Copy() => JsonSerializer.Deserialize<StudioSettings>(JsonSerializer.Serialize(this));
@@ -46,6 +47,7 @@ internal sealed class StudioSettings
     {
         Strength = Clamp(Strength, 0, 1); MicGain = Clamp(MicGain, 0, 3);
         MusicGain = Clamp(MusicGain, 0, 2); SoundpadGain = Clamp(SoundpadGain, 0, 2);
+        MonitorGain = Clamp(MonitorGain, 0, 1);
         SoundpadFiles ??= new List<string>();
         SoundEffects ??= new List<StudioSoundEffect>();
         if (SoundEffects.Count == 0)
