@@ -118,6 +118,12 @@ namespace PowerAudioManager
             catch (Exception ex) { AppLog.Log("ApplyScaling", ex); }
         }
 
+        public void ReleaseVisuals()
+        {
+            _appliedBorder = null;
+            _currentScale = -1;
+        }
+
         // 同步 Border 自身的视觉属性（圆角、边线、阴影），与 LayoutTransform 配合保证观感一致。
         // LayoutTransform 会缩放子元素渲染，但 Border 自身的 CornerRadius/BorderThickness/Effect 需显式同步——
         // 否则缩放变化时这些属性保持原值，与已缩放的内容比例失调。

@@ -175,6 +175,15 @@ namespace PowerAudioManager
             _titleBarBorder = titleBarBorder;
             _root.Children.Add(titleBarBorder);
 
+            if (!_isExpanded)
+            {
+                if (ModuleVisible("Temp")) _collapsedTempLabel.Visibility = Visibility.Visible;
+                _titleBarBorder.CornerRadius = new CornerRadius(10);
+                _mainBorder.Child = _root;
+                Content = _mainBorder;
+                return;
+            }
+
             var contentPanel = new StackPanel { Margin = new Thickness(14, 10, 14, 14) };
             _contentPanel = contentPanel;
 

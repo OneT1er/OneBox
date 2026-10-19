@@ -2,11 +2,13 @@ using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Runtime;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Media3D;
 using System.Windows.Media.Imaging;
 using System.Windows.Documents;
 using System.Windows.Threading;
@@ -69,6 +71,9 @@ namespace PowerAudioManager
         private List<TextBlock> _metricValBlocks;  // 每个指标的数值 TextBlock（复用，每秒只改 Text/Foreground）
         private List<string> _metricKeys;          // 上次构建时的 ConfigKey 序列；集合变化才重建结构
         private System.Threading.Timer _tempTimer;
+        private DispatcherTimer _uiReclaimTimer;
+        private DateTime _lastUiReclamationUtc;
+        private bool _windowUiDetached;
 
         // 后台数据加载进行中标记。防止多个调用方（设备监视器、刷新定时器、点击）短时间内重复触发 powercfg。
         bool _loading;
@@ -138,13 +143,14 @@ namespace PowerAudioManager
             // LoadData() 推迟到 OnLoaded 异步执行，避免 GetStatus() 首次创建 PerformanceCounter（~300ms）阻塞构造函数。
             AppLog.Log("Startup", "ctor done " + sw.ElapsedMilliseconds + "ms");
             _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(30) };
-            _refreshTimer.Tick += (s, e) => { LoadData(); if (_tray != null) _tray.UpdateIcon(); try { _scaling.ApplyScaling(); _scaling.Reposition(); } catch { } };
+            _refreshTimer.Tick += (s, e) => { LoadData(); if (_tray != null) _tray.UpdateIcon(); if (IsVisible) try { _scaling.ApplyScaling(); _scaling.Reposition(); } catch { } };
             _refreshTimer.Start();
             // 2s 轮询分辨率/DPI 变化。SystemEvents.DisplaySettingsChanged 在 DPI 切换时不可靠，直接监视屏幕宽度。
             _screenPoll = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
             _screenPoll.Tick += (s, e) => { try { if (_scaling != null) _scaling.ApplyScaling(); } catch { } };
             _screenPoll.Start();
             Closing += OnWindowClosing;
+            IsVisibleChanged += OnMainWindowIsVisibleChanged;
             Loaded += OnLoaded;
             LocationChanged += (s, e) => { if (IsLoaded) SavePosition(); };
         }
@@ -285,27 +291,163 @@ namespace PowerAudioManager
             }
         }
 
-        public void RebuildUI()
+        void ClearUiReferences()
         {
-            double left = Left, top = Top;
             _contentPanel = null;
             _powerSection = null;
             _audioSection = null;
             _audioDeviceSection = null;
             _oneMicSection = null;
+            _pinBtn = null;
             _memStatusLabel = null;
             _volSlider = null;
             _volLabel = null;
             _muteBtn = null;
             _metricRow = null;
+            _metricValBlocks = null;
+            _metricKeys = null;
             _collapsedTempLabel = null;
             _root = null;
+            _titleBarBorder = null;
             _mainBorder = null;
+            _volumeInputReady = false;
+        }
+
+        void RebuildWindowUi()
+        {
+            double left = Left, top = Top;
+            ClearFocusFromOldUi();
+            ClearUiReferences();
             BuildUI();
             if (_scaling != null) _scaling.ApplyScaling(); // re-apply scale to the freshly built _mainBorder
+            Left = left; Top = top;
+        }
+
+        void ClearFocusFromOldUi()
+        {
+            var oldRoot = (DependencyObject)_mainBorder ?? _root;
+            if (oldRoot == null) return;
+
+            if (Keyboard.FocusedElement is DependencyObject keyboardFocus && IsWithinUiTree(keyboardFocus, oldRoot))
+                Keyboard.ClearFocus();
+            if (FocusManager.GetFocusedElement(this) is DependencyObject focusedElement && IsWithinUiTree(focusedElement, oldRoot))
+                FocusManager.SetFocusedElement(this, null);
+        }
+
+        static bool IsWithinUiTree(DependencyObject element, DependencyObject root)
+        {
+            for (var current = element; current != null;)
+            {
+                if (ReferenceEquals(current, root)) return true;
+                DependencyObject parent = null;
+                if (current is Visual || current is Visual3D)
+                    parent = VisualTreeHelper.GetParent(current);
+                else if (current is FrameworkContentElement contentElement)
+                    parent = contentElement.Parent;
+                else if (current is FrameworkElement frameworkElement)
+                    parent = frameworkElement.Parent;
+                current = parent ?? LogicalTreeHelper.GetParent(current);
+            }
+            return false;
+        }
+
+        public void RebuildUI()
+        {
+            if (!_windowUiDetached) RebuildWindowUi();
             LoadData();
             if (IsLoaded) RestartTempTimer();
-            Left = left; Top = top;
+        }
+
+        void OnMainWindowIsVisibleChanged(object sender, DependencyPropertyChangedEventArgs e)
+        {
+            ApplyWindowVisibility((bool)e.NewValue);
+        }
+
+        void ApplyWindowVisibility(bool visible)
+        {
+            if (visible)
+            {
+                RestoreWindowUi();
+                _screenPoll?.Start();
+                if (_autoCollapseTimer == null) StartAutoCollapse();
+                if (_isExpanded && !_collapsedManually && !IsMouseOver && AppPrefs.GetBool("AutoCollapse", true))
+                {
+                    _autoCollapseTimer?.Stop();
+                    _autoCollapseTimer?.Start();
+                }
+                return;
+            }
+
+            if (_isExiting) return;
+            _screenPoll?.Stop();
+            _autoCollapseTimer?.Stop();
+            CancelPendingVolumeCommand();
+            ReleaseHiddenWindowUi();
+        }
+
+        void ReleaseHiddenWindowUi()
+        {
+            if (_windowUiDetached) return;
+            bool releasedUi = _root != null || _mainBorder != null;
+            ClearFocusFromOldUi();
+            Content = null;
+            ClearUiReferences();
+            _windowUiDetached = true;
+            _scaling?.ReleaseVisuals();
+            if (releasedUi) ScheduleUiReclamation();
+        }
+
+        void RestoreWindowUi()
+        {
+            if (!_windowUiDetached) return;
+            _windowUiDetached = false;
+            CancelUiReclamation();
+            RebuildWindowUi();
+            RefreshVisibleUi();
+            LoadData();
+        }
+
+        void RefreshVisibleUi()
+        {
+            UpdateTempUI();
+            if (_contentPanel == null) return;
+            RenderPlans(_powerPlans);
+            RenderDevices(_audioDevices);
+            UpdateVolumeUI();
+            UpdateMemoryUI();
+        }
+
+        void ScheduleUiReclamation()
+        {
+            if (_uiReclaimTimer == null)
+            {
+                _uiReclaimTimer = new DispatcherTimer(DispatcherPriority.ApplicationIdle);
+                _uiReclaimTimer.Tick += ReclaimReleasedUi;
+            }
+            if (_uiReclaimTimer.IsEnabled) return;
+
+            // Let quick hover-driven fold/unfold cycles settle, and avoid repeatedly
+            // forcing a full collection when the user keeps folding the window.
+            var delay = TimeSpan.FromSeconds(3);
+            var cooldownRemaining = TimeSpan.FromSeconds(30) - (DateTime.UtcNow - _lastUiReclamationUtc);
+            if (cooldownRemaining > delay) delay = cooldownRemaining;
+            _uiReclaimTimer.Interval = delay;
+            _uiReclaimTimer.Start();
+        }
+
+        void ReclaimReleasedUi(object sender, EventArgs e)
+        {
+            _uiReclaimTimer.Stop();
+            if (_isExiting || (IsVisible && _isExpanded && _contentPanel != null)) return;
+            if (GC.GetGCMemoryInfo().GenerationInfo[3].FragmentationAfterBytes >= 16L * 1024 * 1024)
+                GCSettings.LargeObjectHeapCompactionMode = GCLargeObjectHeapCompactionMode.CompactOnce;
+            GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: true);
+            _lastUiReclamationUtc = DateTime.UtcNow;
+        }
+
+        void CancelUiReclamation()
+        {
+            try { _uiReclaimTimer?.Stop(); } catch { }
         }
 
         void ConfigureAudioWatcher()
@@ -370,6 +512,7 @@ namespace PowerAudioManager
             try { CancelPendingVolumeCommand(); } catch { }
             try { _refreshTimer?.Stop(); } catch { }
             try { _screenPoll?.Stop(); } catch { }
+            CancelUiReclamation();
             try { _autoCleanTimer?.Stop(); } catch { }
             try { _autoCollapseTimer?.Stop(); } catch { }
             var initTimer = System.Threading.Interlocked.Exchange(ref _initLoadTimer, null);

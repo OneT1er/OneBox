@@ -35,11 +35,20 @@ namespace PowerAudioManager
 
         void SetExpanded(bool expanded, bool manual)
         {
+            bool releasedContent = !expanded && _contentPanel != null;
+            bool rebuild = !_windowUiDetached && (expanded ? _contentPanel == null : _contentPanel != null);
+            double bottom = Top + ActualHeight;
             _isExpanded = expanded;
             if (manual && !expanded) _collapsedManually = true;
             if (expanded) _collapsedManually = false;
+            if (expanded) CancelUiReclamation();
+            else _autoCollapseTimer?.Stop();
+            if (rebuild) RebuildWindowUi();
+            if (releasedContent) ScheduleUiReclamation();
+            if (expanded && rebuild) RefreshVisibleUi();
+            else if (!expanded && rebuild) UpdateTempUI();
+
             // 固定底边使窗口向上折叠
-            double bottom = Top + ActualHeight;
             if (_isExpanded)
             {
                 if (_contentPanel != null) _contentPanel.Visibility = Visibility.Visible;
@@ -76,7 +85,7 @@ namespace PowerAudioManager
 
         void StartAutoCollapse()
         {
-            if (!AppPrefs.GetBool("AutoCollapse", true)) return;
+            if (_autoCollapseTimer != null || !AppPrefs.GetBool("AutoCollapse", true)) return;
             _autoCollapseTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(Math.Max(0, AppPrefs.GetInt("AutoCollapseDelay", 8))) };
             _autoCollapseTimer.Tick += (s, e) => { _autoCollapseTimer.Stop(); SetExpanded(false, false); };
             MouseEnter += (s, e) =>
