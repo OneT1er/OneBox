@@ -226,6 +226,7 @@ namespace PowerAudioManager
 
         // ---- 持久化（退出写 / 启动读）----
         class SeriesData { public string name { get; set; } public string icon { get; set; } public bool isTemp { get; set; } public List<float> points { get; set; } public List<string> times { get; set; } }
+        class SeriesSnapshot { public string Name; public string Icon; public bool IsTemp; public float[] Points; public long[] Times; }
 
         public static void Save()
         {
@@ -233,29 +234,58 @@ namespace PowerAudioManager
             {
                 lock (_saveIoLock)
                 {
-                    Dictionary<string, SeriesData> data;
+                    Dictionary<string, SeriesSnapshot> data;
                     bool preserveBackup;
                     lock (_lock)
                     {
                         if (!_loaded) return;   // 从未加载过磁盘数据：不空写覆盖持久化文件
                         preserveBackup = _preserveBackupOnNextSave;
-                        data = new Dictionary<string, SeriesData>();
+                        data = new Dictionary<string, SeriesSnapshot>(_series.Count);
                         foreach (var kv in _series)
                         {
                             var s = kv.Value;
-                            var pts = new List<float>(s.Count);
-                            var times = new List<string>(s.Count);
+                            var pts = new float[s.Count];
+                            var times = new long[s.Count];
                             int start = (s.Head - s.Count + Capacity) % Capacity;
                             for (int i = 0; i < s.Count; i++)
                             {
-                                pts.Add(s.Buf[(start + i) % Capacity]);
-                                times.Add(((DateTimeOffset)s.Times[(start + i) % Capacity].ToUniversalTime()).ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture));
+                                int index = (start + i) % Capacity;
+                                pts[i] = s.Buf[index];
+                                times[i] = ((DateTimeOffset)s.Times[index].ToUniversalTime()).ToUnixTimeSeconds();
                             }
-                            data[kv.Key] = new SeriesData { name = s.Name, icon = s.Icon, isTemp = s.IsTemp, points = pts, times = times };
+                            data[kv.Key] = new SeriesSnapshot { Name = s.Name, Icon = s.Icon, IsTemp = s.IsTemp, Points = pts, Times = times };
                         }
                     }
-                    string json = JsonSerializer.Serialize(data);
-                    DurableFileStore.WriteUtf8Atomically(FilePath, json, preserveBackup);
+                    DurableFileStore.WriteUtf8Atomically(FilePath, stream =>
+                    {
+                        using (var writer = new Utf8JsonWriter(stream))
+                        {
+                            Span<char> timestamp = stackalloc char[20];
+                            writer.WriteStartObject();
+                            foreach (var kv in data)
+                            {
+                                var s = kv.Value;
+                                writer.WritePropertyName(kv.Key);
+                                writer.WriteStartObject();
+                                writer.WriteString("name", s.Name);
+                                writer.WriteString("icon", s.Icon);
+                                writer.WriteBoolean("isTemp", s.IsTemp);
+                                writer.WriteStartArray("points");
+                                foreach (float point in s.Points) writer.WriteNumberValue(point);
+                                writer.WriteEndArray();
+                                writer.WriteStartArray("times");
+                                foreach (long time in s.Times)
+                                {
+                                    if (!time.TryFormat(timestamp, out int charsWritten, provider: CultureInfo.InvariantCulture))
+                                        throw new InvalidOperationException("Could not format a history timestamp.");
+                                    writer.WriteStringValue(timestamp[..charsWritten]);
+                                }
+                                writer.WriteEndArray();
+                                writer.WriteEndObject();
+                            }
+                            writer.WriteEndObject();
+                        }
+                    }, preserveBackup);
                     lock (_lock) _preserveBackupOnNextSave = false;
                     AppLog.Log("PerfHistory", "saved " + data.Count + " series");
                 }

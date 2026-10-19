@@ -13,7 +13,20 @@ namespace PowerAudioManager
     {
         public static void WriteUtf8Atomically(string path, string content, bool preserveBackup = false)
         {
+            WriteUtf8Atomically(path, stream =>
+            {
+                using (var writer = new StreamWriter(stream, new UTF8Encoding(false), 64 * 1024, leaveOpen: true))
+                {
+                    writer.Write(content ?? string.Empty);
+                    writer.Flush();
+                }
+            }, preserveBackup);
+        }
+
+        public static void WriteUtf8Atomically(string path, Action<Stream> write, bool preserveBackup = false)
+        {
             if (string.IsNullOrWhiteSpace(path)) throw new ArgumentException("A destination path is required.", nameof(path));
+            if (write == null) throw new ArgumentNullException(nameof(write));
 
             string directory = Path.GetDirectoryName(path);
             if (string.IsNullOrEmpty(directory)) throw new ArgumentException("The destination must have a directory.", nameof(path));
@@ -24,10 +37,8 @@ namespace PowerAudioManager
             {
                 using (var stream = new FileStream(tempPath, FileMode.CreateNew, FileAccess.Write, FileShare.None,
                     64 * 1024, FileOptions.WriteThrough))
-                using (var writer = new StreamWriter(stream, new UTF8Encoding(false), 64 * 1024, leaveOpen: true))
                 {
-                    writer.Write(content ?? string.Empty);
-                    writer.Flush();
+                    write(stream);
                     stream.Flush(flushToDisk: true);
                 }
 

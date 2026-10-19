@@ -16,8 +16,6 @@ namespace PowerAudioManager
     {
         internal const int OneMicTabIndex = 7;
         internal const int AboutTabIndex = 8;
-        static List<UIElement> _tabContents;
-        static ContentControl _contentHost;
         public static void Show(Window owner)
         {
             Show(owner, 0);
@@ -27,6 +25,8 @@ namespace PowerAudioManager
         {
             var fg = new SolidColorBrush(Color.FromRgb(190, 188, 220));
             var lightText = new SolidColorBrush(Color.FromRgb(220, 218, 245));
+            List<UIElement> tabContents = null;
+            ContentControl contentHost = null;
 
             // ---- 侧栏 ----
             var sideBar = new ListBox
@@ -63,17 +63,17 @@ namespace PowerAudioManager
                 UpdateSelectionColors(sideBar);
                 if (sideBar.SelectedIndex < 0) return;
                 aboutBar.SelectedIndex = -1;
-                _contentHost.Content = _tabContents[sideBar.SelectedIndex];
+                contentHost.Content = tabContents[sideBar.SelectedIndex];
             };
             aboutBar.SelectionChanged += (s, e) =>
             {
                 UpdateSelectionColors(aboutBar);
                 if (aboutBar.SelectedIndex < 0) return;
                 sideBar.SelectedIndex = -1;
-                _contentHost.Content = _tabContents[AboutTabIndex];
+                contentHost.Content = tabContents[AboutTabIndex];
             };
 
-            _contentHost = new ContentControl
+            contentHost = new ContentControl
             {
                 Background = new SolidColorBrush(Color.FromRgb(28, 26, 40)),
                 HorizontalContentAlignment = HorizontalAlignment.Stretch,
@@ -88,9 +88,9 @@ namespace PowerAudioManager
             sideColumn.Children.Add(aboutBar);
             sideColumn.Children.Add(sideBar);
             Grid.SetColumn(sideColumn, 0);
-            Grid.SetColumn(_contentHost, 1);
+            Grid.SetColumn(contentHost, 1);
             layout.Children.Add(sideColumn);
-            layout.Children.Add(_contentHost);
+            layout.Children.Add(contentHost);
 
             var dlg = OneBoxWindow.Create(owner, "设置", 520, 570, layout, true);
             dlg.MinWidth = 480;
@@ -99,7 +99,7 @@ namespace PowerAudioManager
             layout.SizeChanged += (_, _) => layout.Clip = new RectangleGeometry(
                 new Rect(0, 0, layout.ActualWidth, layout.ActualHeight), 8, 8);
 
-            _tabContents = new System.Collections.Generic.List<UIElement>
+            tabContents = new List<UIElement>
             {
                 BuildGeneralTab(owner, dlg, fg, lightText),
                 BuildModulesTab(owner, dlg, fg),
@@ -129,9 +129,9 @@ namespace PowerAudioManager
             else if (openTab >= 0 && openTab < sideBar.Items.Count)
             {
                 sideBar.SelectedIndex = openTab;
-                _contentHost.Content = _tabContents[openTab];
+                contentHost.Content = tabContents[openTab];
             }
-            else { sideBar.SelectedIndex = 0; _contentHost.Content = _tabContents[0]; }
+            else { sideBar.SelectedIndex = 0; contentHost.Content = tabContents[0]; }
 
             dlg.ShowDialog();
         }

@@ -1,12 +1,18 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Reflection;
+using System.Text.Json;
 using PowerAudioManager;
 using Xunit;
 
 namespace OneBox.Tests;
 
+[Collection("PerfHistory")]
 public sealed class DurableFileStoreTests
 {
     [Fact]
@@ -64,6 +70,141 @@ public sealed class DurableFileStoreTests
 
         Assert.Equal(expected, actual, ignoreCase: true);
     }
+}
+
+[Collection("PerfHistory")]
+public sealed class PerfHistorySaveTests
+{
+    private readonly ITestOutputHelper _output;
+
+    public PerfHistorySaveTests(ITestOutputHelper output) => _output = output;
+
+    [Fact]
+    public void Save_FullCapacityRoundTripsAndStaysWithinAllocationBudget()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "OneBox.PerfHistory." + Guid.NewGuid().ToString("N"));
+        string path = Path.Combine(directory, "OneBox.perfhistory.json");
+        Type type = typeof(PerfHistory);
+        FieldInfo pathField = Field(type, "_path");
+        FieldInfo seriesField = Field(type, "_series");
+        FieldInfo loadedField = Field(type, "_loaded");
+        FieldInfo loadAttemptedField = Field(type, "_loadAttempted");
+        FieldInfo preserveBackupField = Field(type, "_preserveBackupOnNextSave");
+        object saveIoLock = Field(type, "_saveIoLock").GetValue(null);
+        object stateLock = Field(type, "_lock").GetValue(null);
+
+        lock (saveIoLock)
+        {
+            var series = (IDictionary)seriesField.GetValue(null);
+            var previousSeries = new List<DictionaryEntry>();
+            lock (stateLock)
+            {
+                foreach (DictionaryEntry entry in series) previousSeries.Add(entry);
+            }
+            object previousPath = pathField.GetValue(null);
+            bool previousLoaded = (bool)loadedField.GetValue(null);
+            bool previousLoadAttempted = (bool)loadAttemptedField.GetValue(null);
+            bool previousPreserveBackup = (bool)preserveBackupField.GetValue(null);
+
+            try
+            {
+                lock (stateLock)
+                {
+                    series.Clear();
+                    pathField.SetValue(null, path);
+                    loadedField.SetValue(null, true);
+                    loadAttemptedField.SetValue(null, true);
+                    preserveBackupField.SetValue(null, false);
+                }
+
+                const int seriesCount = 8;
+                var metrics = new List<MetricValue>(seriesCount);
+                for (int i = 0; i < seriesCount; i++)
+                {
+                    metrics.Add(new MetricValue
+                    {
+                        ConfigKey = "save-check-" + i,
+                        DisplayName = "Save check " + i,
+                        IconKey = "Temp",
+                        Unit = "°C",
+                        Value = 0,
+                    });
+                }
+
+                for (int sample = 0; sample < PerfHistory.Capacity; sample++)
+                {
+                    float value = sample % 100;
+                    foreach (MetricValue metric in metrics) metric.Value = value;
+                    PerfHistory.Add(metrics);
+                }
+
+                PerfHistory.Save(); // Warm JIT and writer buffers before measuring the full-capacity save.
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+                GC.Collect();
+                long allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+                var saveStopwatch = Stopwatch.StartNew();
+                PerfHistory.Save();
+                saveStopwatch.Stop();
+                long allocatedBytes = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
+                _output.WriteLine("Full-capacity save allocated {0:N1} MiB in {1:N0} ms.",
+                    allocatedBytes / 1024d / 1024d, saveStopwatch.Elapsed.TotalMilliseconds);
+                Assert.True(allocatedBytes < 64L * 1024 * 1024,
+                    $"Expected a full save to allocate under 64 MiB; allocated {allocatedBytes / 1024d / 1024d:N1} MiB.");
+
+                using (var stream = File.OpenRead(path))
+                using (JsonDocument document = JsonDocument.Parse(stream))
+                {
+                    JsonElement root = document.RootElement;
+                    Assert.Equal(seriesCount, root.EnumerateObject().Count());
+                    foreach (MetricValue metric in metrics)
+                    {
+                        JsonElement saved = root.GetProperty(metric.ConfigKey);
+                        Assert.Equal(metric.DisplayName, saved.GetProperty("name").GetString());
+                        JsonElement points = saved.GetProperty("points");
+                        Assert.Equal(PerfHistory.Capacity, points.GetArrayLength());
+                        Assert.Equal(0, points[0].GetSingle());
+                        Assert.Equal((PerfHistory.Capacity - 1) % 100, points[PerfHistory.Capacity - 1].GetSingle());
+                        JsonElement times = saved.GetProperty("times");
+                        Assert.Equal(PerfHistory.Capacity, times.GetArrayLength());
+                        Assert.Equal(JsonValueKind.String, times[0].ValueKind);
+                        Assert.True(long.TryParse(times[0].GetString(), NumberStyles.Integer,
+                            CultureInfo.InvariantCulture, out _));
+                    }
+                }
+
+                lock (stateLock) series.Clear();
+                Assert.True(PerfHistory.Load());
+                List<ChartSeries> loaded = PerfHistory.GetSeries(DateTime.MinValue, DateTime.MaxValue);
+                Assert.Equal(seriesCount, loaded.Count);
+                Assert.All(loaded, item =>
+                {
+                    Assert.Equal(PerfHistory.Capacity, item.Points.Count);
+                    Assert.Equal(PerfHistory.Capacity, item.Times.Count);
+                    Assert.Equal(0, item.Points[0]);
+                    Assert.Equal((PerfHistory.Capacity - 1) % 100, item.Points[item.Points.Count - 1]);
+                });
+                Assert.Empty(Directory.GetFiles(directory, "*.tmp.*"));
+            }
+            finally
+            {
+                lock (stateLock)
+                {
+                    series.Clear();
+                    foreach (DictionaryEntry entry in previousSeries) series.Add(entry.Key, entry.Value);
+                    pathField.SetValue(null, previousPath);
+                    loadedField.SetValue(null, previousLoaded);
+                    loadAttemptedField.SetValue(null, previousLoadAttempted);
+                    preserveBackupField.SetValue(null, previousPreserveBackup);
+                }
+                try { if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true); } catch { }
+            }
+        }
+    }
+
+    private static FieldInfo Field(Type type, string name) =>
+        type.GetField(name, BindingFlags.Static | BindingFlags.NonPublic)
+        ?? throw new InvalidOperationException("PerfHistory field not found: " + name);
 }
 
 public sealed class HardwareMetricBindingTests
