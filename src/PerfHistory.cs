@@ -295,9 +295,24 @@ namespace PowerAudioManager
 
         static Dictionary<string, Series> ReadSeries(string path, out string json)
         {
-            json = File.ReadAllText(path);
-            var data = JsonSerializer.Deserialize<Dictionary<string, SeriesData>>(json)
-                ?? new Dictionary<string, SeriesData>();
+            Dictionary<string, SeriesData> data;
+            if (string.Equals(path, FilePath, StringComparison.OrdinalIgnoreCase))
+            {
+                // The stable primary file is read on every normal startup. Deserialize it
+                // directly from UTF-8 to avoid keeping a second, large UTF-16 copy in memory.
+                json = null;
+                using (var stream = File.OpenRead(path))
+                    data = JsonSerializer.Deserialize<Dictionary<string, SeriesData>>(stream)
+                        ?? new Dictionary<string, SeriesData>();
+            }
+            else
+            {
+                // Legacy locations and the .bak fallback are copied to the stable path
+                // after loading, so retain their original JSON for the migration write.
+                json = File.ReadAllText(path);
+                data = JsonSerializer.Deserialize<Dictionary<string, SeriesData>>(json)
+                    ?? new Dictionary<string, SeriesData>();
+            }
             DateTime fileTime = File.GetLastWriteTime(path);
             var loaded = new Dictionary<string, Series>();
             foreach (var kv in data)

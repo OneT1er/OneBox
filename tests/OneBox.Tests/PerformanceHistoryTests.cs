@@ -207,6 +207,103 @@ public sealed class PerfHistorySaveTests
         ?? throw new InvalidOperationException("PerfHistory field not found: " + name);
 }
 
+[Collection("PerfHistory")]
+public sealed class PerfHistoryLoadTests
+{
+    [Fact]
+    public void Load_ReadsUnixIsoAndLegacyMissingTimestampsFromPrimaryFile()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "OneBox.PerfHistoryLoad." + Guid.NewGuid().ToString("N"));
+        string path = Path.Combine(directory, "OneBox.perfhistory.json");
+        Type type = typeof(PerfHistory);
+        FieldInfo pathField = Field(type, "_path");
+        FieldInfo seriesField = Field(type, "_series");
+        object stateLock = Field(type, "_lock").GetValue(null);
+        var series = (IDictionary)seriesField.GetValue(null);
+        var previousSeries = new List<DictionaryEntry>();
+        lock (stateLock)
+        {
+            foreach (DictionaryEntry entry in series) previousSeries.Add(entry);
+        }
+        object previousPath = pathField.GetValue(null);
+
+        try
+        {
+            Directory.CreateDirectory(directory);
+            lock (stateLock)
+            {
+                series.Clear();
+                pathField.SetValue(null, path);
+            }
+
+            DateTimeOffset unixStart = new(2026, 10, 19, 12, 0, 0, TimeSpan.Zero);
+            DateTimeOffset isoStart = new(2026, 10, 19, 13, 0, 0, TimeSpan.Zero);
+            var data = new Dictionary<string, object>
+            {
+                ["unix"] = new
+                {
+                    name = "Unix",
+                    icon = "def",
+                    isTemp = true,
+                    points = new[] { 1f, 2f },
+                    times = new[]
+                    {
+                        unixStart.ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture),
+                        unixStart.AddSeconds(1).ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture),
+                    },
+                },
+                ["iso"] = new
+                {
+                    name = "ISO",
+                    icon = "def",
+                    isTemp = true,
+                    points = new[] { 3f, 4f },
+                    times = new[]
+                    {
+                        isoStart.UtcDateTime.ToString("O", CultureInfo.InvariantCulture),
+                        isoStart.AddSeconds(1).UtcDateTime.ToString("O", CultureInfo.InvariantCulture),
+                    },
+                },
+                ["legacy"] = new
+                {
+                    name = "Legacy",
+                    icon = "def",
+                    isTemp = true,
+                    points = new[] { 5f, 6f },
+                },
+            };
+            File.WriteAllText(path, JsonSerializer.Serialize(data));
+            File.SetLastWriteTime(path, new DateTime(2026, 10, 19, 14, 0, 0, DateTimeKind.Local));
+            DateTime fileTime = File.GetLastWriteTime(path);
+
+            Assert.True(PerfHistory.Load());
+
+            Dictionary<string, ChartSeries> loaded = PerfHistory.GetSeries(DateTime.MinValue, DateTime.MaxValue)
+                .ToDictionary(item => item.Name);
+            Assert.Equal(unixStart.LocalDateTime, loaded["Unix"].Times[0]);
+            Assert.Equal(unixStart.AddSeconds(1).LocalDateTime, loaded["Unix"].Times[1]);
+            Assert.Equal(isoStart.LocalDateTime, loaded["ISO"].Times[0]);
+            Assert.Equal(isoStart.AddSeconds(1).LocalDateTime, loaded["ISO"].Times[1]);
+            Assert.Equal(fileTime.AddSeconds(-1), loaded["Legacy"].Times[0]);
+            Assert.Equal(fileTime, loaded["Legacy"].Times[1]);
+        }
+        finally
+        {
+            lock (stateLock)
+            {
+                series.Clear();
+                foreach (DictionaryEntry entry in previousSeries) series.Add(entry.Key, entry.Value);
+                pathField.SetValue(null, previousPath);
+            }
+            try { if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
+    private static FieldInfo Field(Type type, string name) =>
+        type.GetField(name, BindingFlags.Static | BindingFlags.NonPublic)
+        ?? throw new InvalidOperationException("PerfHistory field not found: " + name);
+}
+
 public sealed class HardwareMetricBindingTests
 {
     [Fact]
