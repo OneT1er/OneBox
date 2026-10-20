@@ -307,6 +307,51 @@ public sealed class PerfHistoryLoadTests
 public sealed class HardwareMetricBindingTests
 {
     [Fact]
+    public void SnapshotFallback_PreservesSplitSegmentAndComparisonSemantics()
+    {
+        var configured = Sensor("", "DIMM #3");
+        configured.SensorType = "temperature";
+        var metric = Metric("Temperature||DIMM #3|extra");
+
+        MetricValue found = HardwareMonitorService.FindUniqueSnapshotMetric(
+            new List<MetricValue> { metric }, configured);
+
+        Assert.Same(metric, found);
+    }
+
+    [Fact]
+    public void SnapshotFallback_RequiresOrdinalHardwareAndSensorNames()
+    {
+        var configured = Sensor("Hardware", "Sensor");
+
+        Assert.Null(HardwareMonitorService.FindUniqueSnapshotMetric(
+            new List<MetricValue> { Metric("Temperature|hardware|Sensor") }, configured));
+        Assert.Null(HardwareMonitorService.FindUniqueSnapshotMetric(
+            new List<MetricValue> { Metric("Temperature|Hardware|sensor") }, configured));
+        Assert.Null(HardwareMonitorService.FindUniqueSnapshotMetric(
+            new List<MetricValue> { Metric("Temperature|Hardware") }, configured));
+    }
+
+    [Fact]
+    public void SnapshotFallback_ReturnsNullWhenMoreThanOneMetricMatches()
+    {
+        var configured = Sensor("Hardware", "Sensor");
+        var first = Metric("Temperature|Hardware|Sensor");
+        var second = Metric("Temperature|Hardware|Sensor|extra");
+
+        Assert.Null(HardwareMonitorService.FindUniqueSnapshotMetric(
+            new List<MetricValue> { first, second }, configured));
+    }
+
+    [Fact]
+    public void ProcessPath_ReturnsTheCurrentExecutableAndEmptyForMissingProcess()
+    {
+        Assert.Equal(Environment.ProcessPath,
+            PowerAudioManager.AudioStudio.StudioDevices.ProcessPath(Environment.ProcessId), StringComparer.OrdinalIgnoreCase);
+        Assert.Equal("", PowerAudioManager.AudioStudio.StudioDevices.ProcessPath(-1));
+    }
+
+    [Fact]
     public void DimmSensor_RebindsWhenOnlySpdHardwareNameDrifts()
     {
         var configured = Sensor("old or garbled SPD model (#3)", "DIMM #3");
@@ -351,4 +396,6 @@ public sealed class HardwareMetricBindingTests
         HwType = "Memory",
         SensorType = "Temperature",
     };
+
+    private static MetricValue Metric(string configKey) => new() { ConfigKey = configKey };
 }

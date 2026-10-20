@@ -273,27 +273,52 @@ namespace PowerAudioManager
             MetricValue exact = string.IsNullOrEmpty(exactKey) ? null
                 : _allPipeMetrics.FirstOrDefault(metric => string.Equals(metric.ConfigKey, exactKey, StringComparison.Ordinal));
             if (exact != null) return exact;
-            List<MetricValue> matches = _allPipeMetrics.Where(metric => MetricMatches(metric, config)).ToList();
-            if (matches.Count == 1) return matches[0];
+            MetricValue match = FindUniqueSnapshotMetric(_allPipeMetrics, config);
+            if (match != null) return match;
 
             // LibreHardwareMonitor builds DDR5 hardware names from SPD data;
             // the model text/suffix may drift between cold boots. Resolve the
             // current sensor by unique type + SensorName, then bind its value.
             SensorInfo actual = ResolveSensor(GetSensorSourceUnsafe(config.SensorType), config);
             if (actual == null || SensorIdentityEquals(actual, config)) return null;
-            matches = _allPipeMetrics.Where(metric => MetricMatches(metric, actual)).ToList();
-            if (matches.Count != 1) return null;
+            match = FindUniqueSnapshotMetric(_allPipeMetrics, actual);
+            if (match == null) return null;
             LogSensorRemap(config, actual);
-            return matches[0];
+            return match;
+        }
+
+        internal static MetricValue FindUniqueSnapshotMetric(List<MetricValue> metrics, SensorInfo config)
+        {
+            MetricValue match = null;
+            foreach (MetricValue metric in metrics)
+            {
+                if (!MetricMatches(metric, config)) continue;
+                if (match != null) return null;
+                match = metric;
+            }
+            return match;
         }
 
         private static bool MetricMatches(MetricValue metric, SensorInfo config)
         {
-            string[] parts = (metric.ConfigKey ?? "").Split('|');
-            return parts.Length >= 3
-                && string.Equals(parts[0], config.SensorType, StringComparison.OrdinalIgnoreCase)
-                && string.Equals(parts[2], config.SensorName, StringComparison.Ordinal)
-                && string.Equals(parts[1], config.HardwareName, StringComparison.Ordinal);
+            string sensorType = config.SensorType;
+            string hardwareName = config.HardwareName;
+            string sensorName = config.SensorName;
+            if (sensorType == null || hardwareName == null || sensorName == null) return false;
+
+            ReadOnlySpan<char> key = (metric.ConfigKey ?? "").AsSpan();
+            int typeEnd = key.IndexOf('|');
+            if (typeEnd < 0) return false;
+            int hardwareEnd = key[(typeEnd + 1)..].IndexOf('|');
+            if (hardwareEnd < 0) return false;
+            hardwareEnd += typeEnd + 1;
+            int nameEnd = key[(hardwareEnd + 1)..].IndexOf('|');
+            if (nameEnd >= 0) nameEnd += hardwareEnd + 1;
+            else nameEnd = key.Length;
+
+            return key[..typeEnd].Equals(sensorType.AsSpan(), StringComparison.OrdinalIgnoreCase)
+                && key[(typeEnd + 1)..hardwareEnd].Equals(hardwareName.AsSpan(), StringComparison.Ordinal)
+                && key[(hardwareEnd + 1)..nameEnd].Equals(sensorName.AsSpan(), StringComparison.Ordinal);
         }
 
         private List<SensorInfo> GetSensorSourceUnsafe(string sensorType) =>

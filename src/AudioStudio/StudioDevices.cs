@@ -24,6 +24,10 @@ internal sealed record StudioApplication(int Pid, string Path, string Name, bool
 internal sealed record StudioCaptureClient(string Application, string Device, bool IsVbCable, bool Active);
 internal static class StudioDevices
 {
+    const int InitialProcessPathCapacity = 512;
+    const int MaximumProcessPathCapacity = 32768;
+    const int ErrorInsufficientBuffer = 122;
+
     public static StudioCaptureClient[] CaptureClients()
     {
         using var e = new MMDeviceEnumerator();
@@ -120,7 +124,19 @@ internal static class StudioDevices
     {
         IntPtr handle = OpenProcess(0x1000, false, pid);
         if (handle == IntPtr.Zero) return "";
-        try { var buffer = new StringBuilder(32768); int size = buffer.Capacity; return QueryFullProcessImageName(handle, 0, buffer, ref size) ? buffer.ToString() : ""; }
+        try
+        {
+            var buffer = new StringBuilder(InitialProcessPathCapacity);
+            int size = buffer.Capacity;
+            if (!QueryFullProcessImageName(handle, 0, buffer, ref size))
+            {
+                if (Marshal.GetLastWin32Error() != ErrorInsufficientBuffer) return "";
+                buffer = new StringBuilder(MaximumProcessPathCapacity);
+                size = buffer.Capacity;
+                if (!QueryFullProcessImageName(handle, 0, buffer, ref size)) return "";
+            }
+            return buffer.ToString();
+        }
         finally { CloseHandle(handle); }
     }
     public static bool SameUsbDevice(string first, string second)
@@ -146,6 +162,6 @@ internal static class StudioDevices
     [DllImport("cfgmgr32.dll", CharSet = CharSet.Unicode, EntryPoint = "CM_Get_DevNode_PropertyW")]
     static extern uint CM_Get_DevNode_Property(uint node, ref DevPropertyKey key, out uint type, byte[] data, ref uint size, uint flags);
     [DllImport("kernel32.dll")] static extern IntPtr OpenProcess(uint access, bool inherit, int pid);
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] static extern bool QueryFullProcessImageName(IntPtr process, uint flags, StringBuilder path, ref int size);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern bool QueryFullProcessImageName(IntPtr process, uint flags, StringBuilder path, ref int size);
     [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
 }
