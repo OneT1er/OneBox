@@ -439,10 +439,40 @@ namespace PowerAudioManager
         {
             _uiReclaimTimer.Stop();
             if (_isExiting || (IsVisible && _isExpanded && _contentPanel != null)) return;
-            if (GC.GetGCMemoryInfo().GenerationInfo[3].FragmentationAfterBytes >= 16L * 1024 * 1024)
-                GCSettings.LargeObjectHeapCompactionMode = GCLargeObjectHeapCompactionMode.CompactOnce;
-            GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: true);
-            _lastUiReclamationUtc = DateTime.UtcNow;
+            try
+            {
+                using var process = Process.GetCurrentProcess();
+                process.Refresh();
+                var gcBefore = GC.GetGCMemoryInfo();
+                long privateBeforeGc = process.PrivateMemorySize64;
+                long workingSetBeforeGc = process.WorkingSet64;
+
+                if (gcBefore.GenerationInfo[3].FragmentationAfterBytes >= 16L * 1024 * 1024)
+                    GCSettings.LargeObjectHeapCompactionMode = GCLargeObjectHeapCompactionMode.CompactOnce;
+                var gcTimer = Stopwatch.StartNew();
+                // The window tree is detached here; Aggressive asks GC to decommit free managed segments.
+                GC.Collect(GC.MaxGeneration, GCCollectionMode.Aggressive, blocking: true, compacting: true);
+                gcTimer.Stop();
+                _lastUiReclamationUtc = DateTime.UtcNow;
+
+                var gcAfter = GC.GetGCMemoryInfo();
+                process.Refresh();
+                long privateAfterGc = process.PrivateMemorySize64;
+                long workingSetAfterGc = process.WorkingSet64;
+
+                bool workingSetTrimmed = Native.SetProcessWorkingSetSize(process.Handle, -1, -1);
+                process.Refresh();
+                var gcAfterTrim = GC.GetGCMemoryInfo();
+                long privateAfterTrim = process.PrivateMemorySize64;
+                long workingSetAfterTrim = process.WorkingSet64;
+
+                AppLog.Log("UiReclamation", $"expanded={_isExpanded} visible={IsVisible} gcMs={gcTimer.ElapsedMilliseconds} " +
+                    $"committedMiB={gcBefore.TotalCommittedBytes / 1048576d:F1}->{gcAfter.TotalCommittedBytes / 1048576d:F1}->{gcAfterTrim.TotalCommittedBytes / 1048576d:F1} " +
+                    $"heapMiB={gcBefore.HeapSizeBytes / 1048576d:F1}->{gcAfter.HeapSizeBytes / 1048576d:F1}->{gcAfterTrim.HeapSizeBytes / 1048576d:F1} " +
+                    $"privateMiB={privateBeforeGc / 1048576d:F1}->{privateAfterGc / 1048576d:F1}->{privateAfterTrim / 1048576d:F1} " +
+                    $"workingSetMiB={workingSetBeforeGc / 1048576d:F1}->{workingSetAfterGc / 1048576d:F1}->{workingSetAfterTrim / 1048576d:F1} trimSuccess={workingSetTrimmed}");
+            }
+            catch (Exception ex) { AppLog.Log("UiReclamation", ex); }
         }
 
         void CancelUiReclamation()
