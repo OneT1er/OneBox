@@ -14,22 +14,27 @@ internal sealed class StudioEngine : IDisposable
     StudioFifo _microphone, _music;
     readonly StudioSoundpadPlayer _soundpad = new();
     readonly BufferedWaveProvider _output = Buffer();
+    readonly object _dspGate = new(), _inputGate = new();
     BufferedWaveProvider _monitor;
     WasapiRecorder _micCapture, _musicCapture;
     WasapiPlayer _player, _monitorPlayer;
     MMDevice _inputDevice, _outputDevice, _monitorDevice;
     StudioDsp _dsp;
     Thread _thread;
+    string _inputId = "";
     volatile bool _running;
+    volatile bool _inputFaulted;
     volatile StudioSettings _settings;
     public string Error { get; private set; }
     public string Note { get; private set; } = "";
+    public string InputError { get; private set; } = "";
     public float InputPeak, OutputPeak;
     public float MusicPeak;
     public float[] SpectrumFrame = new float[480];
     public bool Running => _running;
     public int CapturedPid { get; private set; }
-    public string InputId => _inputDevice?.ID ?? "";
+    public string InputId => _inputId;
+    public bool InputFaulted => _inputFaulted;
     public string MonitorId => _monitorDevice?.ID ?? "";
     public DateTime InputRetryAfterUtc { get; private set; }
     public DateTime MonitorRetryAfterUtc { get; private set; }
@@ -53,31 +58,9 @@ internal sealed class StudioEngine : IDisposable
             _outputDevice = enumerator.GetDevice(settings.OutputId);
             if (_outputDevice.DataFlow != DataFlow.Render || _outputDevice.State != DeviceState.Active)
                 throw new InvalidOperationException("输出设备不可用 / Output device unavailable");
-            _dsp = new StudioDsp(StudioDenoisers.Create(StudioDenoisers.ActiveMode(settings)));
-            if (settings.Microphone) _microphone = new StudioFifo();
             if (settings.Music) _music = new StudioFifo();
-            if (settings.Microphone && string.IsNullOrEmpty(settings.InputId))
-                Note = "没有可用麦克风，音乐仍可共享 / No microphone available; music sharing remains active";
-            if (settings.Microphone && !string.IsNullOrEmpty(settings.InputId))
-            {
-                try
-                {
-                    _inputDevice = enumerator.GetDevice(settings.InputId);
-                    if (_inputDevice.State != DeviceState.Active) throw new InvalidOperationException("Microphone disconnected");
-                    _micCapture = new WasapiRecorderBuilder().WithDevice(_inputDevice).WithSharedMode()
-                        .WithFormat(WaveFormat.CreateIeeeFloatWaveFormat(48000, 2)).Build();
-                    _micCapture.DataAvailable += (bytes, flags, _, _) => Capture(_microphone, bytes, flags);
-                    _micCapture.RecordingStopped += (_, args) => { if (args.Exception != null) Error = args.Exception.Message; };
-                    _micCapture.StartRecording();
-                }
-                catch (Exception ex)
-                {
-                    _micCapture?.Dispose(); _micCapture = null; _inputDevice?.Dispose(); _inputDevice = null;
-                    InputRetryAfterUtc = DateTime.UtcNow.AddSeconds(30);
-                    Note = "麦克风未连接，音乐仍可共享 / Microphone unavailable; music sharing remains active";
-                    AppLog.Log("AudioStudio microphone", ex.Message);
-                }
-            }
+            bool capturedMicrophone = settings.Microphone && TryOpenMicrophone(enumerator, settings);
+            _dsp = CreateDsp(settings, capturedMicrophone && !_inputFaulted, StudioDenoisers.Create);
             if (settings.Music && pid > 0)
             {
                 // This MUST be process loopback. Never substitute desktop loopback.
@@ -126,6 +109,7 @@ internal sealed class StudioEngine : IDisposable
                 }
             }
             _running = true;
+            if (_inputFaulted) TryReplaceDsp(CreateDsp(settings, false, StudioDenoisers.Create));
             _thread = new Thread(ProcessLoop) { IsBackground = true, Name = "OneBox audio DSP", Priority = ThreadPriority.AboveNormal };
             _thread.Start(); _player.Play();
             try { _monitorPlayer?.Play(); }
@@ -141,9 +125,136 @@ internal sealed class StudioEngine : IDisposable
     }
     static void Capture(StudioFifo fifo, ReadOnlySpan<byte> bytes, AudioClientBufferFlags flags)
     {
-        if ((flags & AudioClientBufferFlags.Silent) != 0) return;
+        if (fifo == null || (flags & AudioClientBufferFlags.Silent) != 0) return;
         fifo.Write(MemoryMarshal.Cast<byte, float>(bytes));
     }
+    internal static StudioDsp CreateDsp(StudioSettings settings, bool inputCaptured,
+        Func<string, IStudioDenoiser> createDenoiser) =>
+        new(createDenoiser(inputCaptured
+            ? StudioDenoisers.ActiveMode(settings)
+            : nameof(DenoiseMode.Off)));
+
+    bool TryOpenMicrophone(MMDeviceEnumerator enumerator, StudioSettings settings)
+    {
+        WasapiRecorder capture = null;
+        MMDevice device = null;
+        bool published = false;
+        try
+        {
+            if (string.IsNullOrEmpty(settings.InputId))
+                throw new InvalidOperationException("No microphone selected");
+            device = enumerator.GetDevice(settings.InputId);
+            if (device.State != DeviceState.Active) throw new InvalidOperationException("Microphone disconnected");
+            capture = new WasapiRecorderBuilder().WithDevice(device).WithSharedMode()
+                .WithFormat(WaveFormat.CreateIeeeFloatWaveFormat(48000, 2)).Build();
+            var openedCapture = capture;
+            capture.DataAvailable += (bytes, flags, _, _) => Capture(_microphone, bytes, flags);
+            capture.RecordingStopped += (_, args) => OnMicrophoneStopped(openedCapture, args.Exception);
+            lock (_dspGate)
+            {
+                _inputDevice = device; _micCapture = capture; _inputId = device.ID; _microphone = new StudioFifo();
+                _inputFaulted = false; InputRetryAfterUtc = default; InputError = "";
+                published = true;
+            }
+            capture.StartRecording();
+            return true;
+        }
+        catch (Exception ex)
+        {
+            if (published) CloseMicrophone();
+            else { capture?.Dispose(); device?.Dispose(); }
+            InputRetryAfterUtc = DateTime.UtcNow.AddSeconds(30);
+            Note = InputError = MicrophoneUnavailableNote;
+            AppLog.Log("AudioStudio microphone", ex.Message);
+            return false;
+        }
+    }
+
+    void OnMicrophoneStopped(WasapiRecorder capture, Exception error)
+    {
+        if (error == null) return;
+        StudioDsp previous = null;
+        lock (_dspGate)
+        {
+            if (!ReferenceEquals(_micCapture, capture) || _inputFaulted) return;
+            _inputFaulted = true;
+            InputRetryAfterUtc = DateTime.UtcNow.AddSeconds(30);
+            InputError = MicrophoneUnavailableNote;
+            if (_running)
+            {
+                previous = _dsp;
+                _dsp = CreateDsp(_settings, false, StudioDenoisers.Create);
+            }
+        }
+        previous?.Dispose();
+        AppLog.Log("AudioStudio microphone", error.Message);
+    }
+
+    const string MicrophoneUnavailableNote = "麦克风不可用，当前旁路；音乐仍可共享 / Microphone unavailable; using bypass, music sharing remains active";
+
+    public bool TryReconnectInput(StudioSettings settings)
+    {
+        lock (_inputGate)
+        {
+            if (!_running || !settings.Microphone) return false;
+            _settings = settings.Copy();
+            if (!TryReplaceDsp(CreateDsp(settings, false, StudioDenoisers.Create))) return false;
+            CloseMicrophone();
+            if (!_running) return false;
+            try
+            {
+                using var enumerator = new MMDeviceEnumerator();
+                if (!TryOpenMicrophone(enumerator, settings)) return false;
+                bool microphoneHealthy = !_inputFaulted;
+                var dsp = CreateDsp(settings, microphoneHealthy, StudioDenoisers.Create);
+                if (!TryReplaceDsp(dsp, requireHealthyMicrophone: microphoneHealthy))
+                {
+                    CloseMicrophone();
+                    return false;
+                }
+                if (_inputFaulted) return false;
+                InputError = "";
+                if (Note == MicrophoneUnavailableNote) Note = "";
+                return true;
+            }
+            catch (Exception ex)
+            {
+                CloseMicrophone();
+                InputRetryAfterUtc = DateTime.UtcNow.AddSeconds(30);
+                Note = InputError = ex.Message;
+                AppLog.Log("AudioStudio microphone", ex.Message);
+                return false;
+            }
+        }
+    }
+
+    void CloseMicrophone()
+    {
+        WasapiRecorder capture;
+        MMDevice device;
+        lock (_dspGate)
+        {
+            capture = _micCapture; _micCapture = null;
+            device = _inputDevice; _inputDevice = null; _inputId = "";
+            _microphone = null; _inputFaulted = false;
+        }
+        capture?.Dispose(); device?.Dispose();
+    }
+
+    bool TryReplaceDsp(StudioDsp dsp, bool requireHealthyMicrophone = false)
+    {
+        StudioDsp previous = null;
+        bool installed;
+        lock (_dspGate)
+        {
+            installed = _running && (!requireHealthyMicrophone || !_inputFaulted);
+            if (installed) { previous = _dsp; _dsp = dsp; }
+        }
+        if (!installed) { dsp.Dispose(); return false; }
+        previous?.Dispose();
+        return true;
+    }
+
     public void Update(StudioSettings settings)
     {
         var previous = _settings;
@@ -166,7 +277,8 @@ internal sealed class StudioEngine : IDisposable
             while (_running)
             {
                 if (_output.BufferedBytes >= bytes.Length * 3) { Thread.Sleep(2); continue; }
-                if (_microphone == null) Array.Clear(stereoMic); else _microphone.Read(stereoMic);
+                var microphone = _microphone;
+                if (microphone == null) Array.Clear(stereoMic); else microphone.Read(stereoMic);
                 if (_music == null) Array.Clear(music); else _music.Read(music);
                 bool soundActive = _soundpad.Read(sound);
                 float musicPeak = 0;
@@ -177,7 +289,11 @@ internal sealed class StudioEngine : IDisposable
                 InputPeak = peak;
                 var settings = _settings;
                 var processing = Stopwatch.StartNew();
-                _dsp.Process(mono, music, sound, output, monitor, settings);
+                lock (_dspGate)
+                {
+                    if (_dsp == null) Array.Clear(output);
+                    else _dsp.Process(mono, music, sound, output, monitor, settings);
+                }
                 if (!settings.Monitor) Array.Clear(monitor);
                 if (soundActive && (!settings.Monitor || settings.MonitorPoint != 4))
                     for (int i = 0; i < sound.Length; i++) monitor[i] += sound[i] * settings.SoundpadGain;
@@ -209,9 +325,12 @@ internal sealed class StudioEngine : IDisposable
         _running = false;
         _soundpad.Stop();
         _thread?.Join(3000);
-        _micCapture?.Dispose(); _musicCapture?.Dispose();
+        lock (_inputGate) CloseMicrophone();
+        _musicCapture?.Dispose();
         _player?.Dispose(); _monitorPlayer?.Dispose();
-        _dsp?.Dispose(); _inputDevice?.Dispose(); _outputDevice?.Dispose(); _monitorDevice?.Dispose();
-        _micCapture = null; _musicCapture = null; _player = null; _monitorPlayer = null; _dsp = null;
+        StudioDsp dsp;
+        lock (_dspGate) { dsp = _dsp; _dsp = null; }
+        dsp?.Dispose(); _outputDevice?.Dispose(); _monitorDevice?.Dispose();
+        _musicCapture = null; _player = null; _monitorPlayer = null;
     }
 }

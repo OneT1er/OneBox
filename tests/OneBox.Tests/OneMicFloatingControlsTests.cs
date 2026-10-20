@@ -287,8 +287,10 @@ public class OneMicFloatingControlsTests
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static void AssertFocusNoLongerTargets(Window window, WeakReference previousFocus)
     {
-        Assert.NotSame(previousFocus.Target, FocusManager.GetFocusedElement(window));
-        Assert.NotSame(previousFocus.Target, Keyboard.FocusedElement);
+        var oldFocus = previousFocus.Target;
+        if (oldFocus == null) return;
+        Assert.NotSame(oldFocus, FocusManager.GetFocusedElement(window));
+        Assert.NotSame(oldFocus, Keyboard.FocusedElement);
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]

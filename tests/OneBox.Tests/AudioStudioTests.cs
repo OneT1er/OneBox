@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
@@ -80,11 +81,49 @@ public sealed class AudioStudioTests
     public void FailedMicrophoneRetryDoesNotInterruptAnActiveSound()
     {
         var now = DateTime.UtcNow;
+        Assert.False(StudioController.ShouldReconnectInput(false, false, now.AddSeconds(-1), now));
         Assert.False(StudioController.ShouldReconnectInput(true, false, now.AddSeconds(30), now));
         Assert.True(StudioController.ShouldReconnectInput(true, false, now.AddSeconds(-1), now));
         Assert.True(StudioController.ShouldReconnectInput(false, true, now.AddSeconds(30), now));
+        Assert.False(StudioController.ShouldReconnectInput(true, true, now.AddSeconds(30), now, faulted: true));
+        Assert.True(StudioController.ShouldReconnectInput(true, true, now.AddSeconds(-1), now, faulted: true));
         Assert.True(StudioController.ShouldDeferRecovery(true, false, true));
         Assert.False(StudioController.ShouldDeferRecovery(true, true, true));
+    }
+
+    [Fact]
+    public void UnavailableMicrophoneRetriesBypassDenoiserUntilCaptureRecovers()
+    {
+        var settings = new StudioSettings { Model = nameof(DenoiseMode.Quality), Denoise = true, Microphone = true };
+        var requested = new List<string>(5);
+        IStudioDenoiser Create(string mode) { requested.Add(mode); return new Identity(); }
+
+        using (StudioEngine.CreateDsp(settings, inputCaptured: false, createDenoiser: Create)) { }
+        requested.Clear();
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        for (int i = 0; i < 3; i++)
+            using (StudioEngine.CreateDsp(settings, inputCaptured: false, createDenoiser: Create)) { }
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.Equal(3, requested.Count(mode => mode == nameof(DenoiseMode.Off)));
+        Assert.Equal(0, requested.Count(mode => mode == nameof(DenoiseMode.Quality)));
+        Assert.Equal(3, requested.Count);
+        Assert.True(allocated < 1_000_000, $"Three bypass DSPs allocated {allocated:N0} managed bytes.");
+        Assert.True(settings.Denoise);
+        Assert.Equal(nameof(DenoiseMode.Quality), settings.Model);
+
+        using (StudioEngine.CreateDsp(settings, inputCaptured: true, createDenoiser: Create)) { }
+        using (StudioEngine.CreateDsp(settings, inputCaptured: false, createDenoiser: Create)) { }
+        Assert.Equal(nameof(DenoiseMode.Quality), requested[3]);
+        Assert.Equal(nameof(DenoiseMode.Off), requested[4]);
+    }
+
+    [Fact]
+    public void StoppedEngineDoesNotReconnectOrCreateAnAudioWorker()
+    {
+        var engine = new StudioEngine();
+        engine.Dispose();
+        Assert.False(engine.TryReconnectInput(new StudioSettings { InputId = "unavailable", Denoise = true }));
+        Assert.Equal("", engine.InputId);
     }
     [Fact]
     public void SoundpadGainCanBeChangedForThePlayingEffect()

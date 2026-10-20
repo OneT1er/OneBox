@@ -131,7 +131,8 @@ internal sealed class StudioController : IDisposable
             var engine = new StudioEngine();
             await Task.Run(() => engine.StartAsync(settings, pid));
             if (_disposed || !Wanted) { await Task.Run(engine.Dispose); return; }
-            Engine = engine; Status = engine.Note.Length > 0 ? engine.Note : T("正在共享 · 关闭窗口后继续运行", "Sharing · continues when this window closes");
+            Engine = engine; Status = engine.InputError.Length > 0 ? engine.InputError
+                : engine.Note.Length > 0 ? engine.Note : T("正在共享 · 关闭窗口后继续运行", "Sharing · continues when this window closes");
         }
         catch (Exception ex) { Status = ex.Message; AppLog.Log("AudioStudio start", ex); }
         finally { Busy = false; _gate.Release(); Changed?.Invoke(); }
@@ -153,15 +154,25 @@ internal sealed class StudioController : IDisposable
             if (Wanted)
             {
                 bool reconnect = Engine == null || !Engine.Running || Engine.Error != null;
+                bool reconnectInput = false;
+                var engine = Engine;
                 if (!reconnect)
                 {
                     if (Settings.Microphone)
                     {
                         var inputs = await Task.Run(() => StudioDevices.List(DataFlow.Capture));
+                        if (string.IsNullOrEmpty(Settings.InputId) && inputs.Length > 0)
+                        {
+                            string inputId = await Task.Run(StudioDevices.DefaultMicrophone);
+                            if (!string.IsNullOrEmpty(inputId))
+                            {
+                                var settings = Settings.Copy(); settings.InputId = inputId; Apply(settings);
+                            }
+                        }
                         bool available = inputs.Any(x => x.Id == Settings.InputId);
-                        bool captured = !string.IsNullOrEmpty(Engine.InputId);
-                        reconnect = ShouldReconnectInput(available, captured,
-                            Engine.InputRetryAfterUtc, DateTime.UtcNow);
+                        bool captured = !string.IsNullOrEmpty(engine.InputId);
+                        reconnectInput = ShouldReconnectInput(available, captured,
+                            engine.InputRetryAfterUtc, DateTime.UtcNow, engine.InputFaulted);
                     }
                     if (Settings.Monitor || Settings.SoundEffects.Count > 0)
                     {
@@ -171,20 +182,27 @@ internal sealed class StudioController : IDisposable
                             localId = await Task.Run(StudioDevices.DefaultSpeaker);
                         bool monitorAvailable = outputs.Any(x => x.Id == localId && !x.IsCable);
                         reconnect |= monitorAvailable &&
-                            (localId != Engine.MonitorId || Engine.MonitorFaulted) &&
-                            DateTime.UtcNow >= Engine.MonitorRetryAfterUtc;
+                            (localId != engine.MonitorId || engine.MonitorFaulted) &&
+                            DateTime.UtcNow >= engine.MonitorRetryAfterUtc;
                     }
                     if (Settings.Music)
                     {
                         int pid = ResolveApplication(Settings, await Task.Run(StudioDevices.Applications));
-                        reconnect |= pid != Engine.CapturedPid;
+                        reconnect |= pid != engine.CapturedPid;
+                    }
+                    if (engine.InputError.Length > 0 && Status != engine.InputError)
+                    {
+                        Status = engine.InputError;
+                        Changed?.Invoke();
                     }
                 }
                 // A routine device retry must not cut off a sound effect mid-playback.
                 if (reconnect && Wanted && !Busy &&
-                    (Engine == null || !ShouldDeferRecovery(Engine.Running,
-                        Engine.Error != null, !string.IsNullOrEmpty(Engine.PlayingSoundId))))
+                    (engine == null || !ShouldDeferRecovery(engine.Running,
+                        engine.Error != null, !string.IsNullOrEmpty(engine.PlayingSoundId))))
                     await StartAsync();
+                else if (reconnectInput && Wanted && !Busy && ReferenceEquals(Engine, engine))
+                    await ReconnectInputAsync(engine);
             }
         }
         catch (Exception ex) { AppLog.Log("AudioStudio recovery", ex); }
@@ -197,8 +215,26 @@ internal sealed class StudioController : IDisposable
         _window?.Close();
     }
     internal static bool ShouldReconnectInput(bool available, bool captured,
-        DateTime retryAfterUtc, DateTime nowUtc) =>
-        captured && !available || available && !captured && nowUtc >= retryAfterUtc;
+        DateTime retryAfterUtc, DateTime nowUtc, bool faulted = false) =>
+        captured && (!available || faulted && nowUtc >= retryAfterUtc) ||
+        available && !captured && nowUtc >= retryAfterUtc;
+
+    async Task ReconnectInputAsync(StudioEngine engine)
+    {
+        await _gate.WaitAsync();
+        try
+        {
+            if (_disposed || !Wanted || Busy || !ReferenceEquals(Engine, engine)) return;
+            Busy = true; Status = T("正在重新连接麦克风…", "Reconnecting microphone…"); Changed?.Invoke();
+            var settings = Settings.Copy();
+            await Task.Run(() => engine.TryReconnectInput(settings));
+            Status = engine.InputError.Length > 0 ? engine.InputError
+                : engine.Note.Length > 0 ? engine.Note
+                : T("正在共享 · 关闭窗口后继续运行", "Sharing · continues when this window closes");
+        }
+        catch (Exception ex) { AppLog.Log("AudioStudio microphone recovery", ex); }
+        finally { Busy = false; _gate.Release(); Changed?.Invoke(); }
+    }
 
     internal static bool ShouldDeferRecovery(bool running, bool faulted, bool soundPlaying) =>
         running && !faulted && soundPlaying;
