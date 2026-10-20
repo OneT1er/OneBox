@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Windows;
@@ -30,6 +31,9 @@ namespace PowerAudioManager
         static List<ClipItem> _items = new List<ClipItem>();
         static DispatcherTimer _poll;
         static string _lastHash = "";
+        static uint? _lastClipboardSequence;
+        [DllImport("user32.dll")]
+        static extern uint GetClipboardSequenceNumber();
 
         // DPAPI 固定应用专属熵。使用常量即可：目的是将 blob 绑定到 OneBox，防止其他应用在同一作用域下轻易解密，而非保密熵值本身。
         static readonly byte[] _dpapiEntropy = Encoding.UTF8.GetBytes("OneBox.Clipboard.v1");
@@ -61,6 +65,7 @@ namespace PowerAudioManager
             }
             lock (_lock) _items = new List<ClipItem>();
             _lastHash = "";
+            _lastClipboardSequence = null;
         }
 
         static void Load()
@@ -119,17 +124,21 @@ namespace PowerAudioManager
         {
             try
             {
+                uint sequence = GetClipboardSequenceNumber();
+                if (!ShouldReadClipboardSequence(_lastClipboardSequence, sequence)) return;
+
                 // 优先记录图片（截图复制会同时设置图片和文本回退）。
                 if (Clipboard.ContainsImage())
                 {
                     var bmp = Clipboard.GetImage();
                     if (bmp == null) return;
+                    if (!ClipboardSequenceUnchanged(sequence)) return;
                     // 按 PNG 内容哈希去重，而非仅比较尺寸（否则同尺寸不同截图会被视为重复）。
                     byte[] png = EncodeToPng(bmp);
-                    if (png == null) return;
+                    if (png == null || !ClipboardSequenceUnchanged(sequence)) return;
                     string hash = "IMG:" + Sha256Hex(png);
-                    if (hash == _lastHash) return;
-                    _lastHash = hash;
+                    if (!ClipboardSequenceUnchanged(sequence)) return;
+                    if (hash == _lastHash) { MarkClipboardSequenceProcessed(sequence); return; }
                     string path = SaveImage(png);
                     if (path == null) return;
                     lock (_lock)
@@ -142,15 +151,21 @@ namespace PowerAudioManager
                             if (dropped.IsImage) { try { File.Delete(dropped.ImagePath); } catch { } }
                         }
                     }
+                    _lastHash = hash;
+                    MarkClipboardSequenceProcessed(sequence);
                     Save();
                     return;
                 }
-                if (!Clipboard.ContainsText()) return;
+                if (!Clipboard.ContainsText())
+                {
+                    if (ClipboardSequenceUnchanged(sequence)) MarkClipboardSequenceProcessed(sequence);
+                    return;
+                }
                 string text = Clipboard.GetText();
-                if (string.IsNullOrEmpty(text)) return;
+                if (!ClipboardSequenceUnchanged(sequence)) return;
+                if (string.IsNullOrEmpty(text)) { MarkClipboardSequenceProcessed(sequence); return; }
                 string hash2 = text.Length + ":" + text.GetHashCode().ToString();
-                if (hash2 == _lastHash) return;
-                _lastHash = hash2;
+                if (hash2 == _lastHash) { MarkClipboardSequenceProcessed(sequence); return; }
                 lock (_lock)
                 {
                     // 去重：移除已有相同文本项，然后插入到最前。
@@ -164,9 +179,22 @@ namespace PowerAudioManager
                         if (dropped.IsImage) { try { File.Delete(dropped.ImagePath); } catch { } }
                     }
                 }
+                _lastHash = hash2;
+                MarkClipboardSequenceProcessed(sequence);
                 Save();
             }
             catch { }
+        }
+
+        internal static bool ShouldReadClipboardSequence(uint? lastProcessed, uint current) =>
+            current == 0 || !lastProcessed.HasValue || lastProcessed.Value != current;
+
+        static bool ClipboardSequenceUnchanged(uint sequence) =>
+            sequence == 0 || GetClipboardSequenceNumber() == sequence;
+
+        static void MarkClipboardSequenceProcessed(uint sequence)
+        {
+            if (sequence != 0) _lastClipboardSequence = sequence;
         }
 
         static byte[] EncodeToPng(BitmapSource src)
