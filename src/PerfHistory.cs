@@ -271,7 +271,11 @@ namespace PowerAudioManager
                                 writer.WriteString("icon", s.Icon);
                                 writer.WriteBoolean("isTemp", s.IsTemp);
                                 writer.WriteStartArray("points");
-                                foreach (float point in s.Points) writer.WriteNumberValue(point);
+                                foreach (float point in s.Points)
+                                {
+                                    writer.WriteNumberValue(point);
+                                    if (writer.BytesPending >= 32 * 1024) writer.Flush();
+                                }
                                 writer.WriteEndArray();
                                 writer.WriteStartArray("times");
                                 foreach (long time in s.Times)
@@ -279,6 +283,7 @@ namespace PowerAudioManager
                                     if (!time.TryFormat(timestamp, out int charsWritten, provider: CultureInfo.InvariantCulture))
                                         throw new InvalidOperationException("Could not format a history timestamp.");
                                     writer.WriteStringValue(timestamp[..charsWritten]);
+                                    if (writer.BytesPending >= 32 * 1024) writer.Flush();
                                 }
                                 writer.WriteEndArray();
                                 writer.WriteEndObject();

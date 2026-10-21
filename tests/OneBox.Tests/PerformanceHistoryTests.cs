@@ -6,6 +6,7 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Security.Cryptography;
 using System.Text.Json;
 using PowerAudioManager;
 using Xunit;
@@ -139,6 +140,8 @@ public sealed class PerfHistorySaveTests
                 }
 
                 PerfHistory.Save(); // Warm JIT and writer buffers before measuring the full-capacity save.
+                byte[] expectedHash;
+                using (var stream = File.OpenRead(path)) expectedHash = SHA256.HashData(stream);
                 GC.Collect();
                 GC.WaitForPendingFinalizers();
                 GC.Collect();
@@ -149,8 +152,9 @@ public sealed class PerfHistorySaveTests
                 long allocatedBytes = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
                 _output.WriteLine("Full-capacity save allocated {0:N1} MiB in {1:N0} ms.",
                     allocatedBytes / 1024d / 1024d, saveStopwatch.Elapsed.TotalMilliseconds);
-                Assert.True(allocatedBytes < 64L * 1024 * 1024,
-                    $"Expected a full save to allocate under 64 MiB; allocated {allocatedBytes / 1024d / 1024d:N1} MiB.");
+                Assert.True(allocatedBytes < 16L * 1024 * 1024,
+                    $"Expected a full save to allocate under 16 MiB; allocated {allocatedBytes / 1024d / 1024d:N1} MiB.");
+                using (var stream = File.OpenRead(path)) Assert.Equal(expectedHash, SHA256.HashData(stream));
 
                 using (var stream = File.OpenRead(path))
                 using (JsonDocument document = JsonDocument.Parse(stream))
