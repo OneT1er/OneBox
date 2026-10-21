@@ -35,22 +35,26 @@ namespace PowerAudioManager
 
         void SetExpanded(bool expanded, bool manual)
         {
-            bool releasedContent = !expanded && _contentPanel != null;
-            bool rebuild = !_windowUiDetached && (expanded ? _contentPanel == null : _contentPanel != null);
             double bottom = Top + ActualHeight;
             _isExpanded = expanded;
             if (manual && !expanded) _collapsedManually = true;
             if (expanded) _collapsedManually = false;
             if (expanded) CancelUiReclamation();
-            else _autoCollapseTimer?.Stop();
-            if (rebuild) RebuildWindowUi();
-            if (releasedContent) ScheduleUiReclamation();
-            if (expanded && rebuild) RefreshVisibleUi();
-            else if (!expanded && rebuild) UpdateTempUI();
+            else
+            {
+                _autoCollapseTimer?.Stop();
+                CancelPendingVolumeCommand();
+                ClearFocusFromUi(_contentPanel);
+            }
 
             // 固定底边使窗口向上折叠
             if (_isExpanded)
             {
+                bool attach = !_windowUiDetached && _contentPanel == null;
+                if (attach) BuildExpandedContent();
+                // Populate the detached body before its first visible layout.
+                if (!_windowUiDetached) RefreshVisibleUi();
+                if (attach) _root.Children.Add(_contentPanel);
                 if (_contentPanel != null) _contentPanel.Visibility = Visibility.Visible;
                 // 展开时标题栏下角保持直角与内容区衔接。
                 if (_titleBarBorder != null) _titleBarBorder.CornerRadius = new CornerRadius(10, 10, 0, 0);
@@ -66,19 +70,21 @@ namespace PowerAudioManager
                     _collapsedTempLabel.Visibility = Visibility.Visible;
                 SizeToContent = SizeToContent.Height;
                 MinHeight = 36;
+                UpdateTempUI();
+                if (_contentPanel != null) ScheduleUiReclamation();
             }
-            // 重锚定：保持底边固定，等 LayoutUpdated 后 ActualHeight 正确再调整。
-            EventHandler reanchor = null;
-            reanchor = (xs, xe) =>
+            // Finish sizing and anchoring in this dispatcher turn, before rendering
+            // a new body at the old position and correcting it in a later layout.
+            if (!_windowUiDetached)
             {
-                LayoutUpdated -= reanchor;
+                _scaling?.ApplyScaling();
+                UpdateLayout();
                 double newTop = bottom - ActualHeight;
                 var wa = SystemParameters.WorkArea;
                 if (newTop < wa.Top) newTop = wa.Top;
                 if (newTop + ActualHeight > wa.Bottom) newTop = wa.Bottom - ActualHeight;
                 Top = newTop;
-            };
-            LayoutUpdated += reanchor;
+            }
             // 手动展开时取消待执行的自动折叠。
             if (expanded && _autoCollapseTimer != null) _autoCollapseTimer.Stop();
         }

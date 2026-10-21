@@ -175,15 +175,24 @@ namespace PowerAudioManager
             _titleBarBorder = titleBarBorder;
             _root.Children.Add(titleBarBorder);
 
-            if (!_isExpanded)
+            if (_isExpanded)
+            {
+                BuildExpandedContent();
+                _root.Children.Add(_contentPanel);
+            }
+            else
             {
                 if (ModuleVisible("Temp")) _collapsedTempLabel.Visibility = Visibility.Visible;
                 _titleBarBorder.CornerRadius = new CornerRadius(10);
-                _mainBorder.Child = _root;
-                Content = _mainBorder;
-                return;
             }
+            _mainBorder.Child = _root;
+            Content = _mainBorder;
+            if (IsLoaded) _volumeInputReady = true;
+        }
 
+        void BuildExpandedContent()
+        {
+            CancelPendingVolumeCommand();
             var contentPanel = new StackPanel { Margin = new Thickness(14, 10, 14, 14) };
             _contentPanel = contentPanel;
 
@@ -228,7 +237,7 @@ namespace PowerAudioManager
             {
             var powerHeader = MakeCollapsibleHeader("电源计划", IconKey.Power, () => _powerSection, "UI.PowerCollapsed");
             contentPanel.Children.Add(powerHeader);
-            _powerSection = new StackPanel { Margin = new Thickness(0, 0, 0, 4) };
+            _powerSection = new StackPanel { Margin = new Thickness(0, 0, 0, 4), Visibility = AppPrefs.GetBool("UI.PowerCollapsed", false) ? Visibility.Collapsed : Visibility.Visible };
             contentPanel.Children.Add(_powerSection);
             }
 
@@ -238,7 +247,7 @@ namespace PowerAudioManager
 
             var audioHeader = MakeCollapsibleHeader("音频输出", IconKey.Audio, () => _audioSection, "UI.AudioCollapsed");
             contentPanel.Children.Add(audioHeader);
-            _audioSection = new StackPanel();
+            _audioSection = new StackPanel { Visibility = AppPrefs.GetBool("UI.AudioCollapsed", false) ? Visibility.Collapsed : Visibility.Visible };
             contentPanel.Children.Add(_audioSection);
             _audioDeviceSection = new StackPanel();
             _audioSection.Children.Add(_audioDeviceSection);
@@ -297,7 +306,7 @@ namespace PowerAudioManager
                 if (contentPanel.Children.Count > 0) contentPanel.Children.Add(UiKit.MakeDivider());
                 contentPanel.Children.Add(MakeCollapsibleHeader("OneMic", IconKey.OneMic,
                     () => _oneMicSection, "UI.OneMicCollapsed"));
-                _oneMicSection = new StackPanel { Margin = new Thickness(0, 0, 0, 4) };
+                _oneMicSection = new StackPanel { Margin = new Thickness(0, 0, 0, 4), Visibility = AppPrefs.GetBool("UI.OneMicCollapsed", false) ? Visibility.Collapsed : Visibility.Visible };
                 _oneMicSection.Children.Add(BuildOneMicControls());
                 contentPanel.Children.Add(_oneMicSection);
             }
@@ -348,14 +357,6 @@ namespace PowerAudioManager
 
             if (ModuleVisible("Gallery")) BuildGalleryButton(contentPanel);
 
-            _root.Children.Add(contentPanel);
-
-            _mainBorder.Child = _root;
-            Content = _mainBorder;
-            // RebuildUI replaces Content while the window is already loaded;
-            // in that case the new slider is immediately eligible for user
-            // input even if WPF does not replay Loaded for every child.
-            if (IsLoaded) _volumeInputReady = true;
         }
 
         Grid BuildOneMicControls()
@@ -434,15 +435,17 @@ namespace PowerAudioManager
             int refreshQueued = 0;
             void StudioChanged()
             {
+                if (!_isExpanded) return;
                 if (System.Threading.Interlocked.Exchange(ref refreshQueued, 1) != 0) return;
                 Dispatcher.BeginInvoke(new Action(() =>
                 {
                     System.Threading.Interlocked.Exchange(ref refreshQueued, 0);
-                    if (listening) RefreshButtons();
+                    if (listening && _isExpanded && IsVisible) RefreshButtons();
                 }), DispatcherPriority.Render);
             }
             controls.Loaded += (_, _) => { if (!listening) { studio.Changed += StudioChanged; listening = true; } RefreshButtons(); };
             controls.Unloaded += (_, _) => { if (listening) { studio.Changed -= StudioChanged; listening = false; } };
+            controls.IsVisibleChanged += (_, _) => { if (controls.IsVisible) RefreshButtons(); };
             void Place(Button button, int row, int column)
             {
                 Grid.SetRow(button, row);
@@ -524,13 +527,6 @@ namespace PowerAudioManager
             DockPanel.SetDock(sectionIcon, Dock.Left);
             dock.Children.Add(sectionIcon);
             dock.Children.Add(label);
-
-            // 异步应用折叠状态，等区块元素创建后再设置可见性。
-            Dispatcher.BeginInvoke(new Action(() => {
-                var sec = sectionGetter() as FrameworkElement;
-                if (sec == null) return;
-                sec.Visibility = initiallyCollapsed ? Visibility.Collapsed : Visibility.Visible;
-            }), System.Windows.Threading.DispatcherPriority.Loaded);
 
             dock.MouseLeftButtonUp += (s, e) => {
                 var sec = sectionGetter() as FrameworkElement;

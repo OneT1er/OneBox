@@ -81,8 +81,10 @@ namespace PowerAudioManager
                 _powerPlans = plans ?? new List<PowerPlanInfo>();
                 var active = _powerPlans.Find(p => p.IsActive);
                 if (active != null) _currentPlanId = active.Guid;
+                if (!_isExpanded) { _powerUiDirty |= !unchanged; return; }
                 if (_powerSection == null) return; // module hidden
-                if (unchanged && _powerSection.Children.Count > 0) return;
+                if (unchanged && !_powerUiDirty && _powerSection.Children.Count > 0) return;
+                _powerUiDirty = false;
                 _powerSection.Children.Clear();
                 if (_powerPlans.Count == 0)
                 {
@@ -117,8 +119,10 @@ namespace PowerAudioManager
                 _audioDevices = devices ?? new List<AudioDeviceInfo>();
                 var defaultDev = _audioDevices.Find(d => d.IsDefault);
                 if (defaultDev != null) _currentDeviceId = defaultDev.Id;
+                if (!_isExpanded) { _audioUiDirty |= !unchanged; return; }
                 if (_audioDeviceSection == null) return; // module hidden
-                if (unchanged && _audioDeviceSection.Children.Count > 0) return;
+                if (unchanged && !_audioUiDirty && _audioDeviceSection.Children.Count > 0) return;
+                _audioUiDirty = false;
                 _audioDeviceSection.Children.Clear();
                 if (_audioDevices.Count == 0)
                 {
@@ -222,7 +226,7 @@ namespace PowerAudioManager
 
         void UpdateVolumeUI()
         {
-            if (_volSlider == null) return;
+            if (!_isExpanded || _volSlider == null) return;
             _volSliderUpdating = true;
             try
             {

@@ -124,7 +124,7 @@ namespace PowerAudioManager
 
                 // 展开视图：仅在指标集合变化时重建结构；每秒只更新数值文本与颜色。
                 // 旧实现每秒 Clear+new 一批 TextBlock/Brush/Image/Geometry，是高频 GC 与组合树碎片主因。
-                if (_metricRow != null)
+                if (_isExpanded && _metricRow != null)
                 {
                     if (metrics.Count == 0)
                     {

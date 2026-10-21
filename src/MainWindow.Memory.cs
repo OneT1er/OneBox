@@ -18,7 +18,7 @@ namespace PowerAudioManager
     {
         void UpdateMemoryUI()
         {
-            if (_memStatusLabel == null) return;
+            if (!_isExpanded || _memStatusLabel == null) return;
             try
             {
                 var s = MemoryCleaner.GetStatus();

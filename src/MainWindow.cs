@@ -73,6 +73,10 @@ namespace PowerAudioManager
         private System.Threading.Timer _tempTimer;
         private DispatcherTimer _uiReclaimTimer;
         private DateTime _lastUiReclamationUtc;
+        private DateTime _uiReclaimDueUtc;
+        private int _uiReclaimGeneration;
+        private int _scheduledUiReclaimGeneration;
+        private bool _powerUiDirty, _audioUiDirty;
         private bool _windowUiDetached;
 
         // 后台数据加载进行中标记。防止多个调用方（设备监视器、刷新定时器、点击）短时间内重复触发 powercfg。
@@ -293,12 +297,21 @@ namespace PowerAudioManager
 
         void ClearUiReferences()
         {
+            ClearContentUiReferences();
+            _pinBtn = null;
+            _collapsedTempLabel = null;
+            _root = null;
+            _titleBarBorder = null;
+            _mainBorder = null;
+        }
+
+        void ClearContentUiReferences()
+        {
             _contentPanel = null;
             _powerSection = null;
             _audioSection = null;
             _audioDeviceSection = null;
             _oneMicSection = null;
-            _pinBtn = null;
             _memStatusLabel = null;
             _volSlider = null;
             _volLabel = null;
@@ -306,11 +319,17 @@ namespace PowerAudioManager
             _metricRow = null;
             _metricValBlocks = null;
             _metricKeys = null;
-            _collapsedTempLabel = null;
-            _root = null;
-            _titleBarBorder = null;
-            _mainBorder = null;
             _volumeInputReady = false;
+            _powerUiDirty = _audioUiDirty = false;
+        }
+
+        void ReleaseCollapsedContent()
+        {
+            if (_contentPanel == null) return;
+            ClearFocusFromUi(_contentPanel);
+            CancelPendingVolumeCommand();
+            _root?.Children.Remove(_contentPanel);
+            ClearContentUiReferences();
         }
 
         void RebuildWindowUi()
@@ -326,6 +345,11 @@ namespace PowerAudioManager
         void ClearFocusFromOldUi()
         {
             var oldRoot = (DependencyObject)_mainBorder ?? _root;
+            ClearFocusFromUi(oldRoot);
+        }
+
+        void ClearFocusFromUi(DependencyObject oldRoot)
+        {
             if (oldRoot == null) return;
 
             if (Keyboard.FocusedElement is DependencyObject keyboardFocus && IsWithinUiTree(keyboardFocus, oldRoot))
@@ -404,6 +428,7 @@ namespace PowerAudioManager
             CancelUiReclamation();
             RebuildWindowUi();
             RefreshVisibleUi();
+            UpdateLayout();
             LoadData();
         }
 
@@ -426,19 +451,33 @@ namespace PowerAudioManager
             }
             if (_uiReclaimTimer.IsEnabled) return;
 
-            // Let quick hover-driven fold/unfold cycles settle, and avoid repeatedly
-            // forcing a full collection when the user keeps folding the window.
-            var delay = TimeSpan.FromSeconds(3);
-            var cooldownRemaining = TimeSpan.FromSeconds(30) - (DateTime.UtcNow - _lastUiReclamationUtc);
-            if (cooldownRemaining > delay) delay = cooldownRemaining;
-            _uiReclaimTimer.Interval = delay;
+            // Body release has its own three-second grace period; the GC cooldown
+            // must never keep a cold body tree alive for thirty seconds.
+            _uiReclaimDueUtc = DateTime.UtcNow.AddSeconds(3);
+            _scheduledUiReclaimGeneration = _uiReclaimGeneration;
+            _uiReclaimTimer.Interval = TimeSpan.FromSeconds(3);
             _uiReclaimTimer.Start();
         }
 
         void ReclaimReleasedUi(object sender, EventArgs e)
         {
             _uiReclaimTimer.Stop();
-            if (_isExiting || (IsVisible && _isExpanded && _contentPanel != null)) return;
+            if (_isExiting || _scheduledUiReclaimGeneration != _uiReclaimGeneration || (IsVisible && _isExpanded)) return;
+            var untilRelease = _uiReclaimDueUtc - DateTime.UtcNow;
+            if (untilRelease > TimeSpan.Zero)
+            {
+                _uiReclaimTimer.Interval = untilRelease;
+                _uiReclaimTimer.Start();
+                return;
+            }
+            if (!_isExpanded) ReleaseCollapsedContent();
+            var cooldownRemaining = TimeSpan.FromSeconds(30) - (DateTime.UtcNow - _lastUiReclamationUtc);
+            if (cooldownRemaining > TimeSpan.Zero)
+            {
+                _uiReclaimTimer.Interval = cooldownRemaining;
+                _uiReclaimTimer.Start();
+                return;
+            }
             try
             {
                 using var process = Process.GetCurrentProcess();
@@ -477,6 +516,7 @@ namespace PowerAudioManager
 
         void CancelUiReclamation()
         {
+            _uiReclaimGeneration++;
             try { _uiReclaimTimer?.Stop(); } catch { }
         }
 

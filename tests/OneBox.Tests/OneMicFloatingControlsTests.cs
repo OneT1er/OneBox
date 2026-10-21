@@ -6,12 +6,46 @@ using System.Threading;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using Microsoft.Win32;
 using Xunit;
 
 namespace PowerAudioManager.Tests;
 
 public class OneMicFloatingControlsTests
 {
+    private sealed class SectionPreferences : IDisposable
+    {
+        private readonly (string Key, object Value, RegistryValueKind Kind)[] _previous;
+        public SectionPreferences(bool powerCollapsed, bool audioCollapsed)
+        {
+            using var registry = Registry.CurrentUser.CreateSubKey(@"Software\PowerAudioManager\App");
+            string[] keys = { "UI.PowerCollapsed", "UI.AudioCollapsed" };
+            _previous = keys.Select(key => (key,
+                registry.GetValue(key, null, RegistryValueOptions.DoNotExpandEnvironmentNames),
+                registry.GetValueNames().Contains(key, StringComparer.OrdinalIgnoreCase) ? registry.GetValueKind(key) : RegistryValueKind.Unknown)).ToArray();
+            try
+            {
+                registry.SetValue(keys[0], powerCollapsed ? "1" : "0", RegistryValueKind.String);
+                registry.SetValue(keys[1], audioCollapsed ? "1" : "0", RegistryValueKind.String);
+            }
+            catch { Dispose(); throw; }
+        }
+        public void Dispose()
+        {
+            using var registry = Registry.CurrentUser.CreateSubKey(@"Software\PowerAudioManager\App");
+            foreach (var previous in _previous)
+                if (previous.Kind == RegistryValueKind.Unknown) registry.DeleteValue(previous.Key, false);
+                else registry.SetValue(previous.Key, previous.Value, previous.Kind);
+        }
+    }
+
+    private sealed class TestMainWindow : MainWindow
+    {
+        // Exercise real layout without the production LocationChanged handler
+        // persisting these test coordinates to the user's window preferences.
+        protected override void OnLocationChanged(EventArgs e) { }
+    }
+
     private sealed class UiCapture
     {
         public WeakReference Content { get; }
@@ -37,7 +71,7 @@ public class OneMicFloatingControlsTests
             try
             {
                 app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
-                window = new MainWindow();
+                window = new TestMainWindow();
                 var type = typeof(MainWindow);
                 AssertOneMicRefreshControls(window, type);
 
@@ -50,6 +84,8 @@ public class OneMicFloatingControlsTests
                 var uiReclaimTimer = Field(type, "_uiReclaimTimer");
                 var scheduleUiReclamation = type.GetMethod("ScheduleUiReclamation", BindingFlags.Instance | BindingFlags.NonPublic);
                 Assert.NotNull(scheduleUiReclamation);
+                var reclaimReleasedUi = type.GetMethod("ReclaimReleasedUi", BindingFlags.Instance | BindingFlags.NonPublic);
+                Assert.NotNull(reclaimReleasedUi);
                 var releaseHiddenUi = type.GetMethod("ReleaseHiddenWindowUi", BindingFlags.Instance | BindingFlags.NonPublic);
                 Assert.NotNull(releaseHiddenUi);
                 var onLoaded = type.GetMethod("OnLoaded", BindingFlags.Instance | BindingFlags.NonPublic,
@@ -84,42 +120,87 @@ public class OneMicFloatingControlsTests
                         "The visible OneMic controls did not subscribe to StudioController.Changed.");
                 double originalLeft = window.Left;
 
-                for (int cycle = 0; cycle < 3; cycle++)
+                var sectionCases = new[] { (Power: false, Audio: false), (Power: true, Audio: false), (Power: false, Audio: true), (Power: true, Audio: true) };
+                for (int cycle = 0; cycle < sectionCases.Length; cycle++)
                 {
+                    var sectionCase = sectionCases[cycle];
+                    using var preferences = new SectionPreferences(sectionCase.Power, sectionCase.Audio);
+                    type.GetMethod("RebuildWindowUi", BindingFlags.Instance | BindingFlags.NonPublic).Invoke(window, null);
+                    type.GetMethod("RefreshVisibleUi", BindingFlags.Instance | BindingFlags.NonPublic).Invoke(window, null);
+                    PumpDispatcher(window.Dispatcher);
+                    AssertSectionVisibility(window, type, sectionCase.Power, sectionCase.Audio);
+                    window.Top = SystemParameters.WorkArea.Bottom - window.ActualHeight - 30;
                     bool manualFold = cycle == 1;
+                    int listenersWhileExpanded = GetStudioChangedSubscriberCount(type);
                     double originalBottom = window.Top + window.ActualHeight;
                     var foldCapture = FoldAndCaptureContent(window, contentPanel, mainBorder, setExpanded,
                         manualFold, cycle == 0);
+                    AssertAnchorThroughDispatcher(window, originalLeft, originalBottom);
                     PumpDispatcher(window.Dispatcher);
                     if (cycle == 0 && foldCapture.Focus != null)
                     {
                         AssertFocusNoLongerTargets(window, foldCapture.Focus);
                         AssertFocusOutsideOldTree(window, foldCapture.Root);
                     }
-                    Assert.Null(contentPanel.GetValue(window));
+                    Assert.Same(foldCapture.Content.Target, contentPanel.GetValue(window));
+                    Assert.Equal(Visibility.Collapsed, ((StackPanel)contentPanel.GetValue(window)).Visibility);
+                    Assert.Same(foldCapture.Root.Target, mainBorder.GetValue(window));
                     Assert.False((bool)expanded.GetValue(window));
                     Assert.Equal(manualFold, collapsedManually.GetValue(window));
                     Assert.InRange(Math.Abs(originalBottom - (window.Top + window.ActualHeight)), 0, 1);
-                    Assert.Equal(studioListenersBefore, GetStudioChangedSubscriberCount(type));
+                    Assert.Equal(listenersWhileExpanded, GetStudioChangedSubscriberCount(type));
                     var reclaimTimer = Assert.IsType<System.Windows.Threading.DispatcherTimer>(uiReclaimTimer.GetValue(window));
                     Assert.True(reclaimTimer.IsEnabled);
                     Assert.True(reclaimTimer.Interval >= TimeSpan.FromSeconds(3));
                     var scheduledInterval = reclaimTimer.Interval;
-                    CollectAndAssertReleased(foldCapture.Content);
                     scheduleUiReclamation.Invoke(window, null);
                     Assert.Equal(scheduledInterval, reclaimTimer.Interval);
-                    Assert.Single(((StackPanel)((Border)window.Content).Child).Children);
 
                     setExpanded.Invoke(window, new object[] { true, false });
+                    AssertAnchorThroughDispatcher(window, originalLeft, originalBottom);
                     PumpDispatcher(window.Dispatcher);
                     Assert.False(reclaimTimer.IsEnabled);
+                    Assert.Same(foldCapture.Content.Target, contentPanel.GetValue(window));
+                    Assert.Same(foldCapture.Root.Target, mainBorder.GetValue(window));
+                    Assert.Equal(listenersWhileExpanded, GetStudioChangedSubscriberCount(type));
+                    AssertSectionVisibility(window, type, sectionCase.Power, sectionCase.Audio);
+                    Assert.Equal(originalLeft, window.Left);
+                    Assert.InRange(Math.Abs(originalBottom - (window.Top + window.ActualHeight)), 0, 1);
+                    // A queued callback from the cancelled cold generation cannot
+                    // release the reused expanded body.
+                    reclaimReleasedUi.Invoke(window, new object[] { null, EventArgs.Empty });
+                    Assert.Same(foldCapture.Content.Target, contentPanel.GetValue(window));
+
+                    setExpanded.Invoke(window, new object[] { false, manualFold });
+                    AssertAnchorThroughDispatcher(window, originalLeft, originalBottom);
+                    // Advance only the private cold deadline; do not wait or force
+                    // the application's production GC/working-set trim in this test.
+                    Field(type, "_uiReclaimDueUtc").SetValue(window, DateTime.UtcNow.AddSeconds(-1));
+                    Field(type, "_lastUiReclamationUtc").SetValue(window, DateTime.UtcNow);
+                    reclaimReleasedUi.Invoke(window, new object[] { null, EventArgs.Empty });
+                    PumpDispatcher(window.Dispatcher);
+                    Assert.Null(contentPanel.GetValue(window));
+                    Assert.Same(foldCapture.Root.Target, mainBorder.GetValue(window));
+                    Assert.Single(((StackPanel)((Border)window.Content).Child).Children);
+                    Assert.True(reclaimTimer.IsEnabled); // GC cooldown did not defer body release.
+                    Assert.Equal(studioListenersBefore, GetStudioChangedSubscriberCount(type));
+                    CollectAndAssertReleased(foldCapture.Content);
+
+                    setExpanded.Invoke(window, new object[] { true, false });
+                    AssertAnchorThroughDispatcher(window, originalLeft, originalBottom);
+                    PumpDispatcher(window.Dispatcher);
+                    reclaimReleasedUi.Invoke(window, new object[] { null, EventArgs.Empty });
+                    Assert.False(reclaimTimer.IsEnabled);
                     Assert.True(HasFieldValue(contentPanel, window));
+                    Assert.Same(foldCapture.Root.Target, mainBorder.GetValue(window));
+                    AssertSectionVisibility(window, type, sectionCase.Power, sectionCase.Audio);
                     Assert.True((bool)expanded.GetValue(window));
                     Assert.False((bool)collapsedManually.GetValue(window));
                     Assert.Equal(originalLeft, window.Left);
+                    Assert.InRange(Math.Abs(originalBottom - (window.Top + window.ActualHeight)), 0, 1);
                     Assert.Same(sampler, tempTimer.GetValue(window));
 
-                    double hiddenLeft = window.Left, hiddenTop = window.Top;
+                    double hiddenLeft = window.Left, hiddenTop = window.Top, hiddenBottom = window.Top + window.ActualHeight;
                     var hiddenCapture = HideAndCaptureContent(window, contentPanel, releaseHiddenUi, cycle == 0);
                     PumpDispatcher(window.Dispatcher);
                     if (hiddenCapture.Focus != null)
@@ -133,7 +214,12 @@ public class OneMicFloatingControlsTests
                     Assert.Equal(studioListenersBefore, GetStudioChangedSubscriberCount(type));
                     CollectAndAssertReleased(hiddenCapture.Content);
 
+                    // Keep this layout test on its cached model; an unrelated
+                    // real powercfg/device refresh can legitimately change height.
+                    Field(type, "_loading").SetValue(window, true);
+                    Field(type, "_loadStartTime").SetValue(window, DateTime.Now);
                     window.Show();
+                    AssertAnchorThroughDispatcher(window, hiddenLeft, hiddenBottom);
                     PumpDispatcher(window.Dispatcher);
                     Assert.False(reclaimTimer.IsEnabled);
                     Assert.True(WindowHasContent(window));
@@ -174,6 +260,12 @@ public class OneMicFloatingControlsTests
     private static FieldInfo Field(Type type, string name) =>
         type.GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)
         ?? throw new InvalidOperationException("MainWindow field not found: " + name);
+
+    private static void AssertSectionVisibility(MainWindow window, Type type, bool powerCollapsed, bool audioCollapsed)
+    {
+        Assert.Equal(powerCollapsed ? Visibility.Collapsed : Visibility.Visible, ((StackPanel)Field(type, "_powerSection").GetValue(window)).Visibility);
+        Assert.Equal(audioCollapsed ? Visibility.Collapsed : Visibility.Visible, ((StackPanel)Field(type, "_audioSection").GetValue(window)).Visibility);
+    }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static void AssertOneMicRefreshControls(MainWindow window, Type type)
@@ -239,6 +331,17 @@ public class OneMicFloatingControlsTests
             }, dispatcher);
         settleTimer.Start();
         System.Windows.Threading.Dispatcher.PushFrame(frame);
+    }
+
+    private static void AssertAnchorThroughDispatcher(Window window, double left, double bottom)
+    {
+        for (int phase = 0; phase < 4; phase++)
+        {
+            if (phase > 0) PumpDispatcher(window.Dispatcher);
+            Assert.Equal(left, window.Left);
+            Assert.True(Math.Abs(bottom - (window.Top + window.ActualHeight)) <= 1,
+                $"Anchor shifted in dispatcher phase {phase}: expected bottom {bottom}, Top={window.Top}, ActualHeight={window.ActualHeight}.");
+        }
     }
 
     private static void CollectAndAssertReleased(WeakReference target)
