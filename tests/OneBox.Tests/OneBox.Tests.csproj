@@ -22,5 +22,6 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\OneBox.Contracts\OneBox.Contracts.csproj" />
     <ProjectReference Include="..\..\src\OneBox.csproj" />
+    <ProjectReference Include="..\..\src\OneBox.Hardware\OneBox.Hardware.csproj" />
   </ItemGroup>
 </Project>

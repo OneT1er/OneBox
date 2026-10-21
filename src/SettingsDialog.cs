@@ -27,6 +27,7 @@ namespace PowerAudioManager
             var lightText = new SolidColorBrush(Color.FromRgb(220, 218, 245));
             List<UIElement> tabContents = null;
             ContentControl contentHost = null;
+            Action<int> selectTab = null;
 
             // ---- 侧栏 ----
             var sideBar = new ListBox
@@ -63,14 +64,14 @@ namespace PowerAudioManager
                 UpdateSelectionColors(sideBar);
                 if (sideBar.SelectedIndex < 0) return;
                 aboutBar.SelectedIndex = -1;
-                contentHost.Content = tabContents[sideBar.SelectedIndex];
+                selectTab?.Invoke(sideBar.SelectedIndex);
             };
             aboutBar.SelectionChanged += (s, e) =>
             {
                 UpdateSelectionColors(aboutBar);
                 if (aboutBar.SelectedIndex < 0) return;
                 sideBar.SelectedIndex = -1;
-                contentHost.Content = tabContents[AboutTabIndex];
+                selectTab?.Invoke(AboutTabIndex);
             };
 
             contentHost = new ContentControl
@@ -107,9 +108,16 @@ namespace PowerAudioManager
                 BuildTranslateTab(owner, dlg, fg),
                 BuildScreenshotTab(owner, dlg, fg),
                 BuildClipboardTab(owner, dlg, fg),
-                BuildTempTab(owner, dlg, fg),
+                null, // Sensor catalog and its controls exist only while this page is active.
                 BuildAudioStudioTab(owner, dlg, fg),
                 BuildAboutTab(dlg, fg),
+            };
+            selectTab = index =>
+            {
+                contentHost.Content = null;
+                if (index != 6) tabContents[6] = null;
+                else tabContents[6] ??= BuildTempTab(owner, dlg, fg);
+                contentHost.Content = tabContents[index];
             };
 
             sideBar.Items.Add(SidebarItem(IconKey.Settings, "常规"));
@@ -129,9 +137,8 @@ namespace PowerAudioManager
             else if (openTab >= 0 && openTab < sideBar.Items.Count)
             {
                 sideBar.SelectedIndex = openTab;
-                contentHost.Content = tabContents[openTab];
             }
-            else { sideBar.SelectedIndex = 0; contentHost.Content = tabContents[0]; }
+            else { sideBar.SelectedIndex = 0; }
 
             dlg.ShowDialog();
         }

@@ -28,17 +28,24 @@ internal sealed class HardwareCollector : IDisposable
         }
     }
 
-    public HardwareSnapshot ReadSnapshot()
+    public HardwareSnapshot ReadSnapshot(HardwareSubscribePayload subscription, HashSet<ISensor> selected)
     {
-        lock (_gate) return ReadSnapshotCore();
+        lock (_gate) return ReadSnapshotCore(subscription, selected);
     }
 
-    private HardwareSnapshot ReadSnapshotCore()
+    private HardwareSnapshot ReadSnapshotCore(HardwareSubscribePayload subscription, HashSet<ISensor> selected)
     {
-        if (_computer == null) return new HardwareSnapshot();
+        bool catalog = subscription.IncludeCatalog || subscription.SelectedSensors == null;
+        if (_computer == null) return new HardwareSnapshot { CatalogIncluded = catalog, SelectionApplied = subscription.SelectedSensors != null };
         _computer.Accept(new UpdateVisitor());
-        var snapshot = new HardwareSnapshot { Ready = true };
-        foreach (var hardware in Flatten(_computer.Hardware))
+        return BuildSnapshot(_computer.Hardware, subscription, selected);
+    }
+
+    internal static HardwareSnapshot BuildSnapshot(IEnumerable<IHardware> source, HardwareSubscribePayload subscription, HashSet<ISensor> selected)
+    {
+        bool catalog = subscription.IncludeCatalog || subscription.SelectedSensors == null;
+        var snapshot = new HardwareSnapshot { Ready = true, CatalogIncluded = catalog, SelectionApplied = subscription.SelectedSensors != null };
+        foreach (var hardware in Flatten(source))
         {
             foreach (var sensor in hardware.Sensors)
             {
@@ -47,22 +54,29 @@ internal sealed class HardwareCollector : IDisposable
                 if (sensor.SensorType == SensorType.Temperature && IsMetadataTemperature(sensor.Name))
                     continue;
 
+                bool include = catalog || selected.Contains(sensor);
+                bool summary = sensor.SensorType == SensorType.Temperature
+                    && ((!snapshot.CpuTemperature.HasValue && hardware.HardwareType == HardwareType.Cpu)
+                    || (!snapshot.GpuTemperature.HasValue && IsGpu(hardware.HardwareType) && !sensor.Name.Contains("Hot", StringComparison.OrdinalIgnoreCase)));
+                if (!include && !summary) continue;
                 string sensorType = sensor.SensorType.ToString();
-                string hardwareType = hardware.HardwareType.ToString();
-                snapshot.Sensors.Add(new HardwareSensor
+                if (include) snapshot.Sensors.Add(new HardwareSensor
                 {
                     HardwareName = hardware.Name,
                     SensorName = sensor.Name,
-                    HardwareType = hardwareType,
+                    HardwareType = hardware.HardwareType.ToString(),
                     SensorType = sensorType,
                 });
                 if (!sensor.Value.HasValue || !IsPlausible(sensor.SensorType, sensor.Value.Value))
                     continue;
-                string displayName = DefaultDisplayName(hardware.Name, sensor.Name, sensorType);
-                string icon = AutoIcon(displayName, hardware.Name, sensor.Name, sensorType);
-                string unit = sensor.SensorType == SensorType.Temperature ? "°C" : sensor.SensorType == SensorType.Control ? "%" : "RPM";
-                string key = $"{sensorType}|{hardware.Name}|{sensor.Name}|{displayName}|{icon}";
-                snapshot.Metrics.Add(new HardwareMetric { Name = displayName, Icon = icon, Value = sensor.Value, Unit = unit, Key = key });
+                if (include)
+                {
+                    string displayName = DefaultDisplayName(hardware.Name, sensor.Name, sensorType);
+                    string icon = AutoIcon(displayName, hardware.Name, sensor.Name, sensorType);
+                    string unit = sensor.SensorType == SensorType.Temperature ? "°C" : sensor.SensorType == SensorType.Control ? "%" : "RPM";
+                    string key = $"{sensorType}|{hardware.Name}|{sensor.Name}|{displayName}|{icon}";
+                    snapshot.Metrics.Add(new HardwareMetric { Name = displayName, Icon = icon, Value = sensor.Value, Unit = unit, Key = key });
+                }
                 if (sensor.SensorType == SensorType.Temperature)
                 {
                     if (!snapshot.CpuTemperature.HasValue && hardware.HardwareType == HardwareType.Cpu)
@@ -73,6 +87,36 @@ internal sealed class HardwareCollector : IDisposable
             }
         }
         return snapshot;
+    }
+
+    public HashSet<ISensor> ResolveSelectedSensors(HardwareSubscribePayload subscription)
+    {
+        lock (_gate) return ResolveSelectedSensorsCore(_computer.Hardware, subscription.SelectedSensors);
+    }
+
+    internal static HashSet<ISensor> ResolveSelectedSensorsCore(IEnumerable<IHardware> source, List<HardwareSensorIdentity> selection)
+    {
+        if (selection == null) return null;
+        var result = new HashSet<ISensor>();
+        foreach (HardwareSensorIdentity identity in selection)
+        {
+            if (identity == null) continue;
+            ISensor exact = null, fallback = null;
+            int sameName = 0;
+            foreach (IHardware hardware in Flatten(source))
+            foreach (ISensor sensor in hardware.Sensors)
+            {
+                if (!string.Equals(sensor.SensorType.ToString(), identity.SensorType, StringComparison.OrdinalIgnoreCase)
+                    || !string.Equals(sensor.Name, identity.SensorName, StringComparison.Ordinal)) continue;
+                if (sensor.SensorType == SensorType.Temperature && IsMetadataTemperature(sensor.Name)) continue;
+                sameName++;
+                fallback = sensor;
+                if (string.Equals(hardware.Name, identity.HardwareName, StringComparison.Ordinal)) exact ??= sensor;
+            }
+            ISensor resolved = exact ?? (sameName == 1 ? fallback : null);
+            if (resolved != null) result.Add(resolved);
+        }
+        return result;
     }
 
     private static IEnumerable<IHardware> Flatten(IEnumerable<IHardware> source)

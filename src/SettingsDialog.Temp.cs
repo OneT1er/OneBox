@@ -6,6 +6,7 @@ using System.Windows.Documents;
 using System.Windows.Media;
 using PowerAudioManager.Commands;
 using System.Windows.Shapes;
+using System.Windows.Threading;
 
 namespace PowerAudioManager
 {
@@ -15,6 +16,7 @@ namespace PowerAudioManager
         {
             var stack = new StackPanel { Margin = new Thickness(20) };
             var hw = HardwareMonitorService.Instance;
+            hw.PrepareSelection();
 
             // 标题
             var titleRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 12) };
@@ -46,6 +48,17 @@ namespace PowerAudioManager
             metricInner.Children.Add(addBtn);
             metricInner.Children.Add(addPanel);
             stack.Children.Add(metricInner);
+            IDisposable preview = null;
+            var previewTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
+            previewTimer.Tick += (_, _) =>
+            {
+                stats.Text = hw.CatalogAvailable
+                    ? $"已发现 {hw.AllTempSensors.Count} 温度 · {hw.AllFanSensors.Count} 风扇 · {hw.AllControlSensors.Count} 控制"
+                    : "正在加载传感器…";
+                RefreshMetricPreviewValues(metricList, hw, fg);
+            };
+            stack.Loaded += (_, _) => { preview ??= hw.BeginCatalogPreview(); previewTimer.Start(); };
+            stack.Unloaded += (_, _) => { previewTimer.Stop(); preview?.Dispose(); preview = null; addPanel.Children.Clear(); };
 
             // Card: 刷新设置
             var setCard = new Border { Background = new SolidColorBrush(Color.FromRgb(34, 32, 50)), CornerRadius = new CornerRadius(6), Padding = new Thickness(12) };

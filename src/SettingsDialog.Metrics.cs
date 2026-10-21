@@ -4,6 +4,7 @@ using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using System.Windows.Threading;
 
 namespace PowerAudioManager
 {
@@ -73,6 +74,7 @@ namespace PowerAudioManager
                 header.Children.Add(nameText);
                 var valueText = new TextBlock
                 {
+                    Tag = cfg,
                     Text = valStr, Foreground = val.HasValue ? Brushes.White : fg,
                     FontSize = val.HasValue ? 13 : 10, FontWeight = FontWeights.SemiBold,
                     VerticalAlignment = VerticalAlignment.Center
@@ -339,6 +341,35 @@ namespace PowerAudioManager
             }
             PopulateSensors();
             typeCombo.SelectionChanged += (_, _) => PopulateSensors();
+            var previewTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
+            string catalogIdentity = null;
+            previewTimer.Tick += (_, _) =>
+            {
+                var temperatures = hw.GetSensors("Temperature");
+                var fans = hw.GetSensors("Fan");
+                var controls = hw.GetSensors("Control");
+                string identity = string.Join(";", temperatures.Concat(fans).Concat(controls).Select(sensor => HardwareMonitorService.EncodeConfig(sensor, "", "")));
+                if (identity != catalogIdentity)
+                {
+                    catalogIdentity = identity;
+                    tempSensors = temperatures; fanSensors = fans; controlSensors = controls;
+                    ((ComboBoxItem)typeCombo.Items[0]).Content = $"温度 ({tempSensors.Count})";
+                    ((ComboBoxItem)typeCombo.Items[1]).Content = $"风扇转速 RPM ({fanSensors.Count})";
+                    ((ComboBoxItem)typeCombo.Items[2]).Content = $"风扇控制 % ({controlSensors.Count})";
+                    PopulateSensors();
+                }
+                foreach (ComboBoxItem item in sensorCombo.Items)
+                {
+                    if (item.Tag is not string key) continue;
+                    SensorInfo sensor = HardwareMonitorService.DecodeConfig(key, out _, out _);
+                    float? value = hw.ReadSensorPreview(sensor);
+                    string unit = sensor.SensorType == "Temperature" ? "°C" : sensor.SensorType == "Control" ? "%" : "RPM";
+                    string reading = value.HasValue ? $"{value.Value:0}{unit}" : "--";
+                    item.Content = $"{SensorCategory(sensor)} · {sensor.HardwareName} — {sensor.SensorName}  [{reading}]{(!item.IsEnabled ? "  （已添加）" : "")}";
+                }
+            };
+            form.Loaded += (_, _) => previewTimer.Start();
+            form.Unloaded += (_, _) => previewTimer.Stop();
 
             // 显示名称
             form.Children.Add(new TextBlock { Text = "显示名称", Foreground = fg, FontSize = 11, Margin = new Thickness(0, 6, 0, 2) });
@@ -405,6 +436,23 @@ namespace PowerAudioManager
             cancelBtn.Click += (_, _) => addPanel.Children.Clear();
 
             return form;
+        }
+
+        static void RefreshMetricPreviewValues(StackPanel list, HardwareMonitorService hw, SolidColorBrush fg)
+        {
+            foreach (UIElement child in list.Children)
+            {
+                if (child is not Border { Child: StackPanel content } || content.Children.Count == 0
+                    || content.Children[0] is not Grid header) continue;
+                foreach (UIElement element in header.Children)
+                {
+                    if (element is not TextBlock { Tag: SensorInfo sensor } text) continue;
+                    float? value = hw.ReadSensorPreview(sensor);
+                    string unit = sensor.SensorType == "Temperature" ? "°C" : sensor.SensorType == "Control" ? "%" : "RPM";
+                    text.Text = value.HasValue ? $"{value.Value:0} {unit}" : "暂无读数";
+                    text.Foreground = value.HasValue ? Brushes.White : fg;
+                }
+            }
         }
     }
 }

@@ -106,11 +106,12 @@ internal sealed class HardwarePipeServer
                 return;
             }
             int interval = Math.Clamp(payload.MinimumIntervalMilliseconds, 500, 60000);
+            var selected = _collector.ResolveSelectedSensors(payload);
             while (server.IsConnected && !cancellationToken.IsCancellationRequested)
             {
                 try
                 {
-                    HardwareSnapshot snapshot = _collector.ReadSnapshot();
+                    HardwareSnapshot snapshot = _collector.ReadSnapshot(payload, selected);
                     await IpcFraming.WriteAsync(server, IpcResponse.Ok(request, snapshot, IpcCommand.HardwareSnapshot), cancellationToken).ConfigureAwait(false);
                     await Task.Delay(interval, cancellationToken).ConfigureAwait(false);
                 }

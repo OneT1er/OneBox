@@ -67,9 +67,10 @@ internal static class Program
             using var collector = new HardwareCollector();
             collector.Start();
             HardwareLog.Write("collector started for active subscription");
+            var selected = collector.ResolveSelectedSensors(payload);
             while (true)
             {
-                HardwareSnapshot snapshot = collector.ReadSnapshot();
+                HardwareSnapshot snapshot = collector.ReadSnapshot(payload, selected);
                 await IpcFraming.WriteAsync(output, IpcResponse.Ok(request, snapshot,
                     IpcCommand.HardwareSnapshot), stop.Token).ConfigureAwait(false);
                 await Task.Delay(interval, stop.Token).ConfigureAwait(false);

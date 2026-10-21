@@ -110,10 +110,22 @@ public sealed class CleanMemoryResult
 public sealed class HardwareSubscribePayload
 {
     public int MinimumIntervalMilliseconds { get; set; } = 500;
+    // null preserves old clients; new clients send an explicit (possibly empty) selection.
+    public List<HardwareSensorIdentity> SelectedSensors { get; set; }
+    public bool IncludeCatalog { get; set; }
+}
+
+public sealed class HardwareSensorIdentity
+{
+    public string HardwareName { get; set; }
+    public string SensorName { get; set; }
+    public string SensorType { get; set; }
 }
 
 public sealed class HardwareSnapshot
 {
+    public bool CatalogIncluded { get; set; }
+    public bool SelectionApplied { get; set; }
     public float? CpuTemperature { get; set; }
     public float? GpuTemperature { get; set; }
     public bool Ready { get; set; }
