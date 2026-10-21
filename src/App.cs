@@ -20,6 +20,13 @@ namespace PowerAudioManager
         static System.Threading.Mutex _singleInstance;
         static System.Threading.EventWaitHandle _activateEvent;
 
+        // This diagnostic switch is a standalone GUI mode, never a helper option.
+        internal static bool IsSoftwareOnlyStartup(string[] args) =>
+            args.Length == 1 && args[0] == "--software-only";
+
+        internal static string[] GetStartupArgs(string[] args) =>
+            IsSoftwareOnlyStartup(args) ? Array.Empty<string>() : args;
+
         // 由 AdminUtils.RestartAsAdmin() 在启动提权进程前调用，让新实例成为 Mutex 持有者，避免因旧 Mutex 直接退出。
         public static void ReleaseSingleInstance()
         {
@@ -35,7 +42,10 @@ namespace PowerAudioManager
                 Environment.Exit(AudioStudio.DeepFilterDenoiser.WorkerMain());
                 return;
             }
+            bool softwareOnly = IsSoftwareOnlyStartup(args);
+            string[] startupArgs = GetStartupArgs(args);
             VelopackApp.Build()
+                .SetArgs(startupArgs)
                 .SetAutoApplyOnStartup(false)
                 .OnBeforeUpdateFastCallback(_ => UpdateLifecycleHooks.BeforeUpdateFastCallback())
                 .OnAfterUpdateFastCallback(_ => UpdateLifecycleHooks.AfterUpdateFastCallback())
@@ -44,7 +54,7 @@ namespace PowerAudioManager
 
             // 尽早记录进程启动（含参数），用于诊断开机自启中 GUI 静默消失等早期故障。
             AppLog.Log("Main", args.Length > 0 ? $"start args=[{string.Join(", ", args)}]" : "start (no args)");
-            if (args.Length == 0)
+            if (startupArgs.Length == 0)
             {
                 try { UpdateLifecycleHooks.RetryPendingServiceRepair(); }
                 catch (Exception ex) { AppLog.Log("Update service retry", ex); }
@@ -153,6 +163,12 @@ namespace PowerAudioManager
             _singleInstance = new System.Threading.Mutex(true, "Local\\OneBox-SingleInstance");
             _activateEvent = new System.Threading.EventWaitHandle(false,
                 System.Threading.EventResetMode.AutoReset, "Local\\OneBox-Activate");
+
+            // Set before Application or any GUI visual is constructed. Existing instances
+            // only receive activation; their rendering mode cannot be changed here.
+            if (softwareOnly)
+                RenderOptions.ProcessRenderMode = System.Windows.Interop.RenderMode.SoftwareOnly;
+            AppLog.Log("Main", $"renderer pid={Environment.ProcessId} requested={(softwareOnly ? "SoftwareOnly" : "Default")} actualRenderMode={RenderOptions.ProcessRenderMode}");
 
             AppDomain.CurrentDomain.UnhandledException += (s, ex) => {
                 try { System.IO.File.WriteAllText(System.IO.Path.GetTempPath() + "pam_crash.log",

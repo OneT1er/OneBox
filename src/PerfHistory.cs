@@ -27,6 +27,7 @@ namespace PowerAudioManager
         static bool _loadAttempted;   // Load 已尝试过（失败不每秒重试）
         static bool _loaded;          // _series 已从磁盘加载；Save 未加载时跳过，避免空写覆盖持久化数据
         static bool _preserveBackupOnNextSave;
+        static bool _loggedSavedFile;
 
         class Series
         {
@@ -292,6 +293,16 @@ namespace PowerAudioManager
                         }
                     }, preserveBackup);
                     lock (_lock) _preserveBackupOnNextSave = false;
+                    if (!_loggedSavedFile)
+                    {
+                        _loggedSavedFile = true;
+                        try
+                        {
+                            var file = new FileInfo(FilePath);
+                            AppLog.Log("PerfHistory", $"saved file pid={Environment.ProcessId} path={file.FullName} bytes={file.Length} lastWriteUtc={file.LastWriteTimeUtc:o}");
+                        }
+                        catch (Exception ex) { AppLog.Log("PerfHistory", "saved file metadata unavailable: " + ex.Message); }
+                    }
                     AppLog.Log("PerfHistory", "saved " + data.Count + " series");
                 }
             }
