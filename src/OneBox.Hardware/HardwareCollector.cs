@@ -49,6 +49,7 @@ internal sealed class HardwareCollector : IDisposable
         {
             foreach (var sensor in hardware.Sensors)
             {
+                DisableSensorHistory(sensor);
                 if (sensor.SensorType != SensorType.Temperature && sensor.SensorType != SensorType.Fan && sensor.SensorType != SensorType.Control)
                     continue;
                 if (sensor.SensorType == SensorType.Temperature && IsMetadataTemperature(sensor.Name))
@@ -87,6 +88,12 @@ internal sealed class HardwareCollector : IDisposable
             }
         }
         return snapshot;
+    }
+
+    internal static void DisableSensorHistory(ISensor sensor)
+    {
+        // OneBox records selected history itself; LHM's independent day-long history is unused.
+        if (sensor.ValuesTimeWindow != TimeSpan.Zero) sensor.ValuesTimeWindow = TimeSpan.Zero;
     }
 
     public HashSet<ISensor> ResolveSelectedSensors(HardwareSubscribePayload subscription)
@@ -195,6 +202,7 @@ internal sealed class HardwareCollector : IDisposable
         public void VisitComputer(IComputer computer) => computer.Traverse(this);
         public void VisitHardware(IHardware hardware)
         {
+            foreach (var sensor in hardware.Sensors) DisableSensorHistory(sensor);
             hardware.Update();
             foreach (var subHardware in hardware.SubHardware) subHardware.Accept(this);
         }

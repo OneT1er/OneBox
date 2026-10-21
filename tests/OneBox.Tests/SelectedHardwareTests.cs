@@ -172,6 +172,7 @@ public sealed class SelectedHardwareTests
     private static ISensor Sensor(string name, float value) => Stub<ISensor>(new()
     {
         ["Name"] = name, ["SensorType"] = SensorType.Temperature, ["Value"] = (float?)value,
+        ["ValuesTimeWindow"] = TimeSpan.Zero,
     });
     private static T Stub<T>(Dictionary<string, object> properties) where T : class
     {
