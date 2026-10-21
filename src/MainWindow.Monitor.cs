@@ -24,6 +24,14 @@ namespace PowerAudioManager
         {
             try
             {
+                if (App.RendererDiagnosticMode)
+                {
+                    using var installed = new System.ServiceProcess.ServiceController("OneBoxSvc");
+                    AppLog.Log("Renderer diagnostic", $"installed service path={AutoStartService.GetInstalledServiceImagePath()} status={installed.Status}; no service migration");
+                    if (installed.Status != System.ServiceProcess.ServiceControllerStatus.Running)
+                        AppLog.Log("Renderer diagnostic", "INVALID: installed service is not running; no start or repair attempted");
+                    return;
+                }
                 var registration = AutoStartService.GetServiceRegistrationKind();
                 if (registration == OneBox.Contracts.ServiceImagePathKind.LegacyGui || registration == OneBox.Contracts.ServiceImagePathKind.Other)
                 {
@@ -41,7 +49,11 @@ namespace PowerAudioManager
                     }
                 }
             }
-            catch (Exception ex) { AppLog.Log("Service", "EnsureServiceRunning: " + ex.Message); }
+            catch (Exception ex)
+            {
+                AppLog.Log("Service", "EnsureServiceRunning: " + ex.Message);
+                if (App.RendererDiagnosticMode) AppLog.Log("Renderer diagnostic", "INVALID: installed service unavailable; no start or repair attempted");
+            }
         }
 
         void StartTempMonitor()

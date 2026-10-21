@@ -10,8 +10,21 @@ public sealed class AppStartupTests
     {
         string[] args = { "--software-only" };
         Assert.True(App.IsSoftwareOnlyStartup(args));
-        Assert.Empty(App.GetStartupArgs(args)); // Normal GUI repair and Velopack both receive no hook args.
+        Assert.Empty(App.GetStartupArgs(args));
+        Assert.True(App.IsRendererDiagnosticStartup(args));
+        Assert.False(App.ShouldRetryPendingServiceRepair(args));
         Assert.Equal("--software-only", args[0]);
+    }
+
+    [Fact]
+    public void DefaultDiagnosticSharesRoutingAndPreservesPendingRepair()
+    {
+        string[] args = { "--renderer-default" };
+        Assert.False(App.IsSoftwareOnlyStartup(args));
+        Assert.True(App.IsRendererDiagnosticStartup(args));
+        Assert.Empty(App.GetStartupArgs(args));
+        Assert.False(App.ShouldRetryPendingServiceRepair(args));
+        Assert.True(App.ShouldRetryPendingServiceRepair(System.Array.Empty<string>()));
     }
 
     [Fact]
@@ -27,6 +40,8 @@ public sealed class AppStartupTests
         foreach (string[] args in cases)
         {
             Assert.False(App.IsSoftwareOnlyStartup(args));
+            Assert.False(App.IsRendererDiagnosticStartup(args));
+            Assert.Equal(args.Length == 0, App.ShouldRetryPendingServiceRepair(args));
             Assert.Same(args, App.GetStartupArgs(args));
         }
     }

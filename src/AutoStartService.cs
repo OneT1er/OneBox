@@ -99,6 +99,8 @@ namespace PowerAudioManager
             return ServiceImagePath.Classify(ServiceRegistration.ImagePath, ServiceExePath);
         }
 
+        internal static string GetInstalledServiceImagePath() => ServiceRegistration.ImagePath;
+
         public static string RepairService()
         {
             if (!AdminUtils.IsAdmin()) return LaunchElevatedCommand("--repair-service");

@@ -24,8 +24,15 @@ namespace PowerAudioManager
         internal static bool IsSoftwareOnlyStartup(string[] args) =>
             args.Length == 1 && args[0] == "--software-only";
 
+        internal static bool IsRendererDiagnosticStartup(string[] args) =>
+            IsSoftwareOnlyStartup(args) || (args.Length == 1 && args[0] == "--renderer-default");
+
+        internal static bool ShouldRetryPendingServiceRepair(string[] args) => args.Length == 0;
+
+        internal static bool RendererDiagnosticMode { get; private set; }
+
         internal static string[] GetStartupArgs(string[] args) =>
-            IsSoftwareOnlyStartup(args) ? Array.Empty<string>() : args;
+            IsRendererDiagnosticStartup(args) ? Array.Empty<string>() : args;
 
         // 由 AdminUtils.RestartAsAdmin() 在启动提权进程前调用，让新实例成为 Mutex 持有者，避免因旧 Mutex 直接退出。
         public static void ReleaseSingleInstance()
@@ -43,6 +50,7 @@ namespace PowerAudioManager
                 return;
             }
             bool softwareOnly = IsSoftwareOnlyStartup(args);
+            RendererDiagnosticMode = IsRendererDiagnosticStartup(args);
             string[] startupArgs = GetStartupArgs(args);
             VelopackApp.Build()
                 .SetArgs(startupArgs)
@@ -54,11 +62,13 @@ namespace PowerAudioManager
 
             // 尽早记录进程启动（含参数），用于诊断开机自启中 GUI 静默消失等早期故障。
             AppLog.Log("Main", args.Length > 0 ? $"start args=[{string.Join(", ", args)}]" : "start (no args)");
-            if (startupArgs.Length == 0)
+            if (ShouldRetryPendingServiceRepair(args))
             {
                 try { UpdateLifecycleHooks.RetryPendingServiceRepair(); }
                 catch (Exception ex) { AppLog.Log("Update service retry", ex); }
             }
+            else if (RendererDiagnosticMode)
+                AppLog.Log("Renderer diagnostic", "pending service repair deferred; pending state preserved; reusing installed service");
 
             // .NET 10 默认仅支持 ASCII/UTF-8/UTF-16；936 (GBK) 等代码页在
             // 未注册提供程序时会抛 NotSupportedException。powercfg OEM 输出和
@@ -168,7 +178,7 @@ namespace PowerAudioManager
             // only receive activation; their rendering mode cannot be changed here.
             if (softwareOnly)
                 RenderOptions.ProcessRenderMode = System.Windows.Interop.RenderMode.SoftwareOnly;
-            AppLog.Log("Main", $"renderer pid={Environment.ProcessId} requested={(softwareOnly ? "SoftwareOnly" : "Default")} actualRenderMode={RenderOptions.ProcessRenderMode}");
+            AppLog.Log("Main", $"renderer pid={Environment.ProcessId} diagnostic={RendererDiagnosticMode} requested={(softwareOnly ? "SoftwareOnly" : "Default")} actualRenderMode={RenderOptions.ProcessRenderMode}");
 
             AppDomain.CurrentDomain.UnhandledException += (s, ex) => {
                 try { System.IO.File.WriteAllText(System.IO.Path.GetTempPath() + "pam_crash.log",
