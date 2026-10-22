@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  workflow_dispatch:
+  push:
+    branches-ignore: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Build
+        run: |
+          dotnet build OneBox.sln -c Release
+          if ($LASTEXITCODE -ne 0) { throw 'Build failed' }
+
+      - name: Test
+        run: |
+          dotnet test tests/OneBox.Tests/OneBox.Tests.csproj -c Release --logger "trx" --logger "console;verbosity=normal" --results-directory artifacts/test-results
+          if ($LASTEXITCODE -ne 0) { throw 'Tests failed' }
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: artifacts/test-results
+          if-no-files-found: ignore
