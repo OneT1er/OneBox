@@ -45,6 +45,7 @@ namespace PowerAudioManager
         private Task _pipeTask;
         private NamedPipeClientStream _activePipe;
         private bool _started;
+        private int _pipeGeneration;
         private bool _monitorRequested;
         private int _catalogUsers;
         private int _subscriptionRevision;
@@ -99,9 +100,9 @@ namespace PowerAudioManager
             {
                 if (_started) return;
                 _started = true;
+                _pipeCancellation = new CancellationTokenSource();
+                _pipeTask = RunPipeClientAsync(_pipeCancellation.Token, ++_pipeGeneration);
             }
-            _pipeCancellation = new CancellationTokenSource();
-            _pipeTask = RunPipeClientAsync(_pipeCancellation.Token);
         }
 
         public IDisposable BeginCatalogPreview()
@@ -172,7 +173,7 @@ namespace PowerAudioManager
             }
         }
 
-        private async Task RunPipeClientAsync(CancellationToken cancellationToken)
+        private async Task RunPipeClientAsync(CancellationToken cancellationToken, int generation)
         {
             var backoff = new ReconnectBackoff();
             while (!cancellationToken.IsCancellationRequested)
@@ -183,6 +184,7 @@ namespace PowerAudioManager
                 using var subscriptionCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                 lock (_gate)
                 {
+                    if (generation != _pipeGeneration || cancellationToken.IsCancellationRequested) return;
                     payload = CaptureSubscription(out revision);
                     _subscriptionCancellation = subscriptionCancellation;
                 }
@@ -193,13 +195,18 @@ namespace PowerAudioManager
                     string userSid = identity.User?.Value ?? throw new InvalidOperationException("Current user SID is unavailable.");
                     client = new NamedPipeClientStream(".", PipeNames.ForHardware(userSid), PipeDirection.InOut,
                         PipeOptions.Asynchronous, TokenImpersonationLevel.Impersonation);
-                    lock (_gate) _activePipe = client;
+                    lock (_gate)
+                    {
+                        if (generation != _pipeGeneration || subscriptionToken.IsCancellationRequested) return;
+                        _activePipe = client;
+                    }
                     await client.ConnectAsync((int)IpcProtocol.ConnectTimeout.TotalMilliseconds, subscriptionToken).ConfigureAwait(false);
-                    PipeServerIdentityVerifier.EnsureLocalSystemServer(client);
+                    uint helperPid = PipeServerIdentityVerifier.EnsureLocalSystemServer(client);
 
                     IpcRequest request = IpcRequest.Create(IpcCommand.SubscribeHardware, payload);
                     await IpcFraming.WriteAsync(client, request, subscriptionToken).ConfigureAwait(false);
                     AppLog.Log("Temp", "authenticated hardware pipe connected");
+                    bool loggedFirstSnapshot = false;
 
                     while (client.IsConnected && !cancellationToken.IsCancellationRequested)
                     {
@@ -213,7 +220,17 @@ namespace PowerAudioManager
                                 if (!_loggedOldHelper) { AppLog.Log("Temp", "Hardware helper requires a matching OneBox update; selected-sensor subscription is unavailable."); _loggedOldHelper = true; }
                                 throw new IpcProtocolException(IpcErrorCode.UnsupportedVersion, "Hardware helper does not support selected sensors.");
                             }
-                            if (!ApplySnapshotIfCurrent(snapshot, revision)) continue;
+                            lock (_gate)
+                            {
+                                if (generation != _pipeGeneration || subscriptionToken.IsCancellationRequested || !ReferenceEquals(_activePipe, client)
+                                    || !ApplySnapshotIfCurrent(snapshot, revision)) continue;
+                                int historyMetricCount = ActiveMetrics.Count(metric => metric.Value.HasValue && !metric.Cached && (metric.IsTemp || metric.Unit == "RPM"));
+                                if (snapshot.Ready && historyMetricCount > 0 && !loggedFirstSnapshot)
+                                {
+                                    AppLog.Log("Temp", $"hardware first snapshot applied guiPid={Environment.ProcessId} helperPid={helperPid} connectionId={request.RequestId:N} appliedUtc={DateTime.UtcNow:O} historyMetricCount={historyMetricCount}");
+                                    loggedFirstSnapshot = true;
+                                }
+                            }
                             backoff.Reset();
                         }
                     }
@@ -227,8 +244,11 @@ namespace PowerAudioManager
                 {
                     lock (_gate)
                     {
-                        if (ReferenceEquals(_activePipe, client)) _activePipe = null;
-                        IsAvailable = false;
+                        if (generation == _pipeGeneration && ReferenceEquals(_activePipe, client))
+                        {
+                            _activePipe = null;
+                            InvalidateSnapshot();
+                        }
                     }
                     try { client?.Dispose(); } catch { }
                 }
@@ -290,13 +310,26 @@ namespace PowerAudioManager
 
         public void Update()
         {
-            if (IsAvailable) UpdateFromSnapshot();
+            UpdateFromSnapshot();
+        }
+
+        internal void InvalidateSnapshot()
+        {
+            lock (_gate)
+            {
+                IsAvailable = false;
+                CpuTemperature = null;
+                GpuTemperature = null;
+                _allPipeMetrics.Clear();
+                ActiveMetrics.Clear();
+            }
         }
 
         private void UpdateFromSnapshot()
         {
             lock (_gate)
             {
+                if (!IsAvailable) { ActiveMetrics.Clear(); return; }
                 var values = new List<MetricValue>();
                 foreach (string key in EnabledMetrics)
                 {
@@ -580,10 +613,12 @@ namespace PowerAudioManager
             CancellationTokenSource cancellation;
             Task task;
             NamedPipeClientStream activePipe;
+            int stoppedGeneration;
             lock (_gate)
             {
                 if (!_started) return;
                 _started = false;
+                stoppedGeneration = ++_pipeGeneration;
                 cancellation = _pipeCancellation;
                 task = _pipeTask;
                 activePipe = _activePipe;
@@ -600,6 +635,7 @@ namespace PowerAudioManager
             cancellation?.Dispose();
             lock (_gate)
             {
+                if (stoppedGeneration != _pipeGeneration) return;
                 IsAvailable = false;
                 CpuTemperature = null;
                 GpuTemperature = null;

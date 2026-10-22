@@ -31,7 +31,7 @@ namespace PowerAudioManager
         [DllImport("kernel32.dll")]
         private static extern IntPtr LocalFree(IntPtr memory);
 
-        public static void EnsureLocalSystemServer(NamedPipeClientStream pipe)
+        public static uint EnsureLocalSystemServer(NamedPipeClientStream pipe)
         {
             if (pipe == null || !pipe.IsConnected)
                 throw new InvalidOperationException("管道尚未连接，无法验证服务端身份。");
@@ -64,6 +64,7 @@ namespace PowerAudioManager
                 if (securityDescriptor != IntPtr.Zero) LocalFree(securityDescriptor);
                 if (addedRef) pipe.SafePipeHandle.DangerousRelease();
             }
+            return processId;
         }
 
         private static Win32Exception WindowsFailure(string message) =>
