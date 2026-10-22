@@ -30,7 +30,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           [xml]$props = Get-Content Directory.Build.props -Raw
           $version = @($props.Project.PropertyGroup.Version | Where-Object { $_ })[0].ToString()
-          if ($version -notmatch '^\d+\.\d+\.\d+$') { throw "Expected a stable version: $version" }
+          if ($version -notmatch '^\d+\.\d+\.\d+(-[0-9A-Za-z]+(\.[0-9A-Za-z]+)*)?$') { throw "Invalid version: $version" }
           if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_REF_NAME -cne "v$version") {
             throw "Tag $env:GITHUB_REF_NAME does not match project version $version"
           }
@@ -100,16 +100,21 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $tag = $env:RELEASE_TAG
+          # Pre-release tags (e.g. v1.10.0-beta.1) are published as GitHub pre-releases and never marked
+          # Latest, so the Velopack GithubSource (prerelease: false) keeps stable users on stable builds.
+          $isPrerelease = $tag -match '^v\d+\.\d+\.\d+-'
+          $prereleaseArgs = if ($isPrerelease) { @('--prerelease') } else { @() }
+          $publishArgs = if ($isPrerelease) { @('--prerelease', '--latest=false') } else { @('--latest') }
           $existing = gh release view $tag --json isDraft 2>$null
           if ($LASTEXITCODE -eq 0) {
             if (-not ($existing | ConvertFrom-Json).isDraft) { throw "$tag is already published; refusing to overwrite it" }
           } else {
-            gh release create $tag --verify-tag --draft --title "OneBox $tag" --notes-file release-assets/release-notes.md
+            gh release create $tag --verify-tag --draft @prereleaseArgs --title "OneBox $tag" --notes-file release-assets/release-notes.md
             if ($LASTEXITCODE -ne 0) { throw 'Failed to create release draft' }
           }
           $assets = @(Get-ChildItem release-assets -File | Where-Object Name -ne 'release-notes.md' | ForEach-Object FullName)
           if ($assets.Count -lt 7) { throw 'Release artifact is incomplete' }
           gh release upload $tag @assets --clobber
           if ($LASTEXITCODE -ne 0) { throw 'Asset upload failed; release remains a draft' }
-          gh release edit $tag --draft=false --latest --notes-file release-assets/release-notes.md
+          gh release edit $tag --draft=false @publishArgs --notes-file release-assets/release-notes.md
           if ($LASTEXITCODE -ne 0) { throw 'Failed to publish release' }
