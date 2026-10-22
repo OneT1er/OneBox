@@ -41,6 +41,8 @@ namespace PowerAudioManager
         private readonly Dictionary<string, MetricValue> _lastMetrics = new();
         private readonly HashSet<string> _loggedRemaps = new();
         private readonly List<MetricValue> _allPipeMetrics = new();
+        private SelectedMetric[] _selectedMetrics = Array.Empty<SelectedMetric>();
+        private sealed record SelectedMetric(string Key, SensorInfo Selector, string DisplayName, string IconKey);
         private CancellationTokenSource _pipeCancellation;
         private Task _pipeTask;
         private NamedPipeClientStream _activePipe;
@@ -77,6 +79,7 @@ namespace PowerAudioManager
                 if (_selectionLoaded) return;
                 EnabledMetrics = (_readMetrics() ?? "").Split(';', StringSplitOptions.RemoveEmptyEntries)
                     .Select(value => value.Trim()).Where(value => value.Length > 0).ToList();
+                RebuildSelectedMetrics();
                 _selectionLoaded = true;
             }
         }
@@ -330,11 +333,15 @@ namespace PowerAudioManager
             lock (_gate)
             {
                 if (!IsAvailable) { ActiveMetrics.Clear(); return; }
+                RefreshSelectedMetricsIfChanged();
                 var values = new List<MetricValue>();
-                foreach (string key in EnabledMetrics)
+                foreach (SelectedMetric selected in _selectedMetrics)
                 {
-                    SensorInfo config = DecodeConfig(key, out string displayName, out string iconKey);
+                    string key = selected.Key;
+                    SensorInfo config = selected.Selector;
                     if (config == null) continue;
+                    string displayName = selected.DisplayName;
+                    string iconKey = selected.IconKey;
 
                     MetricValue metric = FindSnapshotMetric(config, key);
                     if (metric?.Value != null)
@@ -528,9 +535,31 @@ namespace PowerAudioManager
             lock (_gate)
             {
                 EnabledMetrics = next;
+                RebuildSelectedMetrics();
                 foreach (string key in _lastMetrics.Keys.Where(key => !next.Contains(key, StringComparer.Ordinal)).ToList())
                     _lastMetrics.Remove(key);
                 RefreshSubscriptionUnsafe();
+            }
+        }
+
+        private void RebuildSelectedMetrics()
+        {
+            var selected = new List<SelectedMetric>(EnabledMetrics.Count);
+            foreach (string key in EnabledMetrics)
+            {
+                SensorInfo selector = DecodeConfig(key, out string displayName, out string iconKey);
+                selected.Add(new SelectedMetric(key, selector, displayName, iconKey));
+            }
+            _selectedMetrics = selected.ToArray();
+        }
+
+        private void RefreshSelectedMetricsIfChanged()
+        {
+            if (_selectedMetrics.Length != EnabledMetrics.Count) { RebuildSelectedMetrics(); return; }
+            for (int i = 0; i < _selectedMetrics.Length; i++)
+            {
+                if (!string.Equals(_selectedMetrics[i].Key, EnabledMetrics[i], StringComparison.Ordinal))
+                { RebuildSelectedMetrics(); return; }
             }
         }
 

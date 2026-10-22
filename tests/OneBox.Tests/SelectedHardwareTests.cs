@@ -82,6 +82,91 @@ public sealed class SelectedHardwareTests
     }
 
     [Fact]
+    public void DirectListEditsAreObservedByTheNextUpdate()
+    {
+        const string oldKey = "Temperature|Board|Old|Old|mb";
+        const string newKey = "Temperature|Board|New|New|ram";
+        var service = new HardwareMonitorService(() => oldKey);
+        service.PrepareSelection();
+        service.CaptureSubscription(out int revision);
+        var snapshot = new HardwareSnapshot { Ready = true, SelectionApplied = true };
+        snapshot.Metrics.Add(new HardwareMetric { Key = oldKey, Value = 40, Unit = "°C" });
+        snapshot.Metrics.Add(new HardwareMetric { Key = newKey, Value = 55, Unit = "°C" });
+        Assert.True(service.ApplySnapshotIfCurrent(snapshot, revision));
+        service.EnabledMetrics[0] = newKey;
+        service.Update();
+        Assert.Equal(newKey, Assert.Single(service.ActiveMetrics).ConfigKey);
+        Assert.Equal(55, Assert.Single(service.ActiveMetrics).Value);
+        service.EnabledMetrics.Add(oldKey);
+        service.Update();
+        Assert.Equal(new[] { newKey, oldKey }, service.ActiveMetrics.Select(metric => metric.ConfigKey));
+        service.EnabledMetrics[0] = "invalid";
+        service.Update();
+        Assert.Equal(oldKey, Assert.Single(service.ActiveMetrics).ConfigKey);
+        object parsed = Field("_selectedMetrics").GetValue(service);
+        service.Update();
+        Assert.Same(parsed, Field("_selectedMetrics").GetValue(service));
+        service.EnabledMetrics.Clear();
+        service.Update();
+        Assert.Empty(service.ActiveMetrics);
+    }
+
+    [Fact]
+    public void SelectionReplacementWithSameCountUpdatesKeyLabelAndIcon()
+    {
+        const string oldKey = "Temperature|Board|Old|Old label|mb";
+        const string newKey = "Temperature|Board|New|New label|ram";
+        var service = new HardwareMonitorService(() => oldKey);
+        service.PrepareSelection();
+        service.CaptureSubscription(out int revision);
+        var snapshot = new HardwareSnapshot { Ready = true, SelectionApplied = true };
+        snapshot.Metrics.Add(new HardwareMetric { Key = oldKey, Value = 40, Unit = "°C" });
+        snapshot.Metrics.Add(new HardwareMetric { Key = newKey, Value = 55, Unit = "°C" });
+        Assert.True(service.ApplySnapshotIfCurrent(snapshot, revision));
+        Assert.Equal(oldKey, Assert.Single(service.ActiveMetrics).ConfigKey);
+
+        service.ApplyEnabledMetrics(new() { newKey });
+        service.Update();
+        MetricValue changed = Assert.Single(service.ActiveMetrics);
+        Assert.Equal(newKey, changed.ConfigKey);
+        Assert.Equal("New label", changed.DisplayName);
+        Assert.Equal("ram", changed.IconKey);
+        Assert.Equal(55, changed.Value);
+        Assert.False(changed.Cached);
+        service.ApplyEnabledMetrics(new());
+        service.Update();
+        Assert.Empty(service.ActiveMetrics);
+    }
+
+    [Fact]
+    public void ParsedSelectionStillResolvesChangedSnapshotIdentityAndRejectsAmbiguity()
+    {
+        const string key = "Temperature|Old board|DIMM|Memory|ram";
+        var service = new HardwareMonitorService(() => key);
+        service.PrepareSelection();
+        service.CaptureSubscription(out int revision);
+        HardwareSnapshot Frame(string board, float value)
+        {
+            var frame = new HardwareSnapshot { Ready = true, SelectionApplied = true };
+            frame.Sensors.Add(new HardwareSensor { HardwareName = board, SensorName = "DIMM", SensorType = "Temperature" });
+            frame.Metrics.Add(new HardwareMetric { Key = $"Temperature|{board}|DIMM|Memory|ram", Value = value, Unit = "°C" });
+            return frame;
+        }
+        Assert.True(service.ApplySnapshotIfCurrent(Frame("Board A", 41), revision));
+        Assert.Equal(41, Assert.Single(service.ActiveMetrics).Value);
+        Assert.True(service.ApplySnapshotIfCurrent(Frame("Board B", 63), revision));
+        Assert.Equal(63, Assert.Single(service.ActiveMetrics).Value);
+        Assert.False(Assert.Single(service.ActiveMetrics).Cached);
+
+        HardwareSnapshot ambiguous = Frame("Board B", 72);
+        ambiguous.Sensors.Add(new HardwareSensor { HardwareName = "Board C", SensorName = "DIMM", SensorType = "Temperature" });
+        ambiguous.Metrics.Add(new HardwareMetric { Key = "Temperature|Board C|DIMM|Memory|ram", Value = 73, Unit = "°C" });
+        Assert.True(service.ApplySnapshotIfCurrent(ambiguous, revision));
+        Assert.True(Assert.Single(service.ActiveMetrics).Cached);
+        Assert.Equal(63, Assert.Single(service.ActiveMetrics).Value);
+    }
+
+    [Fact]
     public void CollectorEmitsOnlySelectedDetailsButKeepsCpuGpuSummaries()
     {
         IHardware[] hardware = CreateHardware();
