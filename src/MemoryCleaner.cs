@@ -11,6 +11,10 @@ using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using System.IO;
 using Microsoft.Win32;
+using System.IO.Pipes;
+using System.Security.Principal;
+using System.Threading;
+using OneBox.Contracts;
 
 namespace PowerAudioManager
 {
@@ -126,79 +130,148 @@ namespace PowerAudioManager
         }
         [DllImport("kernel32.dll")] static extern bool GlobalMemoryStatusEx([In, Out] MEMORYSTATUSEX mse);
 
-        // 已缓存内存 — 匹配任务管理器的 Cached 值。复用长期 PerformanceCounter 实例
-        // （按需创建会泄漏内核性能计数器映射，缓存则不会）。
-        // 性能陷阱：.NET 10 冷启动时创建这 4 个计数器约需 5s（WMI/COM 初始化 + JIT），
-        // 严禁在 UI 线程创建。GetStatus() 在 LoadData 同步序中调用，懒加载首次创建
-        // 会冻结悬浮窗约 5s。用 WarmupCounters 在后台预热，就绪前 ReadCachedBytes 返回 0。
-        static System.Diagnostics.PerformanceCounter _standbyCore, _standbyNormal, _standbyReserve, _modified;
-        static volatile bool _countersReady;
-        static volatile bool _countersRequested;
-        static readonly object _counterLock = new object();
+        // 已缓存内存 — 匹配任务管理器的 Cached 值（所有待机列表 + 已修改页列表）。
+        // 不再在 GUI 进程里创建 PerformanceCounter：那套库冷启动约 5s，并常驻
+        // 计数器注册表数据与内核映射。改为：
+        //   1) 管理员 GUI：自己用 NtQuerySystemInformation(80) 读取（需
+        //      SeProfileSingleProcessPrivilege，管理员令牌持有）；
+        //   2) 普通 GUI：经已有的 OneBoxSvc 命令管道发 MemoryListStatus；
+        //   3) 都不可用：GetPerformanceInfo 的系统缓存页数兜底（偏小）。
+        // GetStatus() 在 UI 线程调用，因此读取永不阻塞：返回最近一次结果，
+        // 过期（>2s）时在后台刷新。未请求（板块隐藏）时返回 0，与旧行为一致。
+        static readonly TimeSpan CachedRefreshInterval = TimeSpan.FromSeconds(2);
+        static readonly TimeSpan ServiceRetryDelay = TimeSpan.FromSeconds(60);
+        static long _cachedBytes;
+        static long _cachedAtTicks;
+        static long _serviceRetryAtTicks;
+        static int _refreshInFlight;
+        static int _profilePrivilegeTried;
+        static volatile bool _cachedRequested;
+        // Elevation is fixed for the process lifetime; avoid building a
+        // WindowsPrincipal every refresh.
+        static readonly Lazy<bool> _isAdmin = new Lazy<bool>(AdminUtils.IsAdmin);
 
-        // 启动时在后台线程预热，UI 线程无需承担 ~5s 创建开销。可多次调用。
+        [DllImport("ntdll.dll")]
+        static extern int NtQuerySystemInformation(int infoClass, IntPtr buffer, int length, out int returnLength);
+
+        [StructLayout(LayoutKind.Sequential)]
+        struct PERFORMANCE_INFORMATION
+        {
+            public uint cb;
+            public UIntPtr CommitTotal, CommitLimit, CommitPeak, PhysicalTotal, PhysicalAvailable, SystemCache,
+                KernelTotal, KernelPaged, KernelNonpaged, PageSize;
+            public uint HandleCount, ProcessCount, ThreadCount;
+        }
+        [DllImport("psapi.dll", SetLastError = true)]
+        static extern bool GetPerformanceInfo(out PERFORMANCE_INFORMATION info, int size);
+
+        // 旧名称保留给调用方：现在只是开启/关闭缓存值的后台刷新，不再创建计数器。
         public static void WarmupCounters()
         {
-            _countersRequested = true;
-            if (_countersReady) return;
-            System.Threading.ThreadPool.QueueUserWorkItem(_ =>
-            {
-                try
-                {
-                    lock (_counterLock)
-                    {
-                        if (!_countersRequested || _countersReady) return;
-                        if (_standbyCore != null && _standbyNormal != null && _standbyReserve != null && _modified != null)
-                        {
-                            _countersReady = true;
-                            return;
-                        }
-                        DisposeCounters();
-                        _standbyCore = new System.Diagnostics.PerformanceCounter("Memory", "Standby Cache Core Bytes", true);
-                        _standbyNormal = new System.Diagnostics.PerformanceCounter("Memory", "Standby Cache Normal Priority Bytes", true);
-                        _standbyReserve = new System.Diagnostics.PerformanceCounter("Memory", "Standby Cache Reserve Bytes", true);
-                        _modified = new System.Diagnostics.PerformanceCounter("Memory", "Modified Page List Bytes", true);
-                        // 预热 NextValue（首次调用约 25ms 初始化），使 UI 线程首次真实读取即时。
-                        try { _standbyCore.NextValue(); _standbyNormal.NextValue(); _standbyReserve.NextValue(); _modified.NextValue(); } catch { }
-                        if (_countersRequested) _countersReady = true;
-                        else DisposeCounters();
-                    }
-                }
-                catch { /* non-fatal: cached bytes just reads 0 */ }
-            });
+            _cachedRequested = true;
+            RequestCachedRefresh();
         }
 
         public static void ReleaseCounters()
         {
-            _countersRequested = false;
-            _countersReady = false;
-            System.Threading.ThreadPool.QueueUserWorkItem(_ =>
-            {
-                lock (_counterLock)
-                {
-                    if (_countersRequested) return;
-                    DisposeCounters();
-                }
-            });
-        }
-
-        static void DisposeCounters()
-        {
-            _countersReady = false;
-            try { _standbyCore?.Dispose(); } catch { } finally { _standbyCore = null; }
-            try { _standbyNormal?.Dispose(); } catch { } finally { _standbyNormal = null; }
-            try { _standbyReserve?.Dispose(); } catch { } finally { _standbyReserve = null; }
-            try { _modified?.Dispose(); } catch { } finally { _modified = null; }
+            _cachedRequested = false;
+            Interlocked.Exchange(ref _cachedBytes, 0);
+            Interlocked.Exchange(ref _cachedAtTicks, 0);
         }
 
         static ulong ReadCachedBytes()
         {
+            if (!_cachedRequested) return 0;
+            long at = Interlocked.Read(ref _cachedAtTicks);
+            if (at == 0 || DateTime.UtcNow.Ticks - at >= CachedRefreshInterval.Ticks) RequestCachedRefresh();
+            return (ulong)Interlocked.Read(ref _cachedBytes);
+        }
+
+        static void RequestCachedRefresh()
+        {
+            if (Interlocked.CompareExchange(ref _refreshInFlight, 1, 0) != 0) return;
+            System.Threading.ThreadPool.QueueUserWorkItem(_ =>
+            {
+                try
+                {
+                    ulong? value = QueryCachedBytes();
+                    if (value.HasValue && _cachedRequested)
+                    {
+                        Interlocked.Exchange(ref _cachedBytes, (long)value.Value);
+                        Interlocked.Exchange(ref _cachedAtTicks, DateTime.UtcNow.Ticks);
+                    }
+                }
+                catch { /* non-fatal: cached bytes keeps its last value */ }
+                finally { Interlocked.Exchange(ref _refreshInFlight, 0); }
+            });
+        }
+
+        static ulong? QueryCachedBytes()
+        {
+            if (_isAdmin.Value)
+            {
+                var direct = QueryMemoryListsDirect();
+                if (direct != null) return direct.CachedBytes;
+            }
+            if (DateTime.UtcNow.Ticks >= Interlocked.Read(ref _serviceRetryAtTicks))
+            {
+                var viaService = QueryMemoryListsFromService();
+                if (viaService != null) return viaService.CachedBytes;
+                Interlocked.Exchange(ref _serviceRetryAtTicks, DateTime.UtcNow.Add(ServiceRetryDelay).Ticks);
+            }
+            return QuerySystemCacheFallback();
+        }
+
+        static MemoryListStatusResult QueryMemoryListsDirect()
+        {
+            if (Interlocked.Exchange(ref _profilePrivilegeTried, 1) == 0)
+                EnablePrivilege("SeProfileSingleProcessPrivilege");
+            int fieldCount = MemoryListLayout.FieldCount;
+            int length = fieldCount * IntPtr.Size;
+            IntPtr buffer = Marshal.AllocHGlobal(length);
             try
             {
-                if (!_countersReady) return 0; // 后台预热中，不阻塞 UI
-                return (ulong)(_standbyCore.NextValue() + _standbyNormal.NextValue() + _standbyReserve.NextValue() + _modified.NextValue());
+                if (NtQuerySystemInformation(MemoryListLayout.InformationClass, buffer, length, out _) != 0) return null;
+                var fields = new ulong[fieldCount];
+                for (int i = 0; i < fieldCount; i++)
+                    fields[i] = (ulong)(nuint)Marshal.ReadIntPtr(buffer, i * IntPtr.Size);
+                return MemoryListLayout.FromPageCounts(fields, (ulong)Environment.SystemPageSize);
             }
-            catch { return 0; }
+            finally { Marshal.FreeHGlobal(buffer); }
+        }
+
+        // Same identity rules as the clean request: connect to the per-user
+        // command pipe and refuse any server that is not the LocalSystem
+        // service.  Short timeouts: this is a status read, not an action.
+        static MemoryListStatusResult QueryMemoryListsFromService()
+        {
+            try
+            {
+                using (var identity = WindowsIdentity.GetCurrent(TokenAccessLevels.Query))
+                using (var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(3)))
+                using (var client = new NamedPipeClientStream(".", PipeNames.ForCommand(identity.User?.Value), PipeDirection.InOut,
+                    PipeOptions.Asynchronous, TokenImpersonationLevel.Impersonation))
+                {
+                    client.ConnectAsync(1000, timeout.Token).GetAwaiter().GetResult();
+                    PipeServerIdentityVerifier.EnsureLocalSystemServer(client);
+                    var request = IpcRequest.Create(IpcCommand.MemoryListStatus, new { });
+                    IpcFraming.WriteAsync(client, request, timeout.Token).GetAwaiter().GetResult();
+                    IpcResponse response = IpcFraming.ReadAsync<IpcResponse>(client, timeout.Token).GetAwaiter().GetResult();
+                    if (response == null || response.Version != IpcProtocol.Version || response.RequestId != request.RequestId
+                        || response.Command != IpcCommand.MemoryListStatus || !response.Success)
+                        return null;
+                    return response.ReadResult<MemoryListStatusResult>();
+                }
+            }
+            catch { return null; }
+        }
+
+        static ulong? QuerySystemCacheFallback()
+        {
+            int size = Marshal.SizeOf<PERFORMANCE_INFORMATION>();
+            var info = new PERFORMANCE_INFORMATION { cb = (uint)size };
+            if (!GetPerformanceInfo(out info, size)) return null;
+            return (ulong)info.SystemCache * (ulong)info.PageSize;
         }
 
         public static MemoryStatus GetStatus()

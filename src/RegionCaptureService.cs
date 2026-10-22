@@ -101,22 +101,104 @@ namespace PowerAudioManager
             };
 
             var canvas = new Canvas();
-            var dim = new System.Windows.Shapes.Rectangle
-            {
-                Fill = new SolidColorBrush(System.Windows.Media.Color.FromArgb(0x55, 0, 0, 0)),
-                IsHitTestVisible = false
-            };
-            canvas.Children.Add(dim);
+            // Four dim panels surround the selection so the chosen area shows
+            // the desktop undimmed; before dragging the top panel covers all.
+            var dimBrush = new SolidColorBrush(System.Windows.Media.Color.FromArgb(0x8C, 10, 8, 18));
+            dimBrush.Freeze();
+            System.Windows.Shapes.Rectangle Dim() => new System.Windows.Shapes.Rectangle { Fill = dimBrush, IsHitTestVisible = false };
+            var dimTop = Dim(); var dimBottom = Dim(); var dimLeft = Dim(); var dimRight = Dim();
+            canvas.Children.Add(dimTop); canvas.Children.Add(dimBottom); canvas.Children.Add(dimLeft); canvas.Children.Add(dimRight);
+
+            var accent = UiKit.FrozenBrush(UiKit.AccentColor);
             var rect = new System.Windows.Shapes.Rectangle
             {
-                Stroke = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0x8E, 0x8C, 0xD8)),
-                StrokeThickness = 1.5,
-                StrokeDashArray = new DoubleCollection { 2, 2 },
+                Stroke = accent,
+                StrokeThickness = 1,
                 Fill = System.Windows.Media.Brushes.Transparent,
+                IsHitTestVisible = false,
                 Visibility = Visibility.Collapsed
             };
             canvas.Children.Add(rect);
+            var handles = new System.Windows.Shapes.Rectangle[8];
+            for (int i = 0; i < handles.Length; i++)
+            {
+                handles[i] = new System.Windows.Shapes.Rectangle
+                {
+                    Width = 6, Height = 6, Fill = UiKit.FrozenBrush(UiKit.TextPrimary), Stroke = accent, StrokeThickness = 1,
+                    IsHitTestVisible = false, Visibility = Visibility.Collapsed
+                };
+                canvas.Children.Add(handles[i]);
+            }
+            var badgeText = new TextBlock { FontSize = 11, Foreground = UiKit.FrozenBrush(UiKit.TextPrimary), FontFamily = UiKit.MonoFont };
+            var badge = new Border
+            {
+                Background = UiKit.FrozenBrush(UiKit.BgColor), CornerRadius = new CornerRadius(4),
+                Padding = new Thickness(6, 2, 6, 2), Child = badgeText, IsHitTestVisible = false, Visibility = Visibility.Collapsed
+            };
+            canvas.Children.Add(badge);
+            var hint = new Border
+            {
+                Background = UiKit.FrozenBrush(UiKit.BgColor),
+                BorderBrush = UiKit.FrozenBrush(UiKit.BorderStrongColor), BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(14), Padding = new Thickness(14, 5, 14, 5), IsHitTestVisible = false,
+                Child = new TextBlock { Text = "拖动框选 · 松开完成截图 · 右键或 Esc 取消", FontSize = 12, Foreground = UiKit.FrozenBrush(UiKit.TextPrimary) }
+            };
+            canvas.Children.Add(hint);
             dlg.Content = canvas;
+
+            double scaleXCached = 0, scaleYCached = 0;
+            void EnsureScale()
+            {
+                if (scaleXCached > 0) return;
+                var src = PresentationSource.FromVisual(dlg);
+                scaleXCached = src?.CompositionTarget?.TransformToDevice.M11 ?? 1;
+                scaleYCached = src?.CompositionTarget?.TransformToDevice.M22 ?? 1;
+            }
+
+            void Place(UIElement e, double x, double y, double w, double h)
+            {
+                Canvas.SetLeft(e, x); Canvas.SetTop(e, y);
+                if (e is FrameworkElement fe) { fe.Width = Math.Max(0, w); fe.Height = Math.Max(0, h); }
+            }
+
+            void LayoutSelection(double x, double y, double w, double h, bool active)
+            {
+                double cw = Math.Max(0, canvas.ActualWidth), ch = Math.Max(0, canvas.ActualHeight);
+                if (!active)
+                {
+                    Place(dimTop, 0, 0, cw, ch);
+                    Place(dimBottom, 0, 0, 0, 0); Place(dimLeft, 0, 0, 0, 0); Place(dimRight, 0, 0, 0, 0);
+                    return;
+                }
+                Place(dimTop, 0, 0, cw, y);
+                Place(dimBottom, 0, y + h, cw, ch - y - h);
+                Place(dimLeft, 0, y, x, h);
+                Place(dimRight, x + w, y, cw - x - w, h);
+                Place(rect, x, y, w, h);
+                double[] hx = { x, x + w / 2, x + w, x + w, x + w, x + w / 2, x, x };
+                double[] hy = { y, y, y, y + h / 2, y + h, y + h, y + h, y + h / 2 };
+                for (int i = 0; i < handles.Length; i++)
+                {
+                    Canvas.SetLeft(handles[i], hx[i] - 3); Canvas.SetTop(handles[i], hy[i] - 3);
+                    handles[i].Visibility = Visibility.Visible;
+                }
+                EnsureScale();
+                badgeText.Text = Math.Round(w * scaleXCached) + " × " + Math.Round(h * scaleYCached);
+                Canvas.SetLeft(badge, x);
+                Canvas.SetTop(badge, y >= 26 ? y - 24 : y + 4);
+                badge.Visibility = Visibility.Visible;
+            }
+
+            void PlaceHint()
+            {
+                // Center on the primary work area (the canvas spans every monitor).
+                var wa = SystemParameters.WorkArea;
+                double left = wa.Left - SystemParameters.VirtualScreenLeft + (wa.Width - hint.ActualWidth) / 2;
+                double top = wa.Top - SystemParameters.VirtualScreenTop + 16;
+                Canvas.SetLeft(hint, Math.Max(0, left));
+                Canvas.SetTop(hint, Math.Max(0, top));
+            }
+            hint.SizeChanged += (s, e) => PlaceHint();
 
             DispatcherFrame frame = null;
             dlg.SourceInitialized += (s, e) =>
@@ -127,8 +209,8 @@ namespace PowerAudioManager
             };
             dlg.SizeChanged += (s, e) =>
             {
-                dim.Width = Math.Max(0, canvas.ActualWidth);
-                dim.Height = Math.Max(0, canvas.ActualHeight);
+                if (rect.Visibility != Visibility.Visible) LayoutSelection(0, 0, 0, 0, false);
+                PlaceHint();
             };
 
             System.Windows.Point start = default;
@@ -137,21 +219,17 @@ namespace PowerAudioManager
             {
                 dragging = true;
                 start = e.GetPosition(canvas);
-                Canvas.SetLeft(rect, start.X);
-                Canvas.SetTop(rect, start.Y);
-                rect.Width = 0;
-                rect.Height = 0;
                 rect.Visibility = Visibility.Visible;
+                hint.Visibility = Visibility.Collapsed;
+                LayoutSelection(start.X, start.Y, 0, 0, true);
                 dlg.CaptureMouse();
             };
             dlg.MouseMove += (s, e) =>
             {
                 if (!dragging) return;
                 var point = e.GetPosition(canvas);
-                Canvas.SetLeft(rect, Math.Min(start.X, point.X));
-                Canvas.SetTop(rect, Math.Min(start.Y, point.Y));
-                rect.Width = Math.Abs(point.X - start.X);
-                rect.Height = Math.Abs(point.Y - start.Y);
+                LayoutSelection(Math.Min(start.X, point.X), Math.Min(start.Y, point.Y),
+                    Math.Abs(point.X - start.X), Math.Abs(point.Y - start.Y), true);
             };
             dlg.MouseLeftButtonUp += (s, e) =>
             {
@@ -179,6 +257,7 @@ namespace PowerAudioManager
                 dlg.Close();
             };
             dlg.KeyDown += (s, e) => { if (e.Key == Key.Escape) dlg.Close(); };
+            dlg.MouseRightButtonUp += (s, e) => { if (!dragging) dlg.Close(); };
             dlg.Closed += (s, e) => { if (frame != null) frame.Continue = false; };
 
             dlg.Show();

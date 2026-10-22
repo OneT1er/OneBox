@@ -67,9 +67,7 @@ namespace PowerAudioManager
 
         // 温度/性能监控
         private TextBlock _collapsedTempLabel;
-        private Panel _metricRow;                // 展开视图的指标行 (WrapPanel)
-        private List<TextBlock> _metricValBlocks;  // 每个指标的数值 TextBlock（复用，每秒只改 Text/Foreground）
-        private List<string> _metricKeys;          // 上次构建时的 ConfigKey 序列；集合变化才重建结构
+        private Panel _metricRow;                // 展开视图「硬件监控」卡片主体（结构缓存见 MainWindow.Monitor）
         private System.Threading.Timer _tempTimer;
         private DispatcherTimer _uiReclaimTimer;
         private DateTime _lastUiReclamationUtc;
@@ -299,6 +297,8 @@ namespace PowerAudioManager
         {
             ClearContentUiReferences();
             _pinBtn = null;
+            _collapseBtn = null;
+            _closeBtn = null;
             _collapsedTempLabel = null;
             _root = null;
             _titleBarBorder = null;
@@ -313,12 +313,21 @@ namespace PowerAudioManager
             _audioDeviceSection = null;
             _oneMicSection = null;
             _memStatusLabel = null;
+            _memPercentLabel = null;
+            _memUsedColumn = _memCacheColumn = _memFreeColumn = null;
+            _oneMicStatusLabel = null;
             _volSlider = null;
             _volLabel = null;
             _muteBtn = null;
             _metricRow = null;
-            _metricValBlocks = null;
-            _metricKeys = null;
+            _metricSig = null;
+            _metricValueRuns = null;
+            _metricUnitRuns = null;
+            _metricNameBlocks = null;
+            _metricTiles = null;
+            _metricPinned = null;
+            _metricsMoreButton = null;
+            _metricsMoreWarn = null;
             _volumeInputReady = false;
             _powerUiDirty = _audioUiDirty = false;
         }

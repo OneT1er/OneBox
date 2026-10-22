@@ -56,82 +56,165 @@ namespace PowerAudioManager
             var screen = System.Windows.Forms.Screen.FromHandle(GetForegroundWindow());
             var dlg = new Window
             {
-                Width = options.Compact ? 280 : 320, SizeToContent = SizeToContent.Height,
+                Width = options.Compact ? 280 : 340, SizeToContent = SizeToContent.Height,
                 WindowStyle = WindowStyle.None, ResizeMode = ResizeMode.NoResize,
                 ShowInTaskbar = false, AllowsTransparency = true, Background = Brushes.Transparent,
                 Topmost = true, Focusable = false, ShowActivated = false,
                 UseLayoutRounding = true, Opacity = 0, Tag = options
             };
-            var fg = UiKit.FrozenBrush(ThemeTokens.SecondaryText);
-            var accent = UiKit.FrozenBrush(error == null ? ThemeTokens.Accent : Color.FromRgb(240, 150, 150));
+            var fg = UiKit.FrozenBrush(UiKit.TextSecondary);
+            bool failed = error != null;
             var card = new Border
             {
-                CornerRadius = new CornerRadius(12), Background = UiKit.FrozenBrush(ThemeTokens.TitleSurface),
-                BorderBrush = UiKit.FrozenBrush(Color.FromRgb(76, 70, 106)), BorderThickness = new Thickness(1),
-                Padding = new Thickness(options.Compact ? 10 : 14), Margin = new Thickness(10),
+                CornerRadius = new CornerRadius(options.Compact || failed ? 10 : 12),
+                Background = UiKit.FrozenBrush(UiKit.BgColor),
+                BorderBrush = UiKit.FrozenBrush(failed ? Color.FromRgb(90, 58, 68) : UiKit.BorderColor),
+                BorderThickness = new Thickness(1),
+                Padding = new Thickness(options.Compact || failed ? 8 : 8),
+                Margin = new Thickness(10),
                 Effect = new System.Windows.Media.Effects.DropShadowEffect
-                    { BlurRadius = 18, ShadowDepth = 3, Opacity = 0.35, Color = Colors.Black }
+                    { BlurRadius = 24, ShadowDepth = 4, Opacity = 0.4, Color = Colors.Black }
             };
             var stack = new StackPanel();
-            var header = new DockPanel();
+
             var close = new Button
             {
-                Content = IconCatalog.CreateElement(IconKey.Close, 12, fg), Width = 24, Height = 24,
-                Padding = new Thickness(0), Focusable = false, ToolTip = "关闭通知"
+                Content = IconCatalog.CreateElement(IconKey.Close, 12, fg), Width = 28, Height = 28,
+                Padding = new Thickness(0), Focusable = false, ToolTip = "关闭通知",
+                VerticalAlignment = VerticalAlignment.Center
             };
             UiKit.ApplyIconButtonStyle(close);
+            close.MinWidth = 24; close.MinHeight = 24;
             System.Windows.Automation.AutomationProperties.SetName(close, "关闭截图通知");
             close.Click += (_, _) => Close(dlg);
-            DockPanel.SetDock(close, Dock.Right); header.Children.Add(close);
-            var statusIcon = IconCatalog.CreateElement(error == null ? IconKey.Success : IconKey.Error, 18, accent);
-            statusIcon.Margin = new Thickness(0, 0, 8, 0);
-            DockPanel.SetDock(statusIcon, Dock.Left); header.Children.Add(statusIcon);
-            header.Children.Add(new TextBlock { Text = isPreview ? "截图通知预览" : error == null ? "截图已保存" : "截图失败", Foreground = Brushes.White,
-                FontSize = 13, FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center });
-            stack.Children.Add(header);
-            if (error != null)
+            DockPanel.SetDock(close, Dock.Right);
+
+            void OpenFolder()
             {
-                stack.Children.Add(new TextBlock { Text = error, Foreground = accent, FontSize = 11,
+                if (isPreview || failed || string.IsNullOrEmpty(path)) return;
+                try { Process.Start(new ProcessStartInfo("explorer.exe", "/select,\"" + path + "\"") { UseShellExecute = true }); Close(dlg); }
+                catch (Exception ex) { AppLog.Log("ScreenshotToast.Open", ex); }
+            }
+
+            // Round status badge: check on success, "!" on failure.
+            Border Badge()
+            {
+                return new Border
+                {
+                    Width = 20, Height = 20, CornerRadius = new CornerRadius(10),
+                    Background = UiKit.FrozenBrush(failed ? UiKit.DangerSurface : UiKit.SuccessSurface),
+                    Margin = new Thickness(0, 0, 10, 0),
+                    VerticalAlignment = failed ? VerticalAlignment.Top : VerticalAlignment.Center,
+                    Child = failed
+                        ? (UIElement)new TextBlock { Text = "!", FontSize = 12, FontWeight = FontWeights.Bold,
+                            Foreground = UiKit.FrozenBrush(UiKit.DangerColor),
+                            HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center }
+                        : UiKit.Glyph(UiKit.Glyphs.Check, 12, UiKit.FrozenBrush(UiKit.SuccessColor), 3)
+                };
+            }
+
+            // Rounded thumbnail via ImageBrush so the image follows the radius.
+            Border Thumb(ImageSource source, double width, double height, double radius)
+            {
+                var b = new Border
+                {
+                    Height = height, CornerRadius = new CornerRadius(radius),
+                    Background = source != null
+                        ? new ImageBrush(source) { Stretch = Stretch.UniformToFill }
+                        : (Brush)UiKit.FrozenBrush(UiKit.CardColor)
+                };
+                if (!double.IsNaN(width)) b.Width = width;
+                return b;
+            }
+
+            string title = isPreview ? "截图通知预览" : failed ? "截图失败" : "截图已保存";
+            if (failed)
+            {
+                var row = new DockPanel { LastChildFill = true, Margin = new Thickness(4) };
+                row.Children.Add(close);
+                var badge = Badge(); DockPanel.SetDock(badge, Dock.Left); row.Children.Add(badge);
+                var texts = new StackPanel();
+                texts.Children.Add(UiKit.Text(title, 12, UiKit.TextPrimary, FontWeights.SemiBold));
+                var detail = new TextBlock { Text = error, Foreground = fg, FontSize = 11, LineHeight = 15,
                     TextWrapping = TextWrapping.Wrap, MaxHeight = 130, TextTrimming = TextTrimming.CharacterEllipsis,
-                    ToolTip = error, Margin = new Thickness(0, 8, 0, 2) });
+                    ToolTip = error, Margin = new Thickness(0, 2, 0, 0) };
+                texts.Children.Add(detail);
+                row.Children.Add(texts);
+                stack.Children.Add(row);
             }
             else
             {
                 string description = (string.IsNullOrWhiteSpace(appName) ? "截图" : appName) +
                     (string.IsNullOrWhiteSpace(source) ? "" : " · " + source);
-                stack.Children.Add(new TextBlock { Text = description, ToolTip = description, Foreground = fg,
-                    FontSize = 11, TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(0, 3, 0, 10) });
+                string fileName = isPreview ? "截图预览.png" : Path.GetFileName(path);
                 ImageSource thumb = isPreview ? CreatePreviewImage() : ScreenshotService.LoadThumbnail(path, options.Compact ? 128 : 544, 280);
-                var imageRow = new DockPanel { LastChildFill = true };
-                if (thumb != null)
+                if (options.Compact)
                 {
-                    var preview = new Border { Height = options.Compact ? 44 : 140, CornerRadius = new CornerRadius(6),
-                        Background = UiKit.FrozenBrush(Color.FromRgb(20, 18, 28)), Padding = new Thickness(4),
-                        Child = new Image { Source = thumb, Stretch = Stretch.Uniform } };
-                    if (options.Compact)
+                    var row = new DockPanel { LastChildFill = true };
+                    row.Children.Add(close);
+                    var t = Thumb(thumb, 64, 36, 6);
+                    t.Margin = new Thickness(0, 0, 10, 0);
+                    DockPanel.SetDock(t, Dock.Left); row.Children.Add(t);
+                    var texts = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+                    texts.Children.Add(UiKit.Text(title, 12, UiKit.TextPrimary, FontWeights.SemiBold));
+                    texts.Children.Add(UiKit.Text(isPreview ? "预览不会保存文件" : "点击打开文件夹", 11, UiKit.TextSecondary));
+                    row.Children.Add(texts);
+                    row.ToolTip = isPreview ? "预览不会保存文件" : path;
+                    if (!isPreview)
                     {
-                        preview.Width = 64;
-                        preview.Margin = new Thickness(0, 0, 8, 0);
-                        DockPanel.SetDock(preview, Dock.Left);
-                        imageRow.Children.Add(preview);
+                        row.Cursor = Cursors.Hand;
+                        row.Background = Brushes.Transparent;
+                        row.MouseLeftButtonUp += (_, e) => { if (!close.IsMouseOver) OpenFolder(); };
                     }
-                    else stack.Children.Add(preview);
+                    stack.Children.Add(row);
                 }
-                var filename = new TextBlock { Text = isPreview ? "截图预览.png" : Path.GetFileName(path), ToolTip = path, Foreground = fg,
-                    FontSize = 10, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis,
-                    Margin = new Thickness(0, options.Compact ? 0 : 8, 0, 8) };
-                if (options.Compact) { imageRow.Children.Add(filename); stack.Children.Add(imageRow); }
-                else stack.Children.Add(filename);
-                var open = new Button { Content = "打开文件夹", Height = 28, FontSize = 11, Focusable = false,
-                    HorizontalAlignment = HorizontalAlignment.Right, Padding = new Thickness(12, 0, 12, 0),
-                    IsEnabled = !isPreview, ToolTip = isPreview ? "预览不会保存文件" : null };
-                AppResources.StyleDialogButton(open, true);
-                open.Click += (_, _) =>
+                else
                 {
-                    try { Process.Start(new ProcessStartInfo("explorer.exe", "/select,\"" + path + "\"") { UseShellExecute = true }); Close(dlg); }
-                    catch (Exception ex) { AppLog.Log("ScreenshotToast.Open", ex); }
-                };
-                stack.Children.Add(open);
+                    if (thumb != null) stack.Children.Add(Thumb(thumb, double.NaN, 168, 8));
+                    var row = new DockPanel { LastChildFill = true, Margin = new Thickness(6, 10, 0, 4) };
+                    row.Children.Add(close);
+                    var open = new Button { Content = "打开文件夹", Height = 30, Focusable = false,
+                        Padding = new Thickness(10, 0, 10, 0), Margin = new Thickness(8, 0, 2, 0),
+                        IsEnabled = !isPreview, ToolTip = isPreview ? "预览不会保存文件" : null,
+                        VerticalAlignment = VerticalAlignment.Center };
+                    UiKit.ApplyButtonVariant(open, ButtonVariant.Secondary);
+                    open.Click += (_, _) => OpenFolder();
+                    DockPanel.SetDock(open, Dock.Right); row.Children.Add(open);
+                    var badge = Badge(); DockPanel.SetDock(badge, Dock.Left); row.Children.Add(badge);
+                    var texts = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+                    texts.Children.Add(UiKit.Text(title, 13, UiKit.TextPrimary, FontWeights.SemiBold));
+                    var meta = UiKit.Text(description + " · " + fileName, 11, UiKit.TextSecondary);
+                    meta.ToolTip = isPreview ? description : path;
+                    texts.Children.Add(meta);
+                    row.Children.Add(texts);
+                    stack.Children.Add(row);
+                }
+            }
+
+            // Remaining-time strip; restarts with the timer, pauses on hover.
+            var progressScale = new ScaleTransform(1, 1);
+            var progress = new Border
+            {
+                Height = 2, CornerRadius = new CornerRadius(1),
+                Background = UiKit.FrozenBrush(failed ? UiKit.DangerColor : UiKit.AccentColor),
+                Margin = new Thickness(6, 6, 6, 0),
+                RenderTransform = progressScale,
+                RenderTransformOrigin = new Point(0, 0.5)
+            };
+            var progressTrack = new Border { Background = UiKit.FrozenBrush(UiKit.CardColor), CornerRadius = new CornerRadius(1), Height = 2, Margin = new Thickness(6, 6, 6, 0) };
+            var progressHost = new Grid();
+            progressHost.Children.Add(progressTrack);
+            progressHost.Children.Add(progress);
+            stack.Children.Add(progressHost);
+            void RestartProgress()
+            {
+                progressScale.BeginAnimation(ScaleTransform.ScaleXProperty,
+                    new DoubleAnimation(1, 0, TimeSpan.FromSeconds(options.DurationSeconds)));
+            }
+            void PauseProgress()
+            {
+                progressScale.BeginAnimation(ScaleTransform.ScaleXProperty, null);
+                progressScale.ScaleX = 1;
             }
             card.Child = stack; dlg.Content = card;
             var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(options.DurationSeconds) };
@@ -144,8 +227,8 @@ namespace PowerAudioManager
                 fade.Completed += (_, _) => { if (fading) Close(dlg); };
                 dlg.BeginAnimation(UIElement.OpacityProperty, fade);
             };
-            dlg.MouseEnter += (_, _) => { timer.Stop(); fading = false; dlg.BeginAnimation(UIElement.OpacityProperty, null); dlg.Opacity = 1; };
-            dlg.MouseLeave += (_, _) => { timer.Stop(); timer.Start(); };
+            dlg.MouseEnter += (_, _) => { timer.Stop(); fading = false; dlg.BeginAnimation(UIElement.OpacityProperty, null); dlg.Opacity = 1; PauseProgress(); };
+            dlg.MouseLeave += (_, _) => { timer.Stop(); timer.Start(); RestartProgress(); };
             dlg.Closed += (_, _) => { timer.Stop(); fading = false; if (_current == dlg) _current = null; };
             dlg.SourceInitialized += (_, _) =>
             {
@@ -179,6 +262,7 @@ namespace PowerAudioManager
                         revealed = true;
                         dlg.BeginAnimation(UIElement.OpacityProperty, new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(160)));
                         timer.Start();
+                        RestartProgress();
                     }
                 }));
             }
@@ -199,7 +283,7 @@ namespace PowerAudioManager
             var drawing = new DrawingGroup();
             using (var dc = drawing.Open())
             {
-                dc.DrawRectangle(UiKit.FrozenBrush(Color.FromRgb(38, 34, 59)), null, new Rect(0, 0, 272, 140));
+                dc.DrawRectangle(UiKit.FrozenBrush(Color.FromRgb(44, 54, 70)), null, new Rect(0, 0, 272, 140));
                 dc.DrawEllipse(UiKit.FrozenBrush(ThemeTokens.Accent), null, new Point(206, 36), 16, 16);
                 dc.DrawGeometry(UiKit.FrozenBrush(Color.FromRgb(90, 83, 135)), null,
                     Geometry.Parse("M0,140 L80,48 L144,112 L190,72 L272,140 Z"));

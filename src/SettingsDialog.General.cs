@@ -13,76 +13,27 @@ namespace PowerAudioManager
     {
         static FrameworkElement BuildGeneralTab(Window owner, Window dlg, SolidColorBrush fg, SolidColorBrush lightText)
         {
-            var stack = new StackPanel { Margin = new Thickness(20) };
+            var stack = NewPage("常规");
 
-            stack.Children.Add(new TextBlock { Text = "字体", Foreground = Brushes.White, FontWeight = FontWeights.SemiBold, FontSize = 13, Margin = new Thickness(0, 0, 0, 6) });
-
-            var fontRow = new DockPanel { Margin = new Thickness(0, 0, 0, 4), LastChildFill = true };
-            fontRow.Children.Add(new TextBlock { Text = "界面字体：", Foreground = fg, FontSize = 12, VerticalAlignment = VerticalAlignment.Center });
-            var fontCombo = new ComboBox
-            {
-                Width = 220, Height = 28, FontSize = 12,
-                Background = new SolidColorBrush(Color.FromRgb(42, 39, 60)),
-                Foreground = lightText,
-                BorderBrush = new SolidColorBrush(Color.FromRgb(80, 75, 120)),
-                VerticalContentAlignment = VerticalAlignment.Center
-            };
+            // ---- 外观 ----
+            var fontCombo = new ComboBox { Width = 190, FontSize = 12, VerticalContentAlignment = VerticalAlignment.Center };
             AppResources.StyleDarkComboBox(fontCombo);
+            System.Windows.Automation.AutomationProperties.SetName(fontCombo, "界面字体");
             string currentFont = AppPrefs.GetString("App.FontFamily", "Microsoft YaHei UI");
             foreach (var fam in System.Windows.Media.Fonts.SystemFontFamilies.OrderBy(f => f.Source))
                 fontCombo.Items.Add(fam.Source);
             fontCombo.SelectedItem = currentFont;
-            // 实时预览标签：将选中的字体应用到示例文本。
-            var preview = new TextBlock
-            {
-                Text = "OneBox 预览 1234",
-                FontFamily = new FontFamily(currentFont),
-                Foreground = lightText, FontSize = 13,
-                Margin = new Thickness(0, 8, 0, 16)
-            };
+            // 实时预览：将选中的字体应用到示例文本（显示在行描述位置）。
+            var fontRow = UiKit.SettingsRow("界面字体", fontCombo, "OneBox 预览 1234");
+            TextBlock preview = null;
+            if (fontRow.Children.Count > 0 && fontRow.Children[fontRow.Children.Count - 1] is StackPanel fontTexts && fontTexts.Children.Count > 1)
+                preview = fontTexts.Children[1] as TextBlock;
+            if (preview != null) preview.FontFamily = new FontFamily(currentFont);
             fontCombo.SelectionChanged += (s, e) =>
             {
                 var sel = fontCombo.SelectedItem as string;
-                if (!string.IsNullOrEmpty(sel)) preview.FontFamily = new FontFamily(sel);
+                if (!string.IsNullOrEmpty(sel) && preview != null) preview.FontFamily = new FontFamily(sel);
             };
-            DockPanel.SetDock(fontCombo, Dock.Right);
-            fontRow.Children.Add(fontCombo);
-            stack.Children.Add(fontRow);
-            stack.Children.Add(preview);
-
-            stack.Children.Add(new Border { Height = 1, Background = new SolidColorBrush(Color.FromRgb(80, 75, 120)), Margin = new Thickness(0, 4, 0, 12) });
-
-            stack.Children.Add(new TextBlock { Text = "窗口", Foreground = Brushes.White, FontWeight = FontWeights.SemiBold, FontSize = 13, Margin = new Thickness(0, 0, 0, 6) });
-
-            var topmostCb = new CheckBox { Content = "窗口置顶", Foreground = Brushes.White, FontSize = 12, Margin = new Thickness(0, 0, 0, 8) };
-            topmostCb.IsChecked = AppPrefs.GetBool("Topmost", false);
-            stack.Children.Add(topmostCb);
-
-            var lockCb = new CheckBox { Content = "锁定位置", Foreground = Brushes.White, FontSize = 12, Margin = new Thickness(0, 0, 0, 16) };
-            lockCb.IsChecked = AppPrefs.GetBool("LockPosition", false);
-            stack.Children.Add(lockCb);
-
-            stack.Children.Add(new Border { Height = 1, Background = new SolidColorBrush(Color.FromRgb(80, 75, 120)), Margin = new Thickness(0, 4, 0, 12) });
-
-            stack.Children.Add(new TextBlock { Text = "自动折叠", Foreground = Brushes.White, FontWeight = FontWeights.SemiBold, FontSize = 13, Margin = new Thickness(0, 0, 0, 6) });
-
-            var autoCb = new CheckBox { Content = "启用自动折叠", Foreground = Brushes.White, FontSize = 12, Margin = new Thickness(0, 0, 0, 8) };
-            autoCb.IsChecked = AppPrefs.GetBool("AutoCollapse", true);
-            stack.Children.Add(autoCb);
-
-            var delayRow = new DockPanel { Margin = new Thickness(20, 0, 0, 8) };
-            delayRow.Children.Add(new TextBlock { Text = "鼠标离开后", Foreground = fg, FontSize = 12, VerticalAlignment = VerticalAlignment.Center });
-            var delayBox = new TextBox { Width = 50, MinHeight = 24, Margin = new Thickness(8, 0, 8, 0), Background = new SolidColorBrush(Color.FromRgb(42, 39, 60)), Foreground = Brushes.White, BorderBrush = new SolidColorBrush(Color.FromRgb(80, 75, 120)) };
-            delayBox.Text = AppPrefs.GetInt("AutoCollapseDelay", 8).ToString();
-            delayRow.Children.Add(delayBox);
-            delayRow.Children.Add(new TextBlock { Text = "秒后折叠（0=立即）", Foreground = fg, FontSize = 12, VerticalAlignment = VerticalAlignment.Center });
-            stack.Children.Add(delayRow);
-
-            var expandAfterManualCb = new CheckBox { Content = "手动折叠后允许悬停展开", Foreground = fg, FontSize = 11, Margin = new Thickness(20, 0, 0, 16) };
-            expandAfterManualCb.IsChecked = AppPrefs.GetBool("AutoExpandAfterManual", false);
-            stack.Children.Add(expandAfterManualCb);
-
-            stack.Children.Add(new Border { Height = 1, Background = new SolidColorBrush(Color.FromRgb(80, 75, 120)), Margin = new Thickness(0, 4, 0, 12) });
 
             // 窗口缩放：1080p=100%（4K 同样），小屏自动缩小；手动 80%–200%。
             double curScale = 1.0;
@@ -93,37 +44,48 @@ namespace PowerAudioManager
             double autoScaleShown = 1.0;
             try { if (mwForScale != null && mwForScale._scaling != null) autoScaleShown = mwForScale._scaling.AutoScale; } catch { }
 
-            stack.Children.Add(new TextBlock { Text = $"窗口缩放（自动 {(int)Math.Round(autoScaleShown * 100)}%）", Foreground = Brushes.White, FontSize = 12, Margin = new Thickness(0, 0, 0, 4) });
-            var scaleRow = new DockPanel { Margin = new Thickness(0, 0, 0, 16) };
-            var scaleSlider = new Slider { Minimum = 80, Maximum = 200, Value = isAuto ? 100 : (int)(curScale * 100), TickFrequency = 5, IsSnapToTickEnabled = true, Width = 160, VerticalAlignment = VerticalAlignment.Center };
-            var scalePctLabel = new TextBlock { Text = isAuto ? "自动" : $"{(int)(curScale * 100)}%", Foreground = fg, FontSize = 11, Width = 40, TextAlignment = TextAlignment.Right, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0) };
-            var scaleAutoCb = new CheckBox { Content = "自动", Foreground = fg, FontSize = 11, IsChecked = isAuto, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0) };
+            var scaleSlider = new Slider { Minimum = 80, Maximum = 200, Value = isAuto ? 100 : (int)(curScale * 100), TickFrequency = 5, IsSnapToTickEnabled = true, Width = 110, VerticalAlignment = VerticalAlignment.Center };
+            System.Windows.Automation.AutomationProperties.SetName(scaleSlider, "窗口缩放");
+            var scalePctLabel = new TextBlock { Text = isAuto ? "自动" : $"{(int)(curScale * 100)}%", Foreground = fg, FontSize = 12, Width = 40, TextAlignment = TextAlignment.Right, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0, 10, 0) };
+            var scaleAutoCb = DarkCheck("自动", isAuto);
             scaleAutoCb.Checked += (_, _) => { scaleSlider.IsEnabled = false; scalePctLabel.Text = "自动"; };
             scaleAutoCb.Unchecked += (_, _) => { scaleSlider.IsEnabled = true; scalePctLabel.Text = $"{(int)scaleSlider.Value}%"; };
             scaleSlider.ValueChanged += (_, _) => { if (scaleSlider.IsEnabled) scalePctLabel.Text = $"{(int)scaleSlider.Value}%"; };
             scaleSlider.IsEnabled = !isAuto;
-            DockPanel.SetDock(scalePctLabel, Dock.Right);
-            DockPanel.SetDock(scaleAutoCb, Dock.Right);
-            scaleRow.Children.Add(scalePctLabel);
-            scaleRow.Children.Add(scaleAutoCb);
-            scaleRow.Children.Add(scaleSlider);
-            stack.Children.Add(scaleRow);
+            var scaleControl = new StackPanel { Orientation = Orientation.Horizontal };
+            scaleControl.Children.Add(scaleSlider);
+            scaleControl.Children.Add(scalePctLabel);
+            scaleControl.Children.Add(scaleAutoCb);
+            stack.Children.Add(UiKit.SettingsGroup("外观",
+                fontRow,
+                UiKit.SettingsRow("界面缩放", scaleControl, $"自动时为 {(int)Math.Round(autoScaleShown * 100)}%")));
 
-            stack.Children.Add(new Border { Height = 1, Background = new SolidColorBrush(Color.FromRgb(80, 75, 120)), Margin = new Thickness(0, 4, 0, 12) });
+            // ---- 窗口 ----
+            var topmostCb = Switch("窗口置顶", AppPrefs.GetBool("Topmost", false));
+            var lockCb = Switch("锁定位置", AppPrefs.GetBool("LockPosition", false));
+            stack.Children.Add(UiKit.SettingsGroup("窗口",
+                UiKit.SettingsRow("窗口置顶", topmostCb),
+                UiKit.SettingsRow("锁定位置", lockCb, "锁定后切换分辨率也不会移动窗口")));
 
+            // ---- 自动折叠 ----
+            var autoCb = Switch("启用自动折叠", AppPrefs.GetBool("AutoCollapse", true));
+            var delayBox = NumBox(AppPrefs.GetInt("AutoCollapseDelay", 8).ToString());
+            System.Windows.Automation.AutomationProperties.SetName(delayBox, "折叠延时（秒）");
+            var delaySentence = Sentence(delayBox, "秒");
+            var expandAfterManualCb = Switch("手动折叠后仍允许悬停展开", AppPrefs.GetBool("AutoExpandAfterManual", false));
+            stack.Children.Add(UiKit.SettingsGroup("自动折叠",
+                UiKit.SettingsRow("启用自动折叠", autoCb),
+                UiKit.SettingsRow("鼠标离开后折叠", delaySentence, "0 表示立即折叠"),
+                UiKit.SettingsRow("手动折叠后仍允许悬停展开", expandAfterManualCb)));
+
+            // ---- 启动 ----
             // 开机自启：统一状态标志可选择注册表、计划任务或 OneBoxSvc 服务方式。
-            stack.Children.Add(new TextBlock { Text = "开机自启", Foreground = Brushes.White, FontWeight = FontWeights.SemiBold, FontSize = 13, Margin = new Thickness(0, 0, 0, 6) });
-
-            var autoStartCb = new CheckBox { Content = "开机自启", Foreground = Brushes.White, FontSize = 12, Margin = new Thickness(0, 0, 0, 8) };
             bool svcInstalled = AutoStartService.IsServiceInstalled();
-            autoStartCb.IsChecked = AutoStartService.IsEnabled();
-            stack.Children.Add(autoStartCb);
-
-            var autoStartStatus = new TextBlock { Foreground = fg, FontSize = 10, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 16) };
-            autoStartStatus.Text = svcInstalled
-                ? "OneBoxSvc 已安装"
-                : "OneBoxSvc 未安装，将使用注册表启动";
-            stack.Children.Add(autoStartStatus);
+            var autoStartCb = Switch("开机自启", AutoStartService.IsEnabled());
+            stack.Children.Add(UiKit.SettingsGroup("启动",
+                UiKit.SettingsRow("开机自启", autoStartCb, svcInstalled
+                    ? "登录后在托盘中运行 · OneBoxSvc 已安装"
+                    : "登录后在托盘中运行 · OneBoxSvc 未安装，将使用注册表启动")));
 
             var btns = MakeButtons();
             var ok = (Button)btns.Children[0];
@@ -133,8 +95,7 @@ namespace PowerAudioManager
                 int d;
                 if (!int.TryParse(delayBox.Text, out d) || d < 0)
                 {
-                    MessageBox.Show(dlg, "自动折叠延时必须是大于等于 0 的整数。", "OneBox 设置",
-                        MessageBoxButton.OK, MessageBoxImage.Warning);
+                    OneBoxMessage.Error(dlg, "OneBox 设置", "自动折叠延时必须是大于等于 0 的整数。");
                     return;
                 }
 

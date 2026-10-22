@@ -37,13 +37,17 @@ namespace PowerAudioManager
         public bool OnlyTemp { get; set; }     // 悬浮窗小图：只画温度，不画风扇
         public double IntervalSec { get; set; } = 1;  // 采样间隔，用于缺口阈值与全部窗计算
         public List<ForegroundSegment> Segments { get; set; }  // 前台应用时间段（大图按时间标注）
+        public HashSet<string> HiddenSeries { get; set; }      // 图例切换隐藏的系列名
+        public bool ShowLegend { get; set; } = true;           // 大图窗口用外部图例芯片时关闭
+        public double WarnTemp { get; set; }                   // >0 时画高温警告虚线
 
-        static readonly Brush BgBrush = new SolidColorBrush(Color.FromRgb(0x1E, 0x1B, 0x2E));
-        static readonly Brush AxisBrush = new SolidColorBrush(Color.FromRgb(0x4A, 0x44, 0x6A));
-        static readonly Brush TempLabelBrush = new SolidColorBrush(Color.FromRgb(0x9A, 0x96, 0xB8));
-        static readonly Brush FanLabelBrush = new SolidColorBrush(Color.FromRgb(0xB8, 0x9C, 0xE8));
-        static readonly Brush LegendBrush = new SolidColorBrush(Color.FromRgb(0xD8, 0xD6, 0xF0));
-        static readonly Brush TooltipBg = new SolidColorBrush(Color.FromArgb(0xE0, 0x22, 0x20, 0x32));
+        static readonly Brush BgBrush = new SolidColorBrush(Color.FromRgb(0x1C, 0x1A, 0x26));
+        static readonly Brush AxisBrush = new SolidColorBrush(Color.FromRgb(0x2B, 0x28, 0x39));
+        static readonly Brush TempLabelBrush = new SolidColorBrush(Color.FromRgb(0x8E, 0x8B, 0xAE));
+        static readonly Brush FanLabelBrush = new SolidColorBrush(Color.FromRgb(0xA9, 0xA6, 0xC4));
+        static readonly Brush LegendBrush = new SolidColorBrush(Color.FromRgb(0xF2, 0xF1, 0xFA));
+        static readonly Brush TooltipBg = new SolidColorBrush(Color.FromArgb(0xF5, 0x17, 0x15, 0x1F));
+        static readonly Brush WarnBrush = new SolidColorBrush(Color.FromRgb(0xE8, 0xB2, 0x5A));
         static readonly Typeface LabelType =
             new Typeface(SystemFonts.MessageFontFamily, FontStyles.Normal, FontWeights.Normal, FontStretches.Normal);
 
@@ -55,16 +59,20 @@ namespace PowerAudioManager
         static readonly Pen _segPen;
         static readonly SolidColorBrush _segBrushAlt;
         static readonly Pen _vpen;
+        static readonly Pen _tooltipPen;
+        static readonly Pen _warnPen;
 
         double _mouseX = -1;
 
         static PerfChart()
         {
-            BgBrush.Freeze(); AxisBrush.Freeze(); TempLabelBrush.Freeze(); FanLabelBrush.Freeze(); LegendBrush.Freeze(); TooltipBg.Freeze();
-            _gridPen = new Pen(AxisBrush, 1) { DashStyle = DashStyles.Dash }; _gridPen.Freeze();
-            _segBrushAlt = new SolidColorBrush(Color.FromArgb(0x20, 0x8E, 0x8C, 0xD8)); _segBrushAlt.Freeze();
-            _segPen = new Pen(new SolidColorBrush(Color.FromArgb(0x60, 0x9A, 0x96, 0xB8)), 1) { DashStyle = DashStyles.Dot }; _segPen.Freeze();
-            _vpen = new Pen(new SolidColorBrush(Color.FromRgb(0x9A, 0x96, 0xB8)), 1) { DashStyle = DashStyles.Dot }; _vpen.Freeze();
+            BgBrush.Freeze(); AxisBrush.Freeze(); TempLabelBrush.Freeze(); FanLabelBrush.Freeze(); LegendBrush.Freeze(); TooltipBg.Freeze(); WarnBrush.Freeze();
+            _gridPen = new Pen(AxisBrush, 1); _gridPen.Freeze();
+            _segBrushAlt = new SolidColorBrush(Color.FromArgb(0x18, 0x8E, 0x8C, 0xD8)); _segBrushAlt.Freeze();
+            _segPen = new Pen(new SolidColorBrush(Color.FromArgb(0x60, 0x5A, 0x56, 0x80)), 1) { DashStyle = DashStyles.Dot }; _segPen.Freeze();
+            _vpen = new Pen(new SolidColorBrush(Color.FromRgb(0x5A, 0x56, 0x80)), 1); _vpen.Freeze();
+            _tooltipPen = new Pen(new SolidColorBrush(Color.FromRgb(0x3A, 0x36, 0x50)), 1); _tooltipPen.Freeze();
+            _warnPen = new Pen(WarnBrush, 1) { DashStyle = new DashStyle(new double[] { 4, 4 }, 0) }; _warnPen.Freeze();
         }
 
         static SolidColorBrush BrushFor(Color c)
@@ -117,6 +125,7 @@ namespace PowerAudioManager
                 {
                     if (OnlyTemp && !s.IsTemp) continue;
                     if (s.Points == null || s.Points.Count == 0) continue;
+                    if (HiddenSeries != null && s.Name != null && HiddenSeries.Contains(s.Name)) continue;
                     eff.Add(s);
                 }
 
@@ -136,17 +145,18 @@ namespace PowerAudioManager
             }
 
             // 算图例行数 -> 自适应 padTop，避免图例与折线重叠
-            int rows = 1;
+            int rows = ShowLegend ? 1 : 0;
             double lgx = padLeft + 2;
-            foreach (var s in eff)
-            {
-                float cur = s.Points[s.Points.Count - 1];
-                var ft = MakeText($"{s.Name} {cur:0}{s.Unit}", 10, LegendBrush, ppd);
-                double itemW = 12 + ft.Width + 12;
-                if (lgx + itemW > w - padRight && lgx > padLeft + 2) { lgx = padLeft + 2; rows++; }
-                lgx += itemW;
-            }
-            double legendH = rows * 14 + 4;
+            if (ShowLegend)
+                foreach (var s in eff)
+                {
+                    float cur = s.Points[s.Points.Count - 1];
+                    var ft = MakeText($"{s.Name} {cur:0}{s.Unit}", 10, LegendBrush, ppd);
+                    double itemW = 12 + ft.Width + 12;
+                    if (lgx + itemW > w - padRight && lgx > padLeft + 2) { lgx = padLeft + 2; rows++; }
+                    lgx += itemW;
+                }
+            double legendH = ShowLegend ? rows * 14 + 4 : 10;
             double padTop = legendH;
             double plotW = w - padLeft - padRight;
             double plotH = h - padTop - padBottom;
@@ -161,7 +171,7 @@ namespace PowerAudioManager
             double TimeToX(DateTime t) => padLeft + plotW * (t - fromTime).TotalSeconds / windowSec;
 
             // 背景
-            dc.DrawRoundedRectangle(BgBrush, null, new Rect(0, 0, w, h), 6, 6);
+            dc.DrawRoundedRectangle(BgBrush, null, new Rect(0, 0, w, h), 10, 10);
 
             // 网格 + 双 Y 轴标签
             for (int pct = 0; pct <= 100; pct += 25)
@@ -176,6 +186,15 @@ namespace PowerAudioManager
                     var ftF = MakeText(rpm + "", 9, FanLabelBrush, ppd);
                     dc.DrawText(ftF, new Point(w - padRight + 2, y - ftF.Height / 2));
                 }
+            }
+
+            // 高温警告虚线
+            if (WarnTemp > 0 && WarnTemp < 100 && plotH > 2)
+            {
+                double wy = padTop + plotH - (WarnTemp / 100.0) * plotH;
+                dc.DrawLine(_warnPen, new Point(padLeft, wy), new Point(w - padRight, wy));
+                var wl = MakeText("高温警告 " + WarnTemp.ToString("0") + "°", 9, WarnBrush, ppd);
+                dc.DrawText(wl, new Point(w - padRight - wl.Width - 2, wy - wl.Height - 1));
             }
 
             if (eff.Count == 0 || plotH < 2)
@@ -257,13 +276,13 @@ namespace PowerAudioManager
 
             // 图例（顶部，0..legendH，与折线区 padTop 分开）
             lgx = padLeft + 2; double lgy = 2;
-            foreach (var s in eff)
+            if (ShowLegend) foreach (var s in eff)
             {
                 float cur = s.Points[s.Points.Count - 1];
                 var ft = MakeText($"{s.Name} {cur:0}{s.Unit}", 10, LegendBrush, ppd);
                 double itemW = 12 + ft.Width + 12;
                 if (lgx + itemW > w - padRight && lgx > padLeft + 2) { lgx = padLeft + 2; lgy += 14; }
-                dc.DrawRectangle(BrushFor(s.Color), null, new Rect(lgx, lgy + 3, 8, 8));
+                dc.DrawEllipse(BrushFor(s.Color), null, new Point(lgx + 4, lgy + 7), 4, 4);
                 dc.DrawText(ft, new Point(lgx + 12, lgy));
                 lgx += itemW;
             }
@@ -329,24 +348,28 @@ namespace PowerAudioManager
                 if (labels.Count > 0 || Segments != null)
                 {
                     int tipRows = labels.Count + 1;
-                    double cardW = 150, cardH = 14 * tipRows + 8;
-                    double cx = _mouseX + 8; if (cx + cardW > w - 2) cx = _mouseX - cardW - 8;
+                    tipRows++; // time header
+                    double cardW = 160, cardH = 16 * tipRows + 12;
+                    double cx = _mouseX + 10; if (cx + cardW > w - 2) cx = _mouseX - cardW - 10;
                     double cy = padTop + 4;
-                    dc.DrawRoundedRectangle(TooltipBg, null, new Rect(cx, cy, cardW, cardH), 4, 4);
+                    dc.DrawRoundedRectangle(TooltipBg, _tooltipPen, new Rect(cx, cy, cardW, cardH), 8, 8);
                     int row = 0;
-                    var ftf = MakeText("前台: " + (string.IsNullOrEmpty(fgExe) ? "未记录" : fgExe), 10, FanLabelBrush, ppd);
-                    ftf.MaxTextWidth = cardW - 12;
-                    ftf.MaxLineCount = 1;
-                    ftf.Trimming = TextTrimming.CharacterEllipsis;
-                    dc.DrawText(ftf, new Point(cx + 6, cy + 4 + row * 14));
+                    var fth = MakeText(tAt.ToString("HH:mm:ss"), 11, LegendBrush, ppd);
+                    fth.SetFontWeight(FontWeights.SemiBold);
+                    dc.DrawText(fth, new Point(cx + 10, cy + 6 + row * 16));
                     row++;
                     for (int i = 0; i < labels.Count; i++)
                     {
-                        dc.DrawRectangle(BrushFor(labels[i].Item1), null, new Rect(cx + 6, cy + 7 + row * 14, 8, 8));
+                        dc.DrawEllipse(BrushFor(labels[i].Item1), null, new Point(cx + 13, cy + 14 + row * 16), 3, 3);
                         var ft = MakeText(labels[i].Item2, 10, LegendBrush, ppd);
-                        dc.DrawText(ft, new Point(cx + 20, cy + 4 + row * 14));
+                        dc.DrawText(ft, new Point(cx + 22, cy + 6 + row * 16));
                         row++;
                     }
+                    var ftf = MakeText("前台：" + (string.IsNullOrEmpty(fgExe) ? "未记录" : fgExe), 10, FanLabelBrush, ppd);
+                    ftf.MaxTextWidth = cardW - 20;
+                    ftf.MaxLineCount = 1;
+                    ftf.Trimming = TextTrimming.CharacterEllipsis;
+                    dc.DrawText(ftf, new Point(cx + 10, cy + 6 + row * 16));
                 }
             }
         }

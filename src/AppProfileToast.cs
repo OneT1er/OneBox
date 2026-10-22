@@ -49,31 +49,51 @@ namespace PowerAudioManager
             var card = new Border
             {
                 CornerRadius = new CornerRadius(10),
-                Background = new SolidColorBrush(Color.FromRgb(34, 32, 50)),
-                BorderBrush = new SolidColorBrush(Color.FromRgb(142, 140, 216)),
+                Background = UiKit.FrozenBrush(UiKit.BgColor),
+                BorderBrush = UiKit.FrozenBrush(UiKit.BorderColor),
                 BorderThickness = new Thickness(1),
-                Padding = new Thickness(12),
+                Padding = new Thickness(12, 10, 12, 10),
                 Margin = new Thickness(10),
                 Effect = new System.Windows.Media.Effects.DropShadowEffect
-                { BlurRadius = 24, ShadowDepth = 2, Opacity = 0.4, Color = Colors.Black }
+                { BlurRadius = 24, ShadowDepth = 4, Opacity = 0.4, Color = Colors.Black }
             };
 
-            var stack = new StackPanel();
-            stack.Children.Add(new TextBlock
-            {
-                Text = title,
-                Foreground = Brushes.White,
-                FontSize = 12,
-                FontWeight = FontWeights.SemiBold,
-                Margin = new Thickness(0, 0, 0, 6)
-            });
-
-            if (powerName != null)
-                stack.Children.Add(Row(IconKey.Power, "电源", powerName));
-            if (audioName != null)
-                stack.Children.Add(Row(IconKey.Audio, "音频", audioName));
+            UIElement stack;
             if (powerName == null && audioName == null)
-                stack.Children.Add(new TextBlock { Text = "(无变化)", Foreground = new SolidColorBrush(Color.FromRgb(154, 150, 184)), FontSize = 11 });
+            {
+                var empty = new StackPanel();
+                empty.Children.Add(UiKit.Text(title, 11, UiKit.TextSecondary));
+                empty.Children.Add(UiKit.Text("(无变化)", 12, UiKit.TextSecondary));
+                stack = empty;
+            }
+            else
+            {
+                bool isPower = powerName != null;
+                var row = new DockPanel { LastChildFill = true };
+                var tile = new Border
+                {
+                    Width = 32, Height = 32, CornerRadius = new CornerRadius(8),
+                    Background = UiKit.FrozenBrush(UiKit.RaisedColor),
+                    Margin = new Thickness(0, 0, 10, 0),
+                    Child = isPower
+                        ? IconCatalog.CreateElement(IconKey.Power, 16, UiKit.FrozenBrush(UiKit.AccentColor))
+                        : (UIElement)UiKit.Glyph(UiKit.Glyphs.Headphones, 16, UiKit.FrozenBrush(UiKit.AccentColor))
+                };
+                if (tile.Child is FrameworkElement glyph)
+                {
+                    glyph.HorizontalAlignment = HorizontalAlignment.Center;
+                    glyph.VerticalAlignment = VerticalAlignment.Center;
+                }
+                DockPanel.SetDock(tile, Dock.Left);
+                row.Children.Add(tile);
+                var texts = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+                texts.Children.Add(UiKit.Text(title, 11, UiKit.TextSecondary));
+                var value = UiKit.Text(isPower ? powerName : audioName, 14, UiKit.TextPrimary, FontWeights.SemiBold);
+                value.ToolTip = value.Text;
+                texts.Children.Add(value);
+                row.Children.Add(texts);
+                stack = row;
+            }
 
             card.Child = stack;
             dlg.Content = card;
@@ -107,15 +127,6 @@ namespace PowerAudioManager
 
             _current = dlg;
             dlg.Show();
-        }
-
-        static UIElement Row(IconKey icon, string label, string value)
-        {
-            var sp = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 2, 0, 0) };
-            sp.Children.Add(IconCatalog.CreateElement(icon, 14, UiKit.FrozenBrush(UiKit.TextSecondary)));
-            sp.Children.Add(new TextBlock { Text = label + "  ", Foreground = new SolidColorBrush(Color.FromRgb(154, 150, 184)), FontSize = 11, Margin = new Thickness(4, 0, 0, 0) });
-            sp.Children.Add(new TextBlock { Text = value, Foreground = Brushes.White, FontSize = 11, FontWeight = FontWeights.Medium });
-            return sp;
         }
 
         static void Close(Window dlg) { if (dlg == _current) _current = null; try { dlg.Close(); } catch { } }

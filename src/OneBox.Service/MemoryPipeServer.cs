@@ -79,7 +79,7 @@ internal sealed class MemoryPipeServer
             try { request = await IpcFraming.ReadAsync<IpcRequest>(server, cancellationToken).ConfigureAwait(false); }
             catch (Exception ex) { ServiceLog.Write("invalid command request: " + ex.Message); return; }
 
-            IpcValidationResult validation = IpcValidator.Validate(request, IpcCommand.CleanMemory, IpcCommand.Ping);
+            IpcValidationResult validation = IpcValidator.Validate(request, IpcCommand.CleanMemory, IpcCommand.Ping, IpcCommand.MemoryListStatus);
             if (!validation.IsValid)
             {
                 await IpcFraming.WriteAsync(server, IpcResponse.Error(request, validation.ErrorCode, validation.ErrorMessage), cancellationToken).ConfigureAwait(false);
@@ -93,6 +93,18 @@ internal sealed class MemoryPipeServer
             if (request.Command == IpcCommand.Ping)
             {
                 await IpcFraming.WriteAsync(server, IpcResponse.Ok(request, new { alive = true }), cancellationToken).ConfigureAwait(false);
+                return;
+            }
+
+            if (request.Command == IpcCommand.MemoryListStatus)
+            {
+                // Read-only and cheap; not logged per request (the GUI polls it
+                // at most every couple of seconds while memory is displayed).
+                MemoryListStatusResult lists = PrivilegedMemoryCleaner.QueryMemoryLists();
+                IpcResponse reply = lists != null
+                    ? IpcResponse.Ok(request, lists)
+                    : IpcResponse.Error(request, IpcErrorCode.InternalError, "Memory list information unavailable.");
+                await IpcFraming.WriteAsync(server, reply, cancellationToken).ConfigureAwait(false);
                 return;
             }
 

@@ -1,11 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
-using System.Windows.Documents;
 using System.Windows.Media;
 using PowerAudioManager.Commands;
-using System.Windows.Shapes;
 using System.Windows.Threading;
 
 namespace PowerAudioManager
@@ -14,62 +13,78 @@ namespace PowerAudioManager
     {
         static FrameworkElement BuildTempTab(Window owner, Window dlg, SolidColorBrush fg)
         {
-            var stack = new StackPanel { Margin = new Thickness(20) };
             var hw = HardwareMonitorService.Instance;
             hw.PrepareSelection();
 
-            // 标题
-            var titleRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 12) };
-            titleRow.Children.Add(IconCatalog.CreateElement(IconKey.Performance, 18, UiKit.FrozenBrush(UiKit.AccentColor)));
-            titleRow.Children.Add(new TextBlock { Text = "性能监控", FontSize = 14, FontWeight = FontWeights.SemiBold, Foreground = Brushes.White, Margin = new Thickness(6, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center });
-            stack.Children.Add(titleRow);
+            // 标题 + 传感器统计
+            var stats = UiKit.Text("", 11, UiKit.TextSecondary);
+            void UpdateStats() => stats.Text = hw.CatalogAvailable || hw.AllTempSensors.Count + hw.AllFanSensors.Count + hw.AllControlSensors.Count > 0
+                ? $"已发现 {hw.AllTempSensors.Count} 温度 · {hw.AllFanSensors.Count} 风扇 · {hw.AllControlSensors.Count} 控制"
+                : "正在加载传感器…";
+            UpdateStats();
+            var stack = NewPage("性能", stats);
 
-            // 传感器统计
-            var stats = new TextBlock { Foreground = fg, FontSize = 10, Margin = new Thickness(0, 0, 0, 10) };
-            stats.Inlines.Add($"已发现 ");
-            stats.Inlines.Add(new Run($"{hw.AllTempSensors.Count}") { Foreground = Brushes.White, FontWeight = FontWeights.SemiBold });
-            stats.Inlines.Add($" 温度 · ");
-            stats.Inlines.Add(new Run($"{hw.AllFanSensors.Count}") { Foreground = Brushes.White, FontWeight = FontWeights.SemiBold });
-            stats.Inlines.Add($" 风扇 · ");
-            stats.Inlines.Add(new Run($"{hw.AllControlSensors.Count}") { Foreground = Brushes.White, FontWeight = FontWeights.SemiBold });
-            stats.Inlines.Add($" 控制");
-            stack.Children.Add(stats);
+            // ---- 刷新与阈值：三列紧凑输入 ----
+            TextBox Field(Grid host, int column, string label, Color labelColor, string value, string unit)
+            {
+                var cell = new StackPanel { Margin = new Thickness(column == 0 ? 0 : 5, 0, column == 2 ? 0 : 5, 0) };
+                var caption = UiKit.Text(label, 11, labelColor);
+                caption.Margin = new Thickness(0, 0, 0, 4);
+                cell.Children.Add(caption);
+                var box = UiKit.MakeTextBox(value);
+                box.Padding = new Thickness(8, 4, 30, 4);
+                AutomationProperties.SetName(box, label);
+                var unitText = UiKit.Text(unit, 11, UiKit.TextSecondary);
+                unitText.HorizontalAlignment = HorizontalAlignment.Right;
+                unitText.Margin = new Thickness(0, 0, 8, 0);
+                unitText.IsHitTestVisible = false;
+                var boxHost = new Grid();
+                boxHost.Children.Add(box);
+                boxHost.Children.Add(unitText);
+                cell.Children.Add(boxHost);
+                Grid.SetColumn(cell, column);
+                host.Children.Add(cell);
+                return box;
+            }
+            var thresholds = new Grid();
+            for (int i = 0; i < 3; i++) thresholds.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            var ivBox = Field(thresholds, 0, "刷新间隔", UiKit.TextSecondary, AppPrefs.GetInt("Temp.IntervalMs", 1000).ToString(), "ms");
+            var warnBox = Field(thresholds, 1, "高温警告", UiKit.WarnColor, AppPrefs.GetInt("Temp.WarnC", 80).ToString(), "°C");
+            var critBox = Field(thresholds, 2, "超高温", UiKit.DangerColor, AppPrefs.GetInt("Temp.CriticalC", 95).ToString(), "°C");
+            var thresholdCard = UiKit.Card(thresholds, new Thickness(12, 10, 12, 12));
+            thresholdCard.Margin = new Thickness(0, 0, 0, 12);
+            stack.Children.Add(thresholdCard);
 
-            // 每个指标独立成卡片，外层保留分组标题和添加入口。
+            // ---- 筛选 + 添加 ----
+            var state = new MetricPageState { Dialog = dlg, FilterHost = new ContentControl { VerticalAlignment = VerticalAlignment.Center } };
             var metricList = new StackPanel();
-            RefreshMetricList(metricList, hw, fg);
-            var metricInner = new StackPanel { Margin = new Thickness(0, 0, 0, 14) };
-            metricInner.Children.Add(new TextBlock { Text = "已添加的指标", Foreground = fg, FontSize = 11, Margin = new Thickness(2, 0, 0, 8) });
-            metricInner.Children.Add(metricList);
-            var addPanel = new StackPanel { Margin = new Thickness(2, 4, 2, 0) };
-            var addBtn = new Button { Content = "+ 添加", Height = 26, FontSize = 11, HorizontalAlignment = HorizontalAlignment.Left, Padding = new Thickness(10, 0, 10, 0) };
-            AppResources.StyleDialogButton(addBtn, true);
-            addBtn.Click += (_, _) => { addPanel.Children.Clear(); addPanel.Children.Add(BuildAddForm(metricList, addPanel, hw, fg)); };
-            metricInner.Children.Add(addBtn);
-            metricInner.Children.Add(addPanel);
-            stack.Children.Add(metricInner);
+            var addBtn = UiKit.MakeButton("+ 添加", ButtonVariant.Primary);
+            addBtn.Margin = new Thickness(8, 0, 0, 0);
+            AutomationProperties.SetName(addBtn, "添加传感器");
+            addBtn.Click += (_, _) =>
+            {
+                if (ShowAddSensorDialog(dlg, hw)) RefreshMetricList(metricList, hw, fg, state);
+            };
+            var toolbar = new DockPanel { LastChildFill = true, Margin = new Thickness(0, 0, 0, 10) };
+            DockPanel.SetDock(addBtn, Dock.Right);
+            toolbar.Children.Add(addBtn);
+            toolbar.Children.Add(state.FilterHost);
+            stack.Children.Add(toolbar);
+
+            // 指标按硬件分组，每组可折叠；折叠时显示读数范围。
+            RefreshMetricList(metricList, hw, fg, state);
+            stack.Children.Add(metricList);
+            stack.Children.Add(Hint("按硬件分组 · ⋯ 菜单可编辑、排序和删除 · 图钉 = 悬浮窗精简态显示", 4, 0));
+
             IDisposable preview = null;
             var previewTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(500) };
             previewTimer.Tick += (_, _) =>
             {
-                stats.Text = hw.CatalogAvailable
-                    ? $"已发现 {hw.AllTempSensors.Count} 温度 · {hw.AllFanSensors.Count} 风扇 · {hw.AllControlSensors.Count} 控制"
-                    : "正在加载传感器…";
-                RefreshMetricPreviewValues(metricList, hw, fg);
+                UpdateStats();
+                RefreshMetricPreviewValues(state, hw);
             };
             stack.Loaded += (_, _) => { preview ??= hw.BeginCatalogPreview(); previewTimer.Start(); };
-            stack.Unloaded += (_, _) => { previewTimer.Stop(); preview?.Dispose(); preview = null; addPanel.Children.Clear(); };
-
-            // Card: 刷新设置
-            var setCard = new Border { Background = new SolidColorBrush(Color.FromRgb(34, 32, 50)), CornerRadius = new CornerRadius(6), Padding = new Thickness(12) };
-            var setInner = new StackPanel();
-            setInner.Children.Add(new TextBlock { Text = "刷新设置", Foreground = fg, FontSize = 10, Margin = new Thickness(0, 0, 0, 8) });
-
-            var ivBox = AddSetRow(setInner, "刷新间隔", AppPrefs.GetInt("Temp.IntervalMs", 1000).ToString(), "ms", 70);
-            var warnBox = AddSetRowColored(setInner, Color.FromRgb(255, 140, 60), "高温警告", AppPrefs.GetInt("Temp.WarnC", 80).ToString(), "°C", 50);
-            var critBox = AddSetRowColored(setInner, Color.FromRgb(255, 60, 60), "超高温", AppPrefs.GetInt("Temp.CriticalC", 95).ToString(), "°C", 50);
-            setCard.Child = setInner;
-            stack.Children.Add(setCard);
+            stack.Unloaded += (_, _) => { previewTimer.Stop(); preview?.Dispose(); preview = null; };
 
             var btns = MakeButtons();
             ((Button)btns.Children[0]).Click += async (_, _) =>
@@ -78,8 +93,7 @@ namespace PowerAudioManager
                     !int.TryParse(warnBox.Text, out int w) || w <= 0 ||
                     !int.TryParse(critBox.Text, out int c) || c <= 0)
                 {
-                    MessageBox.Show(dlg, "刷新间隔必须在 500 到 60000 毫秒之间，温度阈值必须为正整数。",
-                        "OneBox 设置", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    OneBoxMessage.Error(dlg, "OneBox 设置", "刷新间隔必须在 500 到 60000 毫秒之间，温度阈值必须为正整数。");
                     return;
                 }
                 if (!TryPersist(dlg,
@@ -98,38 +112,5 @@ namespace PowerAudioManager
 
             return Scroll(stack);
         }
-
-        static TextBox AddSetRow(StackPanel parent, string label, string value, string unit, int width)
-        {
-            var row = new DockPanel { Margin = new Thickness(0, 3, 0, 3), LastChildFill = true };
-            row.Children.Add(new TextBlock { Text = label, Foreground = new SolidColorBrush(Color.FromRgb(190, 188, 220)), FontSize = 11, VerticalAlignment = VerticalAlignment.Center });
-            var box = new TextBox { Text = value, Width = width, MinHeight = 26, FontSize = 11, Padding = new Thickness(6, 0, 6, 0), Background = new SolidColorBrush(Color.FromRgb(20, 18, 28)), Foreground = Brushes.White, BorderBrush = new SolidColorBrush(Color.FromRgb(60, 55, 80)), BorderThickness = new Thickness(1), VerticalContentAlignment = VerticalAlignment.Center };
-            var inputStack = new StackPanel { Orientation = Orientation.Horizontal };
-            inputStack.Children.Add(box);
-            inputStack.Children.Add(new TextBlock { Text = " " + unit, Foreground = new SolidColorBrush(Color.FromRgb(190, 188, 220)), FontSize = 10, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(4, 0, 0, 0) });
-            DockPanel.SetDock(inputStack, Dock.Right);
-            row.Children.Add(inputStack);
-            parent.Children.Add(row);
-            return box;
-        }
-
-        static TextBox AddSetRowColored(StackPanel parent, Color dotColor, string label, string value, string unit, int width)
-        {
-            var row = new DockPanel { Margin = new Thickness(0, 3, 0, 3), LastChildFill = true };
-            var labelPanel = new StackPanel { Orientation = Orientation.Horizontal };
-            labelPanel.Children.Add(new System.Windows.Shapes.Ellipse { Width = 8, Height = 8, Fill = new SolidColorBrush(dotColor), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 4, 0) });
-            labelPanel.Children.Add(new TextBlock { Text = label, Foreground = new SolidColorBrush(Color.FromRgb(190, 188, 220)), FontSize = 11, VerticalAlignment = VerticalAlignment.Center });
-            row.Children.Add(labelPanel);
-            var box = new TextBox { Text = value, Width = width, MinHeight = 26, FontSize = 11, Padding = new Thickness(6, 0, 6, 0), Background = new SolidColorBrush(Color.FromRgb(20, 18, 28)), Foreground = Brushes.White, BorderBrush = new SolidColorBrush(Color.FromRgb(60, 55, 80)), BorderThickness = new Thickness(1), VerticalContentAlignment = VerticalAlignment.Center };
-            var inputStack = new StackPanel { Orientation = Orientation.Horizontal };
-            inputStack.Children.Add(box);
-            inputStack.Children.Add(new TextBlock { Text = " " + unit, Foreground = new SolidColorBrush(Color.FromRgb(190, 188, 220)), FontSize = 10, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(4, 0, 0, 0) });
-            DockPanel.SetDock(inputStack, Dock.Right);
-            row.Children.Add(inputStack);
-            parent.Children.Add(row);
-            return box;
-        }
     }
 }
-
-

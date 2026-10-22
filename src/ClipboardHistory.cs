@@ -289,25 +289,65 @@ namespace PowerAudioManager
         {
             bool atCursor = cursorX != 0 || cursorY != 0;
 
-            var outer = new DockPanel { Margin = new Thickness(12) };
+            var outer = new DockPanel { Margin = new Thickness(10, 0, 10, 0) };
 
-            var header = new TextBlock {
-                Text = "最近复制的内容（左键复制 · 右键删除）",
-                Foreground = Brushes.White, FontSize = 12, Margin = new Thickness(0, 0, 0, 8) };
-            DockPanel.SetDock(header, Dock.Top);
-            outer.Children.Add(header);
+            // Search + type filter.
+            var tools = new DockPanel { LastChildFill = true, Margin = new Thickness(0, 0, 0, 8) };
+            DockPanel.SetDock(tools, Dock.Top);
+            int filter = 0; // 0 全部, 1 文本, 2 图片
+            string query = "";
+            Action render = null;
+            var segmented = UiKit.MakeSegmented(new[] { "全部", "文本", "图片" }, 0, i => { filter = i; render?.Invoke(); }, "类型");
+            segmented.Margin = new Thickness(6, 0, 0, 0);
+            DockPanel.SetDock(segmented, Dock.Right);
+            tools.Children.Add(segmented);
+            var search = UiKit.MakeTextBox("");
+            search.Background = UiKit.FrozenBrush(UiKit.CardColor);
+            search.BorderBrush = UiKit.FrozenBrush(UiKit.CardColor);
+            search.Padding = new Thickness(26, 5, 8, 5);
+            System.Windows.Automation.AutomationProperties.SetName(search, "搜索剪贴板历史");
+            var searchIcon = UiKit.Glyph(UiKit.Glyphs.Search, 13, UiKit.FrozenBrush(UiKit.TextSecondary));
+            searchIcon.HorizontalAlignment = HorizontalAlignment.Left;
+            searchIcon.VerticalAlignment = VerticalAlignment.Center;
+            searchIcon.Margin = new Thickness(9, 0, 0, 0);
+            searchIcon.IsHitTestVisible = false;
+            var searchHint = UiKit.Text("搜索", 12, UiKit.TextTertiary);
+            searchHint.Margin = new Thickness(27, 0, 0, 0);
+            searchHint.IsHitTestVisible = false;
+            var searchHost = new Grid();
+            searchHost.Children.Add(search);
+            searchHost.Children.Add(searchIcon);
+            searchHost.Children.Add(searchHint);
+            search.TextChanged += (s, e) =>
+            {
+                query = search.Text ?? "";
+                searchHint.Visibility = query.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
+                render?.Invoke();
+            };
+            tools.Children.Add(searchHost);
+            outer.Children.Add(tools);
 
-            var clearBtn = new Button {
-                Content = "清空", Width = 56, Height = 24, FontSize = 11, Margin = new Thickness(0, 0, 0, 8) };
-            AppResources.StyleDialogButton(clearBtn, false);
-            DockPanel.SetDock(clearBtn, Dock.Bottom);
-            outer.Children.Add(clearBtn);
+            // Footer: hint + 清空.
+            var footer = new DockPanel { LastChildFill = true, Height = 44 };
+            DockPanel.SetDock(footer, Dock.Bottom);
+            var clearBtn = UiKit.MakeButton("清空", ButtonVariant.Flat);
+            clearBtn.Foreground = UiKit.FrozenBrush(UiKit.DangerColor);
+            clearBtn.Padding = new Thickness(8, 0, 8, 0);
+            clearBtn.Height = 28;
+            DockPanel.SetDock(clearBtn, Dock.Right);
+            footer.Children.Add(clearBtn);
+            footer.Children.Add(UiKit.Text("单击复制 · 右键删除 · ↑↓ Enter 键盘选取", 11, UiKit.TextSecondary));
+            var footerRule = new Border { Height = 1, Background = UiKit.FrozenBrush(UiKit.RaisedColor), Margin = new Thickness(-10, 4, -10, 0) };
+            DockPanel.SetDock(footerRule, Dock.Bottom);
+            outer.Children.Add(footer);
+            outer.Children.Add(footerRule);
 
             var scroller = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
+            scroller.Resources[typeof(System.Windows.Controls.Primitives.ScrollBar)] = ThemeTokens.CreateDarkScrollBarStyle();
             var list = new StackPanel();
             scroller.Content = list;
 
-            var dlg = OneBoxWindow.Create(owner, "剪贴板历史", 360, 420, outer, true);
+            var dlg = OneBoxWindow.Create(owner, "剪贴板历史", 360, 560, outer, true, IconKey.Clipboard);
             // 剪贴板热键触发时将窗口定位到鼠标右下，限制在工作区内，覆盖 OneBoxWindow 的居中定位。
             if (atCursor)
             {
@@ -337,74 +377,106 @@ namespace PowerAudioManager
                 };
             }
 
-            Action render = null;
+            // Keyboard selection over the currently visible cards.
+            var visible = new List<(Button Card, Action Copy)>();
+            int selected = 0;
+            void Highlight()
+            {
+                for (int i = 0; i < visible.Count; i++)
+                {
+                    bool on = i == selected;
+                    visible[i].Card.Background = UiKit.FrozenBrush(on ? UiKit.RaisedColor : UiKit.CardColor);
+                    visible[i].Card.BorderBrush = on ? UiKit.FrozenBrush(UiKit.AccentColor) : Brushes.Transparent;
+                }
+                if (selected >= 0 && selected < visible.Count) visible[selected].Card.BringIntoView();
+            }
+
             render = () =>
             {
                 list.Children.Clear();
+                visible.Clear();
                 var items = ClipboardHistory.GetItems();
-                if (items.Count == 0)
-                {
-                    list.Children.Add(new TextBlock {
-                        Text = "（暂无记录）", Foreground = new SolidColorBrush(Color.FromRgb(190, 188, 220)),
-                        FontSize = 11, Margin = new Thickness(0, 8, 0, 0) });
-                    return;
-                }
                 for (int idx = 0; idx < items.Count; idx++)
                 {
                     var captured = items[idx];
                     int capturedIndex = idx;
-                    Button btn;
+                    if (filter == 1 && captured.IsImage) continue;
+                    if (filter == 2 && !captured.IsImage) continue;
+                    if (query.Length > 0 && (captured.IsImage || captured.Text == null ||
+                        captured.Text.IndexOf(query, StringComparison.OrdinalIgnoreCase) < 0)) continue;
+
+                    var content = new DockPanel { LastChildFill = true };
+                    var del = new Button
+                    {
+                        Content = IconCatalog.CreateElement(IconKey.Close, 12, UiKit.FrozenBrush(UiKit.TextSecondary)),
+                        Width = 24, Height = 24, ToolTip = "删除这条", VerticalAlignment = VerticalAlignment.Top
+                    };
+                    UiKit.ApplyIconButtonStyle(del);
+                    del.MinWidth = 24; del.MinHeight = 24;
+                    System.Windows.Automation.AutomationProperties.SetName(del, "删除这条");
+                    del.Click += (s, e) => { ClipboardHistory.RemoveAt(capturedIndex); render(); e.Handled = true; };
+                    DockPanel.SetDock(del, Dock.Right);
+                    content.Children.Add(del);
+
+                    var texts = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+                    string tooltip;
                     if (captured.IsImage)
                     {
-                        var row = new StackPanel { Orientation = Orientation.Horizontal };
-                        try
+                        var (thumb, pw, ph) = LoadThumbnailWithSize(captured.ImagePath);
+                        var tile = new Border
                         {
-                            var thumb = LoadThumbnail(captured.ImagePath);
-                            if (thumb != null)
-                            {
-                                var img = new System.Windows.Controls.Image {
-                                    Source = thumb,
-                                    Width = 48, Height = 32, Stretch = Stretch.UniformToFill,
-                                    Margin = new Thickness(0, 0, 8, 0) };
-                                row.Children.Add(img);
-                            }
-                        }
-                        catch { }
-                        row.Children.Add(new TextBlock {
-                            Text = "[图片]",
-                            Foreground = new SolidColorBrush(Color.FromRgb(190, 188, 220)),
-                            FontSize = 11, VerticalAlignment = VerticalAlignment.Center });
-                        btn = new Button {
-                            Content = row,
-                            HorizontalContentAlignment = HorizontalAlignment.Left,
-                            Foreground = new SolidColorBrush(Color.FromRgb(220, 220, 235)),
-                            Background = new SolidColorBrush(Color.FromRgb(42, 39, 60)),
-                            BorderBrush = new SolidColorBrush(Color.FromRgb(80, 75, 120)),
-                            Padding = new Thickness(8, 4, 8, 4),
-                            Margin = new Thickness(0, 0, 0, 4),
-                            FontSize = 11,
-                            Cursor = Cursors.Hand,
-                            ToolTip = "左键复制 · 右键删除"
+                            Width = 72, Height = 44, CornerRadius = new CornerRadius(6),
+                            Margin = new Thickness(0, 0, 10, 0),
+                            Background = thumb != null
+                                ? new ImageBrush(thumb) { Stretch = Stretch.UniformToFill }
+                                : (Brush)UiKit.FrozenBrush(UiKit.RaisedColor)
                         };
+                        if (pw > 0)
+                        {
+                            tile.Child = new Border
+                            {
+                                HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Bottom,
+                                Margin = new Thickness(3), Padding = new Thickness(3, 0, 3, 0), CornerRadius = new CornerRadius(3),
+                                Background = UiKit.FrozenBrush(Color.FromArgb(115, 0, 0, 0)),
+                                Child = new TextBlock { Text = pw + "×" + ph, FontSize = 9, Foreground = UiKit.FrozenBrush(UiKit.TextPrimary) }
+                            };
+                        }
+                        DockPanel.SetDock(tile, Dock.Left);
+                        content.Children.Add(tile);
+                        texts.Children.Add(UiKit.Text("图片", 12, UiKit.TextPrimary));
+                        texts.Children.Add(Meta(ImageTimeLabel(captured.ImagePath) + "PNG"));
+                        tooltip = "单击复制 · 右键删除";
                     }
                     else
                     {
                         string preview = captured.Text.Replace("\r", " ").Replace("\n", " ");
-                        if (preview.Length > 80) preview = preview.Substring(0, 80) + "…";
-                        btn = new Button {
-                            Content = preview,
-                            HorizontalContentAlignment = HorizontalAlignment.Left,
-                            Foreground = new SolidColorBrush(Color.FromRgb(220, 220, 235)),
-                            Background = new SolidColorBrush(Color.FromRgb(42, 39, 60)),
-                            BorderBrush = new SolidColorBrush(Color.FromRgb(80, 75, 120)),
-                            Padding = new Thickness(8, 6, 8, 6),
-                            Margin = new Thickness(0, 0, 0, 4),
-                            FontSize = 11,
-                            Cursor = Cursors.Hand,
-                            ToolTip = captured.Text.Length > 200 ? captured.Text.Substring(0, 200) + "…" : captured.Text
-                        };
+                        if (preview.Length > 160) preview = preview.Substring(0, 160) + "…";
+                        texts.Children.Add(new TextBlock
+                        {
+                            Text = preview, FontSize = 12, LineHeight = 17, MaxHeight = 34,
+                            Foreground = UiKit.FrozenBrush(UiKit.TextPrimary),
+                            TextWrapping = TextWrapping.Wrap, TextTrimming = TextTrimming.CharacterEllipsis
+                        });
+                        texts.Children.Add(Meta(captured.Text.Length + " 字"));
+                        tooltip = captured.Text.Length > 200 ? captured.Text.Substring(0, 200) + "…" : captured.Text;
                     }
-                    btn.Click += (s, e) => {
+                    content.Children.Add(texts);
+
+                    var card = new Button
+                    {
+                        Content = content,
+                        HorizontalContentAlignment = HorizontalAlignment.Stretch,
+                        Padding = new Thickness(10, 8, 6, 8),
+                        Margin = new Thickness(0, 0, 0, 4),
+                        Cursor = Cursors.Hand,
+                        ToolTip = tooltip
+                    };
+                    UiKit.ApplyFlatStyle(card);
+                    card.Background = UiKit.FrozenBrush(UiKit.CardColor);
+                    card.BorderBrush = Brushes.Transparent;
+                    card.Foreground = UiKit.FrozenBrush(UiKit.TextPrimary);
+                    Action copy = () =>
+                    {
                         try
                         {
                             if (captured.IsImage) CopyImageBack(captured.ImagePath);
@@ -413,16 +485,35 @@ namespace PowerAudioManager
                         catch { }
                         dlg.Close();
                     };
+                    card.Click += (s, e) => copy();
                     // 右键：删除此条（不关闭窗口）
-                    btn.MouseRightButtonUp += (s, e) => {
+                    card.MouseRightButtonUp += (s, e) => {
                         ClipboardHistory.RemoveAt(capturedIndex);
                         render();
                         e.Handled = true;
                     };
-                    list.Children.Add(btn);
+                    visible.Add((card, copy));
+                    list.Children.Add(card);
                 }
+                if (visible.Count == 0)
+                {
+                    var empty = UiKit.Text(items.Count == 0 ? "（暂无记录）" : "没有匹配的记录", 12, UiKit.TextSecondary);
+                    empty.HorizontalAlignment = HorizontalAlignment.Center;
+                    empty.Margin = new Thickness(0, 24, 0, 0);
+                    list.Children.Add(empty);
+                }
+                selected = Math.Max(0, Math.Min(selected, visible.Count - 1));
+                Highlight();
             };
             render();
+
+            dlg.PreviewKeyDown += (s, e) =>
+            {
+                if (visible.Count == 0) return;
+                if (e.Key == Key.Down) { selected = Math.Min(selected + 1, visible.Count - 1); Highlight(); e.Handled = true; }
+                else if (e.Key == Key.Up) { selected = Math.Max(selected - 1, 0); Highlight(); e.Handled = true; }
+                else if (e.Key == Key.Enter && selected >= 0 && selected < visible.Count) { e.Handled = true; visible[selected].Copy(); }
+            };
 
             clearBtn.Click += async (s, e) =>
             {
@@ -434,25 +525,65 @@ namespace PowerAudioManager
 
             outer.Children.Add(scroller);
 
-            dlg.Loaded += (s, e) => render();
+            dlg.Loaded += (s, e) => { render(); search.Focus(); };
             dlg.ShowDialog();
         }
 
-        static BitmapSource LoadThumbnail(string path)
+        static TextBlock Meta(string text)
+        {
+            var t = UiKit.Text(text, 11, UiKit.TextTertiary);
+            t.Margin = new Thickness(0, 3, 0, 0);
+            return t;
+        }
+
+        // Image items are stored as clip_yyyyMMdd_HHmmss_fff.bin; derive a
+        // short relative time from the name without touching storage.
+        static string ImageTimeLabel(string path)
+        {
+            try
+            {
+                string name = Path.GetFileNameWithoutExtension(path) ?? "";
+                if (!name.StartsWith("clip_", StringComparison.Ordinal) || name.Length < 20) return "";
+                if (!DateTime.TryParseExact(name.Substring(5, 15), "yyyyMMdd_HHmmss",
+                    System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var when)) return "";
+                var age = DateTime.Now - when;
+                if (age.TotalMinutes < 1) return "刚刚 · ";
+                if (age.TotalHours < 1) return (int)age.TotalMinutes + " 分钟前 · ";
+                if (age.TotalDays < 1) return (int)age.TotalHours + " 小时前 · ";
+                if (age.TotalDays < 2) return "昨天 · ";
+                return when.ToString("M月d日") + " · ";
+            }
+            catch { return ""; }
+        }
+
+        // Thumbnail decoded at list size plus the original pixel size, read
+        // from the image header so the full bitmap is never kept.
+        static (BitmapSource Thumb, int Width, int Height) LoadThumbnailWithSize(string path)
         {
             try
             {
                 var bytes = ClipboardHistory.LoadImageBytes(path);
-                if (bytes == null) return null;
+                if (bytes == null) return (null, 0, 0);
+                int w = 0, h = 0;
+                try
+                {
+                    using (var header = new MemoryStream(bytes))
+                    {
+                        var decoder = BitmapDecoder.Create(header, BitmapCreateOptions.DelayCreation, BitmapCacheOption.None);
+                        if (decoder.Frames.Count > 0) { w = decoder.Frames[0].PixelWidth; h = decoder.Frames[0].PixelHeight; }
+                    }
+                }
+                catch { }
                 var img = new BitmapImage();
                 img.BeginInit();
                 img.CacheOption = BitmapCacheOption.OnLoad;
+                img.DecodePixelWidth = 144;
                 img.StreamSource = new MemoryStream(bytes);
                 img.EndInit();
                 img.Freeze();
-                return img;
+                return (img, w, h);
             }
-            catch { return null; }
+            catch { return (null, 0, 0); }
         }
 
         static void CopyImageBack(string path)

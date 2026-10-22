@@ -2,16 +2,17 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Markup;
-using System.Windows.Documents;
 using System.Windows.Media;
 using System.Windows.Shapes;
 
 namespace PowerAudioManager
 {
     // 设置对话框：侧栏 + 9 个页面。各页面构建逻辑按文件拆分（partial）。
+    // 方向 A（紫影精修）：侧栏圆点选中态、页面标题 + 分组卡片、底部固定操作栏。
     internal static partial class SettingsDialog
     {
         internal const int OneMicTabIndex = 7;
@@ -23,8 +24,8 @@ namespace PowerAudioManager
 
         public static void Show(Window owner, int openTab)
         {
-            var fg = new SolidColorBrush(Color.FromRgb(190, 188, 220));
-            var lightText = new SolidColorBrush(Color.FromRgb(220, 218, 245));
+            var fg = UiKit.FrozenBrush(UiKit.TextSecondary);
+            var lightText = UiKit.FrozenBrush(UiKit.TextPrimary);
             List<UIElement> tabContents = null;
             ContentControl contentHost = null;
             Action<int> selectTab = null;
@@ -32,31 +33,33 @@ namespace PowerAudioManager
             // ---- 侧栏 ----
             var sideBar = new ListBox
             {
-                Width = 118,
-                Background = new SolidColorBrush(Color.FromRgb(24, 22, 36)),
-                BorderBrush = new SolidColorBrush(Color.FromRgb(40, 36, 56)),
-                BorderThickness = new Thickness(0, 0, 1, 0),
+                Background = Brushes.Transparent,
+                BorderThickness = new Thickness(0),
                 Margin = new Thickness(0),
-                Padding = new Thickness(0, 10, 0, 0)
+                Padding = new Thickness(0, 4, 0, 0)
             };
             ScrollViewer.SetHorizontalScrollBarVisibility(sideBar, ScrollBarVisibility.Disabled);
             sideBar.Resources[typeof(ScrollBar)] = ThemeTokens.CreateDarkScrollBarStyle();
             sideBar.ItemContainerStyle = SidebarItemStyle();
             var aboutBar = new ListBox
             {
-                Width = 118,
-                Background = new SolidColorBrush(Color.FromRgb(24, 22, 36)),
-                BorderBrush = new SolidColorBrush(Color.FromRgb(40, 36, 56)),
-                BorderThickness = new Thickness(0, 1, 1, 0),
-                Padding = new Thickness(0, 3, 0, 8)
+                Background = Brushes.Transparent,
+                BorderThickness = new Thickness(0),
+                Padding = new Thickness(0, 4, 0, 0)
             };
             aboutBar.ItemContainerStyle = SidebarItemStyle();
             void UpdateSelectionColors(ListBox list)
             {
                 foreach (ListBoxItem item in list.Items)
                 {
-                    var label = (item.Content as StackPanel)?.Children[1] as TextBlock;
-                    if (label != null) label.Foreground = item.IsSelected ? Brushes.White : new SolidColorBrush(Color.FromRgb(180, 177, 210));
+                    if (item.Content is not StackPanel row || row.Children.Count < 2) continue;
+                    if (row.Children[0] is Ellipse dot)
+                        dot.Fill = item.IsSelected ? UiKit.FrozenBrush(UiKit.AccentColor) : Brushes.Transparent;
+                    if (row.Children[1] is TextBlock label)
+                    {
+                        label.Foreground = UiKit.FrozenBrush(item.IsSelected ? UiKit.TextPrimary : UiKit.TextSecondary);
+                        label.FontWeight = item.IsSelected ? FontWeights.SemiBold : FontWeights.Normal;
+                    }
                 }
             }
             sideBar.SelectionChanged += (s, e) =>
@@ -76,15 +79,15 @@ namespace PowerAudioManager
 
             contentHost = new ContentControl
             {
-                Background = new SolidColorBrush(Color.FromRgb(28, 26, 40)),
+                Background = Brushes.Transparent,
                 HorizontalContentAlignment = HorizontalAlignment.Stretch,
                 VerticalContentAlignment = VerticalAlignment.Stretch
             };
 
-            var layout = new Grid { UseLayoutRounding = true, SnapsToDevicePixels = true };
+            var layout = new Grid { UseLayoutRounding = true, SnapsToDevicePixels = true, Background = UiKit.FrozenBrush(UiKit.BgColor) };
             layout.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             layout.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            var sideColumn = new DockPanel { Width = 118 };
+            var sideColumn = new DockPanel { Width = 140, Margin = new Thickness(8, 0, 0, 8) };
             DockPanel.SetDock(aboutBar, Dock.Bottom);
             sideColumn.Children.Add(aboutBar);
             sideColumn.Children.Add(sideBar);
@@ -93,12 +96,12 @@ namespace PowerAudioManager
             layout.Children.Add(sideColumn);
             layout.Children.Add(contentHost);
 
-            var dlg = OneBoxWindow.Create(owner, "设置", 520, 570, layout, true);
+            var dlg = OneBoxWindow.Create(owner, "OneBox 设置", 560, 700, layout, true);
             dlg.MinWidth = 480;
             dlg.MinHeight = 400;
             // 内容背景不能盖住窗口外壳的底部圆角。
             layout.SizeChanged += (_, _) => layout.Clip = new RectangleGeometry(
-                new Rect(0, 0, layout.ActualWidth, layout.ActualHeight), 8, 8);
+                new Rect(0, 0, layout.ActualWidth, layout.ActualHeight), 12, 12);
 
             tabContents = new List<UIElement>
             {
@@ -110,7 +113,7 @@ namespace PowerAudioManager
                 BuildClipboardTab(owner, dlg, fg),
                 null, // Sensor catalog and its controls exist only while this page is active.
                 BuildAudioStudioTab(owner, dlg, fg),
-                BuildAboutTab(dlg, fg),
+                BuildAboutTab(owner, dlg, fg),
             };
             selectTab = index =>
             {
@@ -120,15 +123,9 @@ namespace PowerAudioManager
                 contentHost.Content = tabContents[index];
             };
 
-            sideBar.Items.Add(SidebarItem(IconKey.Settings, "常规"));
-            sideBar.Items.Add(SidebarItem(IconKey.Modules, "板块"));
-            sideBar.Items.Add(SidebarItem(IconKey.MemoryClean, "内存"));
-            sideBar.Items.Add(SidebarItem(IconKey.Translate, "翻译"));
-            sideBar.Items.Add(SidebarItem(IconKey.Capture, "截图"));
-            sideBar.Items.Add(SidebarItem(IconKey.Clipboard, "剪贴板"));
-            sideBar.Items.Add(SidebarItem(IconKey.Performance, "性能"));
-            sideBar.Items.Add(SidebarItem(IconKey.OneMic, "OneMic"));
-            aboutBar.Items.Add(SidebarItem(IconKey.Brand, "关于"));
+            foreach (var name in new[] { "常规", "板块", "内存", "翻译", "截图", "剪贴板", "性能", "OneMic" })
+                sideBar.Items.Add(SidebarItem(name));
+            aboutBar.Items.Add(SidebarItem("关于"));
 
             if (openTab == AboutTabIndex)
             {
@@ -143,16 +140,20 @@ namespace PowerAudioManager
             dlg.ShowDialog();
         }
 
-        static ListBoxItem SidebarItem(IconKey icon, string text)
+        static ListBoxItem SidebarItem(string text)
         {
             var row = new StackPanel { Orientation = Orientation.Horizontal };
-            row.Children.Add(IconCatalog.CreateElement(icon, 16, UiKit.FrozenBrush(Color.FromRgb(180, 177, 210))));
-            row.Children.Add(new TextBlock { Text = text, FontSize = 13, Foreground = new SolidColorBrush(Color.FromRgb(190, 188, 220)), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0, 0, 0) });
-            return new ListBoxItem { Content = row, Height = 38, Padding = new Thickness(10, 0, 10, 0) };
+            row.Children.Add(new Ellipse { Width = 6, Height = 6, Fill = Brushes.Transparent, Margin = new Thickness(0, 0, 8, 0), VerticalAlignment = VerticalAlignment.Center });
+            row.Children.Add(new TextBlock { Text = text, FontSize = 12, Foreground = UiKit.FrozenBrush(UiKit.TextSecondary), VerticalAlignment = VerticalAlignment.Center });
+            var item = new ListBoxItem { Content = row, Height = 36, Padding = new Thickness(10, 0, 10, 0) };
+            AutomationProperties.SetName(item, text);
+            return item;
         }
 
+        static Style _sidebarItemStyle;
         static Style SidebarItemStyle()
         {
+            if (_sidebarItemStyle != null) return _sidebarItemStyle;
             var style = new Style(typeof(ListBoxItem));
             style.Setters.Add(new Setter(ListBoxItem.BackgroundProperty, Brushes.Transparent));
             style.Setters.Add(new Setter(ListBoxItem.BorderBrushProperty, Brushes.Transparent));
@@ -160,13 +161,13 @@ namespace PowerAudioManager
             style.Setters.Add(new Setter(ListBoxItem.PaddingProperty, new Thickness(0)));
             style.Setters.Add(new Setter(ListBoxItem.VerticalContentAlignmentProperty, VerticalAlignment.Center));
             style.Setters.Add(new Setter(ListBoxItem.CursorProperty, System.Windows.Input.Cursors.Hand));
-            style.Setters.Add(new Setter(ListBoxItem.MarginProperty, new Thickness(6, 2, 6, 2)));
+            style.Setters.Add(new Setter(ListBoxItem.MarginProperty, new Thickness(0, 1, 0, 1)));
 
             style.Setters.Add(new Setter(Control.HorizontalContentAlignmentProperty, HorizontalAlignment.Stretch));
             style.Setters.Add(new Setter(Control.FocusVisualStyleProperty, null));
             var template = new ControlTemplate(typeof(ListBoxItem));
             var chrome = new FrameworkElementFactory(typeof(Border));
-            chrome.SetValue(Border.CornerRadiusProperty, new CornerRadius(6));
+            chrome.SetValue(Border.CornerRadiusProperty, new CornerRadius(8));
             chrome.SetValue(Border.BackgroundProperty, new TemplateBindingExtension(Control.BackgroundProperty));
             chrome.SetValue(Border.BorderBrushProperty, new TemplateBindingExtension(Control.BorderBrushProperty));
             chrome.SetValue(Border.BorderThicknessProperty, new TemplateBindingExtension(Control.BorderThicknessProperty));
@@ -178,30 +179,207 @@ namespace PowerAudioManager
             template.VisualTree = chrome;
             style.Setters.Add(new Setter(Control.TemplateProperty, template));
 
-            // 悬停先于选中，保持当前页面的紫色选中态。
+            // 悬停先于选中，保持当前页面的选中底色。
             var hover = new Trigger { Property = UIElement.IsMouseOverProperty, Value = true };
-            hover.Setters.Add(new Setter(Control.BackgroundProperty, UiKit.FrozenBrush(Color.FromRgb(45, 42, 62))));
+            hover.Setters.Add(new Setter(Control.BackgroundProperty, UiKit.FrozenBrush(UiKit.CardColor)));
             style.Triggers.Add(hover);
 
             // 固定边框厚度，切换选中项时文字不横向跳动。
             var sel = new Trigger { Property = ListBoxItem.IsSelectedProperty, Value = true };
-            sel.Setters.Add(new Setter(ListBoxItem.BackgroundProperty, new SolidColorBrush(Color.FromRgb(60, 52, 100))));
-            sel.Setters.Add(new Setter(ListBoxItem.BorderBrushProperty, new SolidColorBrush(Color.FromRgb(142, 140, 216))));
-
+            sel.Setters.Add(new Setter(ListBoxItem.BackgroundProperty, UiKit.FrozenBrush(UiKit.RaisedColor)));
             style.Triggers.Add(sel);
 
             var focus = new Trigger { Property = UIElement.IsKeyboardFocusWithinProperty, Value = true };
             focus.Setters.Add(new Setter(Control.BorderBrushProperty, UiKit.FrozenBrush(ThemeTokens.Accent)));
             style.Triggers.Add(focus);
 
+            style.Seal();
+            _sidebarItemStyle = style;
             return style;
+        }
+
+        // ---- page scaffolding ------------------------------------------------
+
+        // Page root: 18px title (+ optional trailing status) above the groups.
+        static StackPanel NewPage(string title, UIElement trailing = null)
+        {
+            var stack = new StackPanel { Margin = new Thickness(8, 4, 16, 12) };
+            var header = new DockPanel { LastChildFill = true, Margin = new Thickness(0, 0, 0, 14) };
+            if (trailing != null)
+            {
+                if (trailing is FrameworkElement fe) fe.VerticalAlignment = VerticalAlignment.Center;
+                DockPanel.SetDock(trailing, Dock.Right);
+                header.Children.Add(trailing);
+            }
+            header.Children.Add(new TextBlock
+            {
+                Text = title, FontSize = 18, FontWeight = FontWeights.SemiBold,
+                Foreground = UiKit.FrozenBrush(UiKit.TextPrimary), VerticalAlignment = VerticalAlignment.Center
+            });
+            stack.Children.Add(header);
+            return stack;
+        }
+
+        // Muted wrapped hint text below a group.
+        static TextBlock Hint(string text, double top = 0, double bottom = 14)
+        {
+            return new TextBlock
+            {
+                Text = text, FontSize = 11, TextWrapping = TextWrapping.Wrap, LineHeight = 16,
+                Foreground = UiKit.FrozenBrush(UiKit.TextSecondary),
+                Margin = new Thickness(4, top, 4, bottom)
+            };
+        }
+
+        // Inline sentence: strings become text runs, elements are spaced 6px.
+        static StackPanel Sentence(params object[] parts)
+        {
+            var row = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+            foreach (var part in parts)
+            {
+                if (part is string s)
+                    row.Children.Add(new TextBlock { Text = s, FontSize = 12, Foreground = UiKit.FrozenBrush(UiKit.TextPrimary), VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) });
+                else if (part is FrameworkElement fe)
+                {
+                    fe.Margin = new Thickness(0, 0, 6, 0);
+                    fe.VerticalAlignment = VerticalAlignment.Center;
+                    row.Children.Add(fe);
+                }
+            }
+            return row;
+        }
+
+        // A full-width row inside a card hosting a free-form sentence.
+        static Border SentenceRow(UIElement content, double minHeight = 44)
+        {
+            return new Border { MinHeight = minHeight, Padding = new Thickness(12, 6, 12, 6), Child = content };
+        }
+
+        // Compact numeric box used inside sentences.
+        static TextBox NumBox(string text, double width = 48)
+        {
+            var box = UiKit.MakeTextBox(text, width);
+            box.Padding = new Thickness(4, 4, 4, 4);
+            box.TextAlignment = TextAlignment.Center;
+            box.HorizontalContentAlignment = HorizontalAlignment.Center;
+            box.MinHeight = 28;
+            return box;
+        }
+
+        // On/off control used as the right side of a SettingsRow.
+        static CheckBox Switch(string accessibleName, bool isOn)
+        {
+            var cb = UiKit.MakeSwitch(null, isOn);
+            AutomationProperties.SetName(cb, accessibleName);
+            return cb;
+        }
+
+        // Dark checkbox for multi-select lists (memory regions, toggles inside sentences).
+        static Style _checkStyle;
+        static Style DarkCheckStyle()
+        {
+            if (_checkStyle != null) return _checkStyle;
+            const string xaml = @"
+<Style xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'
+       xmlns:x='http://schemas.microsoft.com/winfx/2006/xaml'
+       TargetType='{x:Type CheckBox}'>
+  <Setter Property='Foreground' Value='#F2F1FA'/>
+  <Setter Property='FontSize' Value='12'/>
+  <Setter Property='Cursor' Value='Hand'/>
+  <Setter Property='FocusVisualStyle' Value='{x:Null}'/>
+  <Setter Property='Template'>
+    <Setter.Value>
+      <ControlTemplate TargetType='{x:Type CheckBox}'>
+        <Grid Background='Transparent'>
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width='Auto'/>
+            <ColumnDefinition Width='*'/>
+          </Grid.ColumnDefinitions>
+          <Border Name='Box' Width='16' Height='16' CornerRadius='4' BorderThickness='1'
+                  BorderBrush='#5A5680' Background='Transparent' VerticalAlignment='Top' Margin='0,1,0,0'>
+            <Path Name='Mark' Data='M3.5,8 L6.5,11 L12.5,5' Stroke='#17151F' StrokeThickness='2'
+                  StrokeStartLineCap='Round' StrokeEndLineCap='Round' StrokeLineJoin='Round' Visibility='Collapsed'/>
+          </Border>
+          <ContentPresenter Grid.Column='1' Margin='8,0,0,0' VerticalAlignment='Center' RecognizesAccessKey='True'/>
+        </Grid>
+        <ControlTemplate.Triggers>
+          <Trigger Property='IsChecked' Value='True'>
+            <Setter TargetName='Box' Property='Background' Value='#8E8CD8'/>
+            <Setter TargetName='Box' Property='BorderBrush' Value='#8E8CD8'/>
+            <Setter TargetName='Mark' Property='Visibility' Value='Visible'/>
+          </Trigger>
+          <Trigger Property='IsMouseOver' Value='True'>
+            <Setter TargetName='Box' Property='BorderBrush' Value='#C9C7F7'/>
+          </Trigger>
+          <Trigger Property='IsKeyboardFocused' Value='True'>
+            <Setter TargetName='Box' Property='BorderBrush' Value='#C9C7F7'/>
+          </Trigger>
+          <Trigger Property='IsEnabled' Value='False'>
+            <Setter Property='Opacity' Value='0.45'/>
+          </Trigger>
+        </ControlTemplate.Triggers>
+      </ControlTemplate>
+    </Setter.Value>
+  </Setter>
+</Style>";
+            _checkStyle = (Style)XamlReader.Parse(xaml);
+            _checkStyle.Seal();
+            return _checkStyle;
+        }
+
+        static CheckBox DarkCheck(object content, bool isChecked)
+        {
+            return new CheckBox { Content = content, IsChecked = isChecked, Style = DarkCheckStyle(), VerticalAlignment = VerticalAlignment.Center };
+        }
+
+        // Collapsible card section: header row with chevron + title + summary.
+        static StackPanel CollapsibleGroup(string title, string summary, UIElement body, bool expanded)
+        {
+            var outer = new StackPanel();
+            var chevron = IconCatalog.CreateElement(expanded ? IconKey.ChevronDown : IconKey.ChevronRight, 12, UiKit.FrozenBrush(UiKit.TextSecondary));
+            var titleText = UiKit.Text(title, 12, UiKit.TextPrimary);
+            var summaryText = UiKit.Text(summary ?? "", 11, UiKit.TextSecondary);
+            var head = new DockPanel { LastChildFill = true };
+            DockPanel.SetDock(chevron, Dock.Right);
+            chevron.Margin = new Thickness(8, 0, 0, 0);
+            head.Children.Add(chevron);
+            var texts = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+            texts.Children.Add(titleText);
+            if (!string.IsNullOrEmpty(summary)) { summaryText.Margin = new Thickness(0, 2, 0, 0); texts.Children.Add(summaryText); }
+            head.Children.Add(texts);
+            var toggle = new Button { Content = head, HorizontalContentAlignment = HorizontalAlignment.Stretch, MinHeight = 48, Padding = new Thickness(12, 6, 12, 6) };
+            UiKit.ApplyFlatStyle(toggle);
+            toggle.Background = Brushes.Transparent;
+            AutomationProperties.SetName(toggle, title);
+            var bodyHost = new Border { Child = body, Visibility = expanded ? Visibility.Visible : Visibility.Collapsed, Padding = new Thickness(0, 0, 0, 6) };
+            toggle.Click += (_, _) =>
+            {
+                bool open = bodyHost.Visibility != Visibility.Visible;
+                bodyHost.Visibility = open ? Visibility.Visible : Visibility.Collapsed;
+                head.Children.Remove(chevron);
+                chevron = IconCatalog.CreateElement(open ? IconKey.ChevronDown : IconKey.ChevronRight, 12, UiKit.FrozenBrush(UiKit.TextSecondary));
+                chevron.Margin = new Thickness(8, 0, 0, 0);
+                DockPanel.SetDock(chevron, Dock.Right);
+                head.Children.Insert(0, chevron);
+            };
+            outer.Children.Add(toggle);
+            outer.Children.Add(bodyHost);
+            return outer;
         }
 
         static StackPanel MakeButtons()
         {
-            var btns = new StackPanel { Tag = "SettingsActions", Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 18, 0, 0) };
-            var ok = new Button { Content = "确定", Width = 72, Height = 28, FontSize = 12, Margin = new Thickness(0, 0, 8, 0) };
-            var cancel = new Button { Content = "取消", Width = 72, Height = 28, FontSize = 12 };
+            // Visual order is 取消 · 确定 (primary on the far right).  The panel
+            // flows right-to-left so callers keep Children[0] = 确定 and
+            // Children[1] = 取消, the contract every page relies on.
+            var btns = new StackPanel
+            {
+                Tag = "SettingsActions", Orientation = Orientation.Horizontal,
+                HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center,
+                FlowDirection = FlowDirection.RightToLeft, Margin = new Thickness(0, 18, 0, 0)
+            };
+            var ok = new Button { Content = "确定", Width = 80, Height = 32, FlowDirection = FlowDirection.LeftToRight };
+            var cancel = new Button { Content = "取消", Width = 80, Height = 32, FlowDirection = FlowDirection.LeftToRight, Margin = new Thickness(8, 0, 0, 0) };
             AppResources.StyleDialogButton(ok, true);
             AppResources.StyleDialogButton(cancel, false);
             btns.Children.Add(ok);
@@ -218,8 +396,7 @@ namespace PowerAudioManager
             foreach (var write in writes)
             {
                 if (write != null && write()) continue;
-                MessageBox.Show(dlg, "设置保存失败，当前运行状态未应用。请检查用户注册表权限后重试。",
-                    "OneBox 设置", MessageBoxButton.OK, MessageBoxImage.Error);
+                OneBoxMessage.Error(dlg, "设置保存失败", "当前运行状态未应用。请检查用户注册表权限后重试。");
                 return false;
             }
             return true;
@@ -227,33 +404,38 @@ namespace PowerAudioManager
 
         static CheckBox MakeCb(string label, string key)
         {
-            return new CheckBox
-            {
-                Content = label, Foreground = Brushes.White, FontSize = 12,
-                Margin = new Thickness(0, 6, 0, 0),
-                IsChecked = MainWindow.ModuleVisible(key)
-            };
+            var cb = UiKit.MakeSwitch(label, MainWindow.ModuleVisible(key));
+            cb.Margin = new Thickness(0);
+            cb.MinHeight = 40;
+            cb.Padding = new Thickness(0);
+            AutomationProperties.SetName(cb, label);
+            return cb;
         }
 
-        static CheckBox MakeAreaCb(string label, string tip, string prefKey, bool defChecked, SolidColorBrush fg, bool enabled)
+        // Memory region row: checkbox + name (+ risk tag) + description.
+        static CheckBox MakeAreaCb(string label, string tip, string prefKey, bool defChecked, SolidColorBrush fg, bool enabled, bool risky = false)
         {
-            var cb = new CheckBox
+            var title = new StackPanel { Orientation = Orientation.Horizontal };
+            title.Children.Add(new TextBlock { Text = label, FontSize = 12, Foreground = UiKit.FrozenBrush(UiKit.TextPrimary) });
+            if (risky) title.Children.Add(UiKit.Tag("可能卡顿", UiKit.WarnColor, UiKit.WarnSurface));
+            var content = new StackPanel();
+            content.Children.Add(title);
+            content.Children.Add(new TextBlock
             {
-                Content = label, Foreground = fg, FontSize = 12,
-                Margin = new Thickness(0, 4, 0, 0),
-                IsChecked = AppPrefs.GetBool(prefKey, defChecked),
-                IsEnabled = enabled, ToolTip = tip
-            };
-            ToolTipService.SetInitialShowDelay(cb, 250);
-            ToolTipService.SetShowDuration(cb, 8000);
-            ToolTipService.SetShowOnDisabled(cb, true);
-            cb.IsHitTestVisible = true;
+                Text = tip, FontSize = 11, LineHeight = 15, TextWrapping = TextWrapping.Wrap,
+                Foreground = UiKit.FrozenBrush(UiKit.TextSecondary), Margin = new Thickness(0, 2, 0, 0)
+            });
+            var cb = DarkCheck(content, AppPrefs.GetBool(prefKey, defChecked));
+            cb.IsEnabled = enabled;
+            cb.Margin = new Thickness(12, 8, 12, 8);
+            cb.VerticalAlignment = VerticalAlignment.Top;
+            AutomationProperties.SetName(cb, label);
             return cb;
         }
 
         static TextBox MakeBox()
         {
-            return new TextBox { FontSize = 12, Padding = new Thickness(8, 6, 8, 6), Background = new SolidColorBrush(Color.FromRgb(42, 39, 60)), Foreground = Brushes.White, BorderBrush = new SolidColorBrush(Color.FromRgb(80, 75, 120)), BorderThickness = new Thickness(1) };
+            return UiKit.MakeTextBox();
         }
 
         static FrameworkElement Scroll(StackPanel stack)
@@ -272,9 +454,10 @@ namespace PowerAudioManager
             actions.Margin = new Thickness(0);
             var footer = new Border
             {
-                Background = UiKit.FrozenBrush(ThemeTokens.TitleSurface),
-                BorderBrush = UiKit.FrozenBrush(Color.FromRgb(50, 46, 68)),
-                BorderThickness = new Thickness(0, 1, 0, 0), Padding = new Thickness(16, 10, 16, 10),
+                Background = UiKit.FrozenBrush(UiKit.BgColor),
+                BorderBrush = UiKit.FrozenBrush(UiKit.RaisedColor),
+                BorderThickness = new Thickness(0, 1, 0, 0), Padding = new Thickness(16, 0, 16, 0),
+                Height = 56,
                 Child = actions
             };
             var page = new Grid();
@@ -290,58 +473,51 @@ namespace PowerAudioManager
         {
             cb.Checked += (s, e) =>
             {
-                var rc = MessageBox.Show(dlg, message, "提示", MessageBoxButton.OKCancel, MessageBoxImage.Warning);
-                if (rc != MessageBoxResult.OK) cb.IsChecked = false;
+                if (!OneBoxMessage.Confirm(dlg, "提示", message, "仍然启用", danger: true)) cb.IsChecked = false;
             };
         }
 
-        static void ShowTextDialog(Window owner, string title, string text)
-        {
-            var dlg = new Window
-            {
-                Title = title, Width = 540, Height = 440,
-                Background = new SolidColorBrush(Color.FromRgb(28, 26, 40)),
-                WindowStartupLocation = WindowStartupLocation.CenterOwner,
-                Owner = owner, ShowInTaskbar = false
-            };
-            var dock = new DockPanel { Margin = new Thickness(12) };
-            var ok = new Button { Content = "关闭", Height = 28, Width = 88, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 8, 0, 0) };
-            AppResources.StyleDialogButton(ok, false);
-            ok.Click += (_, _) => dlg.Close();
-            DockPanel.SetDock(ok, Dock.Bottom);
-            dock.Children.Add(ok);
-            var tb = new TextBox
-            {
-                IsReadOnly = true, TextWrapping = TextWrapping.Wrap, AcceptsReturn = true,
-                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-                Background = new SolidColorBrush(Color.FromRgb(20, 18, 28)),
-                Foreground = Brushes.White, BorderBrush = new SolidColorBrush(Color.FromRgb(60, 55, 80)),
-                FontSize = 12, Text = text
-            };
-            dock.Children.Add(tb);
-            dlg.Content = dock;
-            dlg.ShowDialog();
-        }
-        // 热键"标签 + 设置/清除"行。捕获后立即测试注册占用；占用时保留按键值并标注"（被占用）"+ 弹提示。
+        // 热键"快捷键芯片 + 修改/设置 + 清除"行。捕获后立即测试注册占用；占用时保留按键值并标注"（被占用）"+ 弹提示。
         // testOccupancy=false 时只捕获不测试（如 Game Bar 热键，注册的是系统组合）。
         static HotkeyRow MakeHotkeyRow(Window owner, Window dlg, int current, SolidColorBrush fg,
-            string emptyText = "（未设置）", int bottomMargin = 4,
+            string emptyText = "未设置", int bottomMargin = 4,
             bool testOccupancy = true,
             string occupiedMessage = "该快捷键已被其他程序占用，OneBox 无法注册。\n你可以换一个组合，或先释放占用它的程序。")
         {
             var row = new HotkeyRow { Value = current };
             row.Label = new TextBlock
             {
-                Text = current != 0 ? HotkeyCaptureDialog.Format(current) : emptyText,
-                Foreground = current != 0 ? Brushes.White : fg,
-                FontSize = 13, FontWeight = FontWeights.SemiBold,
+                FontFamily = UiKit.MonoFont, FontSize = 11,
                 VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(0, 0, 12, 0)
+                TextTrimming = TextTrimming.CharacterEllipsis
             };
-            var setBtn = new Button { Content = "设置快捷键", Height = 28, FontSize = 12, Margin = new Thickness(0, 0, 8, 0), Padding = new Thickness(10, 0, 10, 0) };
-            AppResources.StyleDialogButton(setBtn, false);
-            var clearBtn = new Button { Content = "清除", Height = 28, FontSize = 12, Padding = new Thickness(10, 0, 10, 0) };
-            AppResources.StyleDialogButton(clearBtn, false);
+            var chip = new Border
+            {
+                CornerRadius = new CornerRadius(6),
+                Padding = new Thickness(8, 3, 8, 3),
+                VerticalAlignment = VerticalAlignment.Center,
+                Child = row.Label
+            };
+            var setBtn = new Button { Height = 26, FontSize = 12, Padding = new Thickness(8, 0, 8, 0), MinHeight = 26, Margin = new Thickness(6, 0, 0, 0) };
+            UiKit.ApplyFlatStyle(setBtn);
+            setBtn.Padding = new Thickness(8, 0, 8, 0);
+            var clearBtn = UiKit.MakeIconButton(IconKey.Close, "清除快捷键", 26, 12);
+            clearBtn.Margin = new Thickness(2, 0, 0, 0);
+
+            void Paint(bool occupied)
+            {
+                bool set = row.Value != 0;
+                row.Label.Text = set ? HotkeyCaptureDialog.Format(row.Value) + (occupied ? "（被占用）" : "") : emptyText;
+                row.Label.FontFamily = set ? UiKit.MonoFont : SystemFonts.MessageFontFamily;
+                row.Label.Foreground = UiKit.FrozenBrush(occupied ? UiKit.WarnColor : set ? UiKit.TextPrimary : UiKit.TextDisabled);
+                chip.Background = set ? UiKit.FrozenBrush(occupied ? UiKit.WarnSurface : UiKit.RaisedColor) : Brushes.Transparent;
+                chip.Padding = set ? new Thickness(8, 3, 8, 3) : new Thickness(0);
+                setBtn.Content = set ? "修改" : "设置";
+                setBtn.Foreground = UiKit.FrozenBrush(set ? UiKit.TextSecondary : UiKit.AccentColor);
+                clearBtn.Visibility = set ? Visibility.Visible : Visibility.Collapsed;
+            }
+            Paint(false);
+
             setBtn.Click += (s, e) =>
             {
                 var captured = HotkeyCaptureDialog.Show(dlg, row.Value);
@@ -350,23 +526,25 @@ namespace PowerAudioManager
                     row.Value = captured.Value;
                     if (testOccupancy && owner is MainWindow mw && !mw.TestHotkey(captured.Value))
                     {
-                        row.Label.Text = HotkeyCaptureDialog.Format(row.Value) + "（被占用）";
-                        row.Label.Foreground = new SolidColorBrush(Color.FromRgb(240, 170, 170));
-                        MessageBox.Show(dlg, occupiedMessage, "快捷键被占用", MessageBoxButton.OK, MessageBoxImage.Warning);
+                        Paint(true);
+                        OneBoxMessage.Error(dlg, "快捷键被占用", occupiedMessage);
                     }
-                    else
-                    {
-                        row.Label.Text = HotkeyCaptureDialog.Format(row.Value);
-                        row.Label.Foreground = Brushes.White;
-                    }
+                    else Paint(false);
                 }
             };
-            clearBtn.Click += (s, e) => { row.Value = 0; row.Label.Text = emptyText; row.Label.Foreground = fg; };
-            row.Row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, bottomMargin) };
-            row.Row.Children.Add(row.Label);
+            clearBtn.Click += (s, e) => { row.Value = 0; Paint(false); };
+            row.Row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, bottomMargin), VerticalAlignment = VerticalAlignment.Center };
+            row.Row.Children.Add(chip);
             row.Row.Children.Add(setBtn);
             row.Row.Children.Add(clearBtn);
             return row;
+        }
+
+        // Hotkey settings row: label on the left, chip + actions on the right.
+        static DockPanel HotkeySettingsRow(string label, HotkeyRow hk, string description = null)
+        {
+            hk.Row.Margin = new Thickness(0);
+            return UiKit.SettingsRow(label, hk.Row, description);
         }
     }
 

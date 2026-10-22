@@ -13,28 +13,25 @@ internal static partial class SettingsDialog
     static FrameworkElement BuildAudioStudioTab(Window owner, Window dlg, SolidColorBrush fg)
     {
         var studio = StudioController.Instance;
-        var stack = new StackPanel { Margin = new Thickness(20) };
-        stack.Children.Add(new TextBlock { Text = "OneMic", Foreground = Brushes.White,
-            FontSize = 15, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 0, 0, 8) });
-        stack.Children.Add(new TextBlock { Text = "悬浮窗的 OneMic 图标可打开音频工作台；这里管理启动行为和全局快捷键。",
-            Foreground = fg, TextWrapping = TextWrapping.Wrap, FontSize = 12, Margin = new Thickness(0, 0, 0, 14) });
+        var stack = NewPage("OneMic");
 
-        var auto = new CheckBox { Content = "OneBox 启动后自动共享", Foreground = Brushes.White,
-            IsChecked = studio.Settings.AutoStartAudio, Margin = new Thickness(0, 4, 0, 10) };
-        stack.Children.Add(auto);
-        stack.Children.Add(new TextBlock { Text = "全局快捷键", Foreground = Brushes.White,
-            FontWeight = FontWeights.SemiBold, FontSize = 13, Margin = new Thickness(0, 0, 0, 9) });
+        var auto = Switch("OneBox 启动后自动共享", studio.Settings.AutoStartAudio);
+        stack.Children.Add(UiKit.SettingsGroup(null,
+            UiKit.SettingsRow("OneBox 启动后自动共享", auto, "悬浮窗的 OneMic 图标可打开音频工作台")));
+
         var keys = new[] { "Denoise", "Eq", "Music", "Explode", "Monitor" };
         var names = new[] { "降噪", "EQ", "BGM", "炸麦", "监听" };
+        var labels = new[] { "切换降噪", "切换均衡器", "切换 BGM", "炸麦音效", "切换监听" };
         var rows = new HotkeyRow[keys.Length];
+        var keyRows = new UIElement[keys.Length];
         for (int i = 0; i < keys.Length; i++)
         {
             string preference = "AudioStudio.Hotkey." + keys[i];
-            stack.Children.Add(new TextBlock { Text = names[i], Foreground = fg, FontSize = 12,
-                Margin = new Thickness(0, 5, 0, 3) });
             rows[i] = MakeHotkeyRow(owner, dlg, AppPrefs.GetInt(preference, 0), fg);
-            stack.Children.Add(rows[i].Row);
+            keyRows[i] = HotkeySettingsRow(labels[i], rows[i]);
         }
+        stack.Children.Add(UiKit.SettingsGroup("全局快捷键", keyRows));
+        stack.Children.Add(Hint("音效板每条音效的快捷键在 OneMic 窗口里设置；Ctrl+Shift+0 停止音效。", -8, 14));
         var actions = MakeButtons();
         ((Button)actions.Children[0]).Click += (_, _) =>
         {
@@ -62,7 +59,7 @@ internal static partial class SettingsDialog
                 (owner as MainWindow)?.RefreshHotkeys();
                 dlg.DialogResult = true; dlg.Close();
             }
-            catch (Exception ex) { MessageBox.Show(dlg, ex.Message, "OneBox 设置", MessageBoxButton.OK, MessageBoxImage.Warning); }
+            catch (Exception ex) { OneBoxMessage.Error(dlg, "OneBox 设置", ex.Message); }
         };
         ((Button)actions.Children[1]).Click += (_, _) => { dlg.DialogResult = false; dlg.Close(); };
         stack.Children.Add(actions);

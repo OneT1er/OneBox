@@ -29,7 +29,15 @@ internal sealed class GtcrnDenoiser : IStudioDenoiser
     {
         string path = Path.Combine(AppContext.BaseDirectory, "AudioStudio", "Models", "gtcrn_simple.onnx");
         if (!File.Exists(path)) throw new FileNotFoundException("GTCRN model is missing", path);
-        _session = new InferenceSession(path, new SessionOptions { IntraOpNumThreads = 1, InterOpNumThreads = 1 });
+        // GTCRN is a tiny fixed-shape streaming graph run once per 10 ms
+        // frame.  ORT's default CPU arena grows in large chunks and never
+        // returns them, which costs several MB of native memory for a model
+        // whose tensors are a few KB.  Plain malloc/free per run is cheaper
+        // here.  The memory pattern optimisation stays on: shapes never change,
+        // so its planned block is reused every frame.  The session copies
+        // what it needs from the options, so they can be released right away.
+        using (var options = new SessionOptions { IntraOpNumThreads = 1, InterOpNumThreads = 1, EnableCpuMemArena = false })
+            _session = new InferenceSession(path, options);
         for (int i = 0; i < 512; i++) _window[i] = (float)Math.Sqrt(.5 * (1 - Math.Cos(2 * Math.PI * i / 511)));
         double sum = 0;
         for (int i = 0; i < _filter.Length; i++)

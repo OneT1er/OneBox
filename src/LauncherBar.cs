@@ -67,23 +67,34 @@ namespace PowerAudioManager
         // requestRebuild 在槽位路径变更时回调，宿主据此重新渲染图标
         public static void Build(StackPanel contentPanel, Action requestRebuild, MainWindow commandOwner = null)
         {
-            if (contentPanel.Children.Count > 0) contentPanel.Children.Add(UiKit.MakeDivider());
-            var header = new TextBlock {
-                Foreground = new SolidColorBrush(UiKit.AccentColor), FontSize = 12,
-                FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 0, 0, 6) };
-            header.Inlines.Add(new Run("快捷启动"));
-            contentPanel.Children.Add(header);
-            var wrap = new WrapPanel { Margin = new Thickness(0, 0, 0, 2) };
+            // 方向 A：一张卡片内单行 8 格（28px），已填槽位 + 1 个「+」，其余为虚线占位。
+            var grid = new System.Windows.Controls.Primitives.UniformGrid { Rows = 1, Columns = MaxSlots };
             var paths = LoadLauncherPaths();
-            // 已填槽位 + 1 个空占位，不超过 MaxSlots
             int shown = Math.Min(MaxSlots, paths.Count + 1);
             if (shown < 1) shown = 1;
-            for (int i = 0; i < shown; i++)
+            for (int i = 0; i < MaxSlots; i++)
             {
-                string p = i < paths.Count ? paths[i] : null;
-                wrap.Children.Add(MakeLauncherSlot(i, p, paths, requestRebuild, commandOwner));
+                if (i < shown)
+                {
+                    string p = i < paths.Count ? paths[i] : null;
+                    grid.Children.Add(MakeLauncherSlot(i, p, paths, requestRebuild, commandOwner));
+                }
+                else
+                {
+                    grid.Children.Add(new Border
+                    {
+                        Height = 28,
+                        Margin = new Thickness(2),
+                        CornerRadius = new CornerRadius(6),
+                        BorderBrush = UiKit.FrozenBrush(UiKit.BorderColor),
+                        BorderThickness = new Thickness(1)
+                    });
+                }
             }
-            contentPanel.Children.Add(wrap);
+            var card = UiKit.Card(grid, new Thickness(6), 10);
+            AutomationProperties.SetName(card, "快捷启动");
+            if (contentPanel.Children.Count > 0) card.Margin = new Thickness(0, 8, 0, 0);
+            contentPanel.Children.Add(card);
         }
 
         static List<string> LoadLauncherPaths()
@@ -160,28 +171,30 @@ namespace PowerAudioManager
             MainWindow commandOwner)
         {
             var btn = new Button {
-                Width = 44, Height = 44,
-                Margin = new Thickness(0, 0, 6, 6),
+                Height = 28,
+                Margin = new Thickness(2),
                 Cursor = Cursors.Hand,
-                Background = new SolidColorBrush(UiKit.CardColor),
-                BorderBrush = new SolidColorBrush(UiKit.BorderColor),
                 ToolTip = string.IsNullOrEmpty(path) ? "拖入程序 / 快捷方式 / 文件夹 / URL" : path,
                 AllowDrop = true,
                 Tag = path
             };
             AutomationProperties.SetName(btn, string.IsNullOrEmpty(path) ? "添加快捷项" : path);
             UiKit.ApplyIconButtonStyle(btn);
+            btn.Background = UiKit.FrozenBrush(string.IsNullOrEmpty(path) ? UiKit.CardColor : UiKit.RaisedColor);
+            btn.BorderBrush = UiKit.FrozenBrush(string.IsNullOrEmpty(path) ? Color.FromRgb(0x4A, 0x46, 0x60) : UiKit.RaisedColor);
+            btn.BorderThickness = new Thickness(1);
+            var restBorder = btn.BorderBrush;
 
             if (!string.IsNullOrEmpty(path))
             {
                 var img = ExtractIcon(path);
                 if (img != null)
                 {
-                    btn.Content = new System.Windows.Controls.Image { Source = img, Width = 24, Height = 24 };
+                    btn.Content = new System.Windows.Controls.Image { Source = img, Width = 18, Height = 18 };
                 }
                 else if (IsUrl(path))
                 {
-                    btn.Content = IconCatalog.CreateElement(IconKey.Url, 20, UiKit.FrozenBrush(UiKit.AccentColor));
+                    btn.Content = IconCatalog.CreateElement(IconKey.Url, 16, UiKit.FrozenBrush(UiKit.AccentColor));
                     btn.ToolTip = path;
                     // The fetch is deliberately detached from UI construction, but the
                     // Task-returning method observes every failure internally so an
@@ -190,18 +203,18 @@ namespace PowerAudioManager
                 }
                 else if (IsFolder(path))
                 {
-                    btn.Content = IconCatalog.CreateElement(IconKey.Folder, 20, UiKit.FrozenBrush(UiKit.AccentColor));
+                    btn.Content = IconCatalog.CreateElement(IconKey.Folder, 16, UiKit.FrozenBrush(UiKit.AccentColor));
                     btn.ToolTip = path;
                 }
                 else
                 {
-                    btn.Content = IconCatalog.CreateElement(IconKey.Warning, 20, UiKit.FrozenBrush(UiKit.TextSecondary));
+                    btn.Content = IconCatalog.CreateElement(IconKey.Warning, 16, UiKit.FrozenBrush(UiKit.TextSecondary));
                 }
             }
             else
             {
-                btn.Content = IconCatalog.CreateElement(IconKey.Add, 20, UiKit.FrozenBrush(UiKit.TextSecondary));
-                btn.Foreground = new SolidColorBrush(UiKit.TextSecondary);
+                btn.Content = IconCatalog.CreateElement(IconKey.Add, 14, UiKit.FrozenBrush(UiKit.TextSecondary));
+                btn.Foreground = UiKit.FrozenBrush(UiKit.TextSecondary);
             }
 
             btn.Click += (s, e) =>
@@ -249,8 +262,7 @@ namespace PowerAudioManager
                 if (LauncherBar.HasDropData(e.Data))
                 {
                     e.Effects = DragDropEffects.Copy;
-                    btn.BorderBrush = new SolidColorBrush(UiKit.AccentColor);
-                    btn.BorderThickness = new Thickness(2);
+                    btn.BorderBrush = UiKit.FrozenBrush(UiKit.AccentColor);
                 }
                 else { e.Effects = DragDropEffects.None; }
                 e.Handled = true;
@@ -262,14 +274,12 @@ namespace PowerAudioManager
             };
             btn.DragLeave += (s, e) =>
             {
-                btn.BorderBrush = new SolidColorBrush(UiKit.BorderColor);
-                btn.BorderThickness = new Thickness(1);
+                btn.BorderBrush = restBorder;
                 e.Handled = true;
             };
             btn.Drop += (s, e) =>
             {
-                btn.BorderBrush = new SolidColorBrush(UiKit.BorderColor);
-                btn.BorderThickness = new Thickness(1);
+                btn.BorderBrush = restBorder;
                 var dropped = ExtractDroppedItems(e.Data);
                 if (dropped.Count > 0)
                 {
@@ -345,11 +355,11 @@ namespace PowerAudioManager
                         using (var stream = new FileStream(cacheFile, FileMode.Open, FileAccess.Read, FileShare.Read))
                         {
                             bmp.StreamSource = stream;
-                            bmp.DecodePixelWidth = 24;
+                            bmp.DecodePixelWidth = 18;
                             bmp.EndInit();
                         }
                         bmp.Freeze();
-                        btn.Content = new Image { Source = bmp, Width = 24, Height = 24 };
+                        btn.Content = new Image { Source = bmp, Width = 18, Height = 18 };
                     }
                     catch (Exception ex) { AppLog.Log("Favicon render", ex); }
                 }));
@@ -582,17 +592,32 @@ namespace PowerAudioManager
                 Title = "添加网页", Width = 360, SizeToContent = SizeToContent.Height,
                 WindowStartupLocation = WindowStartupLocation.CenterOwner,
                 Owner = Window.GetWindow(owner),
-                Background = new SolidColorBrush(Color.FromRgb(28, 26, 40)), ResizeMode = ResizeMode.NoResize
+                Background = UiKit.FrozenBrush(UiKit.BgColor), ResizeMode = ResizeMode.NoResize
             };
-            var stack = new StackPanel { Margin = new Thickness(20) };
-            stack.Children.Add(new TextBlock { Text = "输入网址（如 https://github.com）", Foreground = Brushes.White, FontSize = 12, Margin = new Thickness(0, 0, 0, 8) });
-            var tb = new TextBox { FontSize = 12, Padding = new Thickness(6, 4, 6, 4) };
+            var stack = new StackPanel { Margin = new Thickness(16) };
+            var label = UiKit.Text("网址（如 https://github.com）", 11, UiKit.TextSecondary);
+            label.Margin = new Thickness(0, 0, 0, 4);
+            stack.Children.Add(label);
+            var tb = UiKit.MakeTextBox("");
+            tb.ToolTip = "如 https://github.com";
+            AutomationProperties.SetName(tb, "网址");
             stack.Children.Add(tb);
-            var ok = new Button { Content = "添加", Height = 28, FontSize = 12, HorizontalAlignment = HorizontalAlignment.Right, Padding = new Thickness(20, 0, 20, 0), Margin = new Thickness(0, 12, 0, 0) };
-            AppResources.StyleDialogButton(ok, true);
+            var hint = UiKit.Text("将使用网站图标，取不到时用地球图标", 11, UiKit.TextTertiary);
+            hint.Margin = new Thickness(0, 6, 0, 0);
+            stack.Children.Add(hint);
+            var actions = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 14, 0, 0) };
+            var cancel = UiKit.MakeButton("取消", ButtonVariant.Secondary, (_, _) => dlg.Close());
+            cancel.Width = 72;
+            cancel.Margin = new Thickness(0, 0, 8, 0);
+            var ok = UiKit.MakeButton("添加", ButtonVariant.Primary);
+            ok.Width = 72;
+            ok.IsDefault = true;
             ok.Click += (_, _) => { result = tb.Text?.Trim(); dlg.DialogResult = true; dlg.Close(); };
-            stack.Children.Add(ok);
+            actions.Children.Add(cancel);
+            actions.Children.Add(ok);
+            stack.Children.Add(actions);
             dlg.Content = stack;
+            dlg.Loaded += (_, _) => tb.Focus();
             tb.Focus();
             dlg.ShowDialog();
             return result;

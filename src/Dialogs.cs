@@ -19,35 +19,69 @@ namespace PowerAudioManager
     public static class HotkeyCaptureDialog
     {
         // 返回值编码：高 16 位 = 修饰键（bit0=Alt, bit1=Ctrl, bit2=Shift, bit3=Win），低 16 位 = VK 码；0=无
-        public static int? Show(Window owner, int currentEncoded, bool allowSingleFunctionKey = false)
+        // conflictCheck (optional) returns a warning for a captured combination
+        // (e.g. 「该快捷键已被其他程序占用」); it is shown under the key caps.
+        public static int? Show(Window owner, int currentEncoded, bool allowSingleFunctionKey = false,
+            Func<int, string> conflictCheck = null)
         {
             int captured = currentEncoded;
-            var dlg = new Window {
-                Title = "设置快捷键",
-                Width = 320, Height = 160,
-                Owner = owner,
-                WindowStartupLocation = WindowStartupLocation.CenterOwner,
-                ResizeMode = ResizeMode.NoResize,
-                FontFamily = owner.FontFamily,
-                Background = new SolidColorBrush(Color.FromRgb(32,32,32))
+            var stack = new StackPanel { Margin = new Thickness(16, 4, 16, 16) };
+            var keys = new WrapPanel
+            {
+                HorizontalAlignment = HorizontalAlignment.Center,
+                Margin = new Thickness(0, 6, 0, 12),
+                MinHeight = 40
             };
-            var stack = new StackPanel { Margin = new Thickness(16) };
-            var hint = new TextBlock { Text = allowSingleFunctionKey
-                    ? "请按组合键或 F1–F24，按 Esc 取消" : "请按下组合键，按 Esc 取消",
-                Foreground = new SolidColorBrush(Color.FromRgb(180,180,180)), FontSize = 12, Margin = new Thickness(0,0,0,12) };
-            var display = new TextBlock {
-                Text = currentEncoded != 0 ? Format(currentEncoded) : "(请按键)",
-                FontSize = 18, Foreground = Brushes.White, FontWeight = FontWeights.SemiBold,
-                HorizontalAlignment = HorizontalAlignment.Center, Margin = new Thickness(0,0,0,12)
-            };
-            var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
-            var ok = new Button { Content = "确定", Width = 64, Height = 28, Margin = new Thickness(0,0,8,0) };
-            var cancel = new Button { Content = "取消", Width = 64, Height = 28 };
-            AppResources.StyleDialogButton(ok, true);
-            AppResources.StyleDialogButton(cancel, false);
-            buttons.Children.Add(ok); buttons.Children.Add(cancel);
-            stack.Children.Add(hint); stack.Children.Add(display); stack.Children.Add(buttons);
-            dlg.Content = stack;
+            var hint = UiKit.Text(allowSingleFunctionKey
+                    ? "请按组合键或 F1–F24，按 Esc 取消" : "请按下组合键，按 Esc 取消", 12, UiKit.TextSecondary);
+            hint.HorizontalAlignment = HorizontalAlignment.Center;
+            hint.TextAlignment = TextAlignment.Center;
+            var conflict = UiKit.Text("", 11, UiKit.WarnColor);
+            conflict.HorizontalAlignment = HorizontalAlignment.Center;
+            conflict.TextWrapping = TextWrapping.Wrap;
+            conflict.TextTrimming = TextTrimming.None;
+            conflict.Margin = new Thickness(0, 8, 0, 0);
+            conflict.Visibility = Visibility.Collapsed;
+
+            void Render()
+            {
+                keys.Children.Clear();
+                if (captured == 0)
+                {
+                    keys.Children.Add(UiKit.Text("(请按键)", 16, UiKit.TextTertiary));
+                    conflict.Visibility = Visibility.Collapsed;
+                    return;
+                }
+                var parts = Format(captured).Split('+');
+                for (int i = 0; i < parts.Length; i++)
+                {
+                    if (i > 0)
+                    {
+                        var plus = UiKit.Text("+", 14, UiKit.TextTertiary);
+                        plus.Margin = new Thickness(6, 0, 6, 0);
+                        keys.Children.Add(plus);
+                    }
+                    keys.Children.Add(KeyCap(parts[i]));
+                }
+                string warning = null;
+                try { warning = conflictCheck?.Invoke(captured); } catch { }
+                conflict.Text = warning ?? "";
+                conflict.Visibility = string.IsNullOrEmpty(warning) ? Visibility.Collapsed : Visibility.Visible;
+            }
+
+            var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 16, 0, 0) };
+            var cancel = UiKit.MakeButton("取消", ButtonVariant.Secondary);
+            cancel.Width = 72;
+            var ok = UiKit.MakeButton("确定", ButtonVariant.Primary);
+            ok.Width = 72;
+            ok.Margin = new Thickness(8, 0, 0, 0);
+            buttons.Children.Add(cancel); buttons.Children.Add(ok);
+            stack.Children.Add(keys); stack.Children.Add(hint); stack.Children.Add(conflict); stack.Children.Add(buttons);
+            Render();
+
+            var dlg = OneBoxWindow.Create(owner, "设置快捷键", 340, 230, stack, false);
+            dlg.SizeToContent = SizeToContent.Height;
+            if (owner != null) dlg.FontFamily = owner.FontFamily;
 
             dlg.PreviewKeyDown += (s, e) => {
                 if (e.Key == Key.Escape) { captured = 0; dlg.DialogResult = false; dlg.Close(); return; }
@@ -64,7 +98,7 @@ namespace PowerAudioManager
                 int vk = KeyInterop.VirtualKeyFromKey(e.Key == Key.System ? e.SystemKey : e.Key);
                 if (vk == 0) return;
                 captured = (mods << 16) | (vk & 0xFFFF);
-                display.Text = Format(captured);
+                Render();
                 e.Handled = true;
             };
             ok.Click += (s, e) => { dlg.DialogResult = true; dlg.Close(); };
@@ -73,6 +107,29 @@ namespace PowerAudioManager
             bool? result = dlg.ShowDialog();
             if (result == true && captured != 0) return captured;
             return null;
+        }
+
+        static Border KeyCap(string text)
+        {
+            return new Border
+            {
+                Background = UiKit.FrozenBrush(UiKit.RaisedColor),
+                BorderBrush = UiKit.FrozenBrush(UiKit.BorderStrongColor),
+                BorderThickness = new Thickness(1, 1, 1, 3),
+                CornerRadius = new CornerRadius(6),
+                Padding = new Thickness(10, 4, 10, 4),
+                MinWidth = 36,
+                VerticalAlignment = VerticalAlignment.Center,
+                Child = new TextBlock
+                {
+                    Text = text,
+                    FontFamily = UiKit.MonoFont,
+                    FontSize = 15,
+                    FontWeight = FontWeights.SemiBold,
+                    Foreground = UiKit.FrozenBrush(UiKit.TextPrimary),
+                    HorizontalAlignment = HorizontalAlignment.Center
+                }
+            };
         }
 
         public static string Format(int encoded)
@@ -94,8 +151,9 @@ namespace PowerAudioManager
     {
         TextBox _input, _output;
         ComboBox _fromBox, _toBox;
-        TextBlock _statusBlock;
-        Button _btnGo, _btnCopy, _btnSwap, _btnSettings;
+        TextBlock _statusBlock, _countBlock;
+        System.Windows.Shapes.Ellipse _statusDot;
+        Button _btnGo, _btnCopy, _btnSwap, _btnSettings, _btnClear;
         readonly RequestGenerationGate _translationGeneration = new RequestGenerationGate();
         System.Threading.CancellationTokenSource _translationCancellation;
         bool _isClosed;
@@ -109,7 +167,7 @@ namespace PowerAudioManager
             WindowStyle = WindowStyle.None;
             ResizeMode = ResizeMode.CanResizeWithGrip;
             AllowsTransparency = true;
-            Background = new SolidColorBrush(Color.FromRgb(28, 26, 40));
+            Background = Brushes.Transparent;
             BuildUI();
             // 恢复上次窗口位置
             double sl, st, sw, sh;
@@ -179,105 +237,171 @@ namespace PowerAudioManager
             rootGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             rootGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
 
-            var titleBar = new DockPanel {
-                Background = new SolidColorBrush(Color.FromRgb(34, 32, 50)),
-                Height = 36,
-                LastChildFill = true
-            };
-            var titleText = new TextBlock {
-                Text = "OneBox · 翻译",
-                Foreground = Brushes.White,
-                FontSize = 13,
-                FontWeight = FontWeights.SemiBold,
-                VerticalAlignment = VerticalAlignment.Center
-            };
-            var closeBtn = new Button {
-                Content = IconCatalog.CreateElement(IconKey.Close, 16, UiKit.FrozenBrush(UiKit.TextSecondary)),
-                Width = 36, Height = 36,
-                Foreground = new SolidColorBrush(Color.FromRgb(190, 188, 220)),
-                Background = Brushes.Transparent,
-                BorderBrush = Brushes.Transparent,
-                Cursor = Cursors.Hand,
-                ToolTip = "关闭"
-            };
-            AutomationProperties.SetName(closeBtn, "关闭");
-            UiKit.ApplyIconButtonStyle(closeBtn);
+            // Title bar (40px, merged into the window ground).
+            var titleBar = new DockPanel { Background = Brushes.Transparent, Height = 40, LastChildFill = true };
+            var titleIcon = IconCatalog.CreateElement(IconKey.Translate, 16, UiKit.FrozenBrush(UiKit.AccentColor));
+            titleIcon.Margin = new Thickness(14, 0, 8, 0);
+            titleIcon.VerticalAlignment = VerticalAlignment.Center;
+            DockPanel.SetDock(titleIcon, Dock.Left);
+            var titleText = UiKit.Text("翻译", 13, UiKit.TextPrimary, FontWeights.SemiBold);
+            var closeBtn = UiKit.MakeIconButton(IconKey.Close, "关闭", 32);
+            closeBtn.Margin = new Thickness(0, 0, 4, 0);
             closeBtn.Click += (s, e) => Close();
+            _btnSettings = UiKit.MakeIconButton(IconKey.Settings, "翻译 API 设置", 32);
+            _btnSettings.Click += (s, e) =>
+            {
+                SettingsDialog.Show(this, 3);
+                string credentialError = TranslateService.GetCredentialError();
+                if (string.IsNullOrEmpty(credentialError)) SetStatus("已保存设置", null);
+                else SetStatus("失败: " + credentialError, UiKit.DangerColor);
+            };
             DockPanel.SetDock(closeBtn, Dock.Right);
+            DockPanel.SetDock(_btnSettings, Dock.Right);
+            titleBar.Children.Add(titleIcon);
             titleBar.Children.Add(closeBtn);
+            titleBar.Children.Add(_btnSettings);
             titleBar.Children.Add(titleText);
             titleBar.MouseLeftButtonDown += (s, e) => { try { DragMove(); } catch { } };
             Grid.SetRow(titleBar, 0); rootGrid.Children.Add(titleBar);
 
-            var grid = new Grid { Margin = new Thickness(12) };
-            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+            var grid = new Grid { Margin = new Thickness(12, 0, 12, 12) };
             grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
             grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             Grid.SetRow(grid, 1); rootGrid.Children.Add(grid);
 
-            var bar = new DockPanel { Margin = new Thickness(0, 0, 0, 8), LastChildFill = false };
+            // Language bar: [源] [⇄] [目标], aligned over the two panes.
+            var bar = new Grid { Margin = new Thickness(0, 0, 0, 8) };
+            bar.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            bar.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(40) });
+            bar.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             _fromBox = MakeLangBox(true);
             _toBox = MakeLangBox(false);
-            _btnSwap = new Button { Content = IconCatalog.CreateElement(IconKey.Translate, 16, UiKit.FrozenBrush(UiKit.TextSecondary)), Width = 32, Height = 28, Margin = new Thickness(4, 0, 4, 0), ToolTip = "交换源/目标语言", Foreground = new SolidColorBrush(Color.FromRgb(190, 188, 220)) };
+            _fromBox.HorizontalAlignment = HorizontalAlignment.Left;
+            _toBox.HorizontalAlignment = HorizontalAlignment.Left;
+            _btnSwap = new Button
+            {
+                Content = UiKit.Glyph(UiKit.Glyphs.Swap, 16, UiKit.FrozenBrush(UiKit.TextSecondary)),
+                Width = 32, Height = 32,
+                ToolTip = "交换源/目标语言",
+                HorizontalAlignment = HorizontalAlignment.Center
+            };
             AutomationProperties.SetName(_btnSwap, "交换源/目标语言");
             UiKit.ApplyIconButtonStyle(_btnSwap);
+            _btnSwap.Background = UiKit.FrozenBrush(UiKit.CardColor);
             _btnSwap.Click += (s, e) => SwapLanguages();
-            DockPanel.SetDock(_fromBox, Dock.Left);
-            DockPanel.SetDock(_btnSwap, Dock.Left);
-            DockPanel.SetDock(_toBox, Dock.Left);
-            bar.Children.Add(_fromBox);
-            bar.Children.Add(_btnSwap);
-            bar.Children.Add(_toBox);
-            _btnGo = new Button { Content = "翻译", Width = 80, Height = 28, FontSize = 12 };
-            AppResources.StyleDialogButton(_btnGo, true);
-            _btnGo.Click += (s, e) => RunTranslation(_input.Text);
-            DockPanel.SetDock(_btnGo, Dock.Right);
-            bar.Children.Add(_btnGo);
-            _btnSettings = new Button { Content = IconCatalog.CreateElement(IconKey.Settings, 16, UiKit.FrozenBrush(UiKit.TextSecondary)), Width = 32, Height = 28, Margin = new Thickness(0, 0, 4, 0), ToolTip = "翻译 API 设置", Foreground = new SolidColorBrush(Color.FromRgb(190, 188, 220)) };
-            AutomationProperties.SetName(_btnSettings, "翻译 API 设置");
-            UiKit.ApplyIconButtonStyle(_btnSettings);
-            _btnSettings.Click += (s, e) =>
-            {
-                SettingsDialog.Show(this, 3);
-                string credentialError = TranslateService.GetCredentialError();
-                if (_statusBlock != null)
-                    _statusBlock.Text = string.IsNullOrEmpty(credentialError) ? "已保存设置" : "失败: " + credentialError;
-            };
-            DockPanel.SetDock(_btnSettings, Dock.Right);
-            bar.Children.Add(_btnSettings);
+            Grid.SetColumn(_fromBox, 0); bar.Children.Add(_fromBox);
+            Grid.SetColumn(_btnSwap, 1); bar.Children.Add(_btnSwap);
+            Grid.SetColumn(_toBox, 2); bar.Children.Add(_toBox);
             Grid.SetRow(bar, 0); grid.Children.Add(bar);
 
+            var panes = new Grid();
+            panes.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            panes.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(8) });
+            panes.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            Grid.SetRow(panes, 1); grid.Children.Add(panes);
+
+            // Input pane.
             _input = MakeBox(false, "在此输入或粘贴文本，按 Ctrl+Enter 翻译");
             _input.PreviewKeyDown += (s, e) => {
                 if (e.Key == Key.Enter && (Keyboard.Modifiers & ModifierKeys.Control) != 0)
                 { e.Handled = true; RunTranslation(_input.Text); }
             };
-            Grid.SetRow(_input, 1); grid.Children.Add(_input);
+            _countBlock = UiKit.Text("0 字", 11, UiKit.TextSecondary);
+            _input.TextChanged += (s, e) => { if (_countBlock != null) _countBlock.Text = (_input.Text?.Length ?? 0) + " 字"; };
+            _btnClear = UiKit.MakeIconButton(IconKey.Close, "清空", 32, 14);
+            _btnClear.Click += (s, e) => { _input.Clear(); _input.Focus(); };
+            _btnGo = new Button { Height = 32, Padding = new Thickness(12, 0, 12, 0) };
+            UiKit.ApplyButtonVariant(_btnGo, ButtonVariant.Primary);
+            var goContent = new StackPanel { Orientation = Orientation.Horizontal };
+            goContent.Children.Add(new TextBlock { Text = "翻译", FontWeight = FontWeights.SemiBold, VerticalAlignment = VerticalAlignment.Center });
+            goContent.Children.Add(new TextBlock { Text = "Ctrl+Enter", FontSize = 11, Opacity = 0.75, Margin = new Thickness(8, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center });
+            _btnGo.Content = goContent;
+            AutomationProperties.SetName(_btnGo, "翻译");
+            _btnGo.Click += (s, e) => RunTranslation(_input.Text);
+            var inputFoot = new DockPanel { LastChildFill = true, Height = 44, Margin = new Thickness(14, 0, 8, 0) };
+            DockPanel.SetDock(_btnGo, Dock.Right);
+            DockPanel.SetDock(_btnClear, Dock.Right);
+            _btnClear.Margin = new Thickness(0, 0, 6, 0);
+            inputFoot.Children.Add(_btnGo);
+            inputFoot.Children.Add(_btnClear);
+            inputFoot.Children.Add(_countBlock);
+            var inputPane = MakePane(_input, inputFoot, UiKit.CardColor);
+            Grid.SetColumn(inputPane, 0); panes.Children.Add(inputPane);
 
-            var midBar = new DockPanel { Margin = new Thickness(0, 8, 0, 8), LastChildFill = true };
-            _statusBlock = new TextBlock { Foreground = new SolidColorBrush(Color.FromRgb(190, 188, 220)), FontSize = 11, VerticalAlignment = VerticalAlignment.Center };
-            _btnCopy = new Button { Content = "复制译文", Width = 80, Height = 28, FontSize = 12 };
-            AppResources.StyleDialogButton(_btnCopy, false);
-            _btnCopy.Click += (s, e) => { try { if (!string.IsNullOrEmpty(_output.Text)) Clipboard.SetText(_output.Text); _statusBlock.Text = "已复制"; } catch { } };
-            DockPanel.SetDock(_btnCopy, Dock.Right);
-            midBar.Children.Add(_btnCopy);
-            midBar.Children.Add(_statusBlock);
-            Grid.SetRow(midBar, 2); grid.Children.Add(midBar);
-
+            // Output pane.
             _output = MakeBox(true, "");
-            Grid.SetRow(_output, 3); grid.Children.Add(_output);
+            _statusDot = new System.Windows.Shapes.Ellipse { Width = 6, Height = 6, Margin = new Thickness(0, 0, 6, 0), VerticalAlignment = VerticalAlignment.Center, Visibility = Visibility.Collapsed };
+            _statusBlock = UiKit.Text("", 11, UiKit.TextSecondary);
+            _btnCopy = new Button { Height = 32, Padding = new Thickness(12, 0, 12, 0) };
+            UiKit.ApplyButtonVariant(_btnCopy, ButtonVariant.Secondary);
+            var copyContent = new StackPanel { Orientation = Orientation.Horizontal };
+            copyContent.Children.Add(UiKit.Glyph(UiKit.Glyphs.Copy, 14, UiKit.FrozenBrush(UiKit.TextPrimary)));
+            copyContent.Children.Add(new TextBlock { Text = "复制译文", Margin = new Thickness(6, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center });
+            _btnCopy.Content = copyContent;
+            AutomationProperties.SetName(_btnCopy, "复制译文");
+            _btnCopy.Click += (s, e) => { try { if (!string.IsNullOrEmpty(_output.Text)) Clipboard.SetText(_output.Text); SetStatus("已复制", UiKit.SuccessColor); } catch { } };
+            var outputFoot = new DockPanel { LastChildFill = true, Height = 44, Margin = new Thickness(14, 0, 8, 0) };
+            DockPanel.SetDock(_btnCopy, Dock.Right);
+            outputFoot.Children.Add(_btnCopy);
+            var statusRow = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+            statusRow.Children.Add(_statusDot);
+            statusRow.Children.Add(_statusBlock);
+            outputFoot.Children.Add(statusRow);
+            var outputPane = MakePane(_output, outputFoot, Color.FromRgb(28, 26, 38));
+            Grid.SetColumn(outputPane, 2); panes.Children.Add(outputPane);
 
-            var foot = new TextBlock { Text = "由百度翻译提供 · Ctrl+Enter 触发翻译 · Ctrl+Shift+T 全局翻译剪贴板", Foreground = new SolidColorBrush(Color.FromRgb(140, 138, 180)), FontSize = 10, Margin = new Thickness(0, 8, 0, 0), HorizontalAlignment = HorizontalAlignment.Center };
-            Grid.SetRow(foot, 4); grid.Children.Add(foot);
+            var foot = UiKit.Text("由百度翻译提供 · Ctrl+Enter 触发翻译 · Ctrl+Shift+T 全局翻译剪贴板", 11, UiKit.TextTertiary);
+            foot.HorizontalAlignment = HorizontalAlignment.Center;
+            foot.Margin = new Thickness(0, 8, 0, 0);
+            Grid.SetRow(foot, 2); grid.Children.Add(foot);
 
             var border = new Border {
-                BorderBrush = new SolidColorBrush(Color.FromRgb(80, 75, 120)),
+                CornerRadius = new CornerRadius(12),
+                Background = UiKit.FrozenBrush(UiKit.BgColor),
+                BorderBrush = UiKit.FrozenBrush(UiKit.BorderColor),
                 BorderThickness = new Thickness(1),
                 Child = rootGrid
             };
             Content = border;
+        }
+
+        // A rounded pane holding a borderless text box over a footer row.
+        static Border MakePane(TextBox box, UIElement footer, Color background)
+        {
+            var g = new Grid();
+            g.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+            g.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            Grid.SetRow(box, 0); g.Children.Add(box);
+            Grid.SetRow(footer, 1); g.Children.Add(footer);
+            var pane = new Border
+            {
+                CornerRadius = new CornerRadius(10),
+                Background = UiKit.FrozenBrush(background),
+                BorderBrush = UiKit.FrozenBrush(UiKit.BorderColor),
+                BorderThickness = new Thickness(1),
+                Child = g
+            };
+            if (!box.IsReadOnly)
+            {
+                box.GotKeyboardFocus += (_, _) => pane.BorderBrush = UiKit.FrozenBrush(UiKit.AccentColor);
+                box.LostKeyboardFocus += (_, _) => pane.BorderBrush = UiKit.FrozenBrush(UiKit.BorderColor);
+            }
+            return pane;
+        }
+
+        // Status line under the translation: text + optional colored dot.
+        void SetStatus(string text, Color? dot)
+        {
+            if (_statusBlock == null) return;
+            _statusBlock.Text = text ?? "";
+            if (_statusDot == null) return;
+            if (dot.HasValue && !string.IsNullOrEmpty(text))
+            {
+                _statusDot.Fill = UiKit.FrozenBrush(dot.Value);
+                _statusDot.Visibility = Visibility.Visible;
+            }
+            else _statusDot.Visibility = Visibility.Collapsed;
         }
 
         TextBox MakeBox(bool readOnly, string placeholder)
@@ -287,13 +411,14 @@ namespace PowerAudioManager
                 AcceptsReturn = true,
                 TextWrapping = TextWrapping.Wrap,
                 VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-                FontSize = 13,
-                Padding = new Thickness(8),
-                Background = new SolidColorBrush(readOnly ? Color.FromRgb(24, 22, 36) : Color.FromRgb(42, 39, 60)),
-                Foreground = readOnly ? new SolidColorBrush(Color.FromRgb(220, 218, 245)) : Brushes.White,
-                BorderBrush = new SolidColorBrush(Color.FromRgb(80, 75, 120)),
-                BorderThickness = new Thickness(1),
-                ToolTip = placeholder
+                FontSize = 14,
+                Padding = new Thickness(10, 12, 10, 4),
+                Background = Brushes.Transparent,
+                Foreground = UiKit.FrozenBrush(UiKit.TextPrimary),
+                CaretBrush = UiKit.FrozenBrush(UiKit.TextPrimary),
+                SelectionBrush = UiKit.FrozenBrush(UiKit.AccentColor),
+                BorderThickness = new Thickness(0),
+                ToolTip = string.IsNullOrEmpty(placeholder) ? null : placeholder
             };
         }
 
@@ -301,7 +426,7 @@ namespace PowerAudioManager
         ComboBox MakeLangBox(bool isFrom)
         {
             var cb = new ComboBox {
-                Width = 110, Height = 28,
+                Width = 130, Height = 32,
                 FontSize = 12,
                 Padding = new Thickness(6, 0, 0, 0),
                 VerticalContentAlignment = VerticalAlignment.Center
@@ -375,7 +500,7 @@ namespace PowerAudioManager
             if (string.IsNullOrEmpty(text))
             {
                 _output.Text = "";
-                _statusBlock.Text = "";
+                SetStatus("", null);
                 _btnGo.IsEnabled = true;
                 if (ReferenceEquals(_translationCancellation, cancellation)) _translationCancellation = null;
                 cancellation.Dispose();
@@ -385,7 +510,7 @@ namespace PowerAudioManager
             var tItem = _toBox.SelectedItem as ComboBoxItem;
             string from = fItem == null ? "auto" : fItem.Tag.ToString();
             string to = tItem == null ? "zh" : tItem.Tag.ToString();
-            _statusBlock.Text = "翻译中...";
+            SetStatus("翻译中…", UiKit.AccentColor);
             _btnGo.IsEnabled = false;
             _output.Text = "";
             TranslateService.Result result;
@@ -406,25 +531,26 @@ namespace PowerAudioManager
             if (!string.IsNullOrEmpty(result?.Error))
             {
                 _output.Text = "";
-                _statusBlock.Text = "失败: " + result.Error;
+                SetStatus("失败: " + result.Error, UiKit.DangerColor);
                 return;
             }
             _output.Text = result?.Translation ?? "";
-            _statusBlock.Text = "完成" + (string.IsNullOrEmpty(result?.DetectedFrom) ? "" : " · 检测到 " + result.DetectedFrom);
+            SetStatus("完成" + (string.IsNullOrEmpty(result?.DetectedFrom) ? "" : " · 检测到 " + result.DetectedFrom), UiKit.SuccessColor);
         }
     }
 
-    // 通用 OneBox 风格窗口外壳：无边框、圆角、深色背景、自定义标题栏（拖拽手柄 + 关闭按钮）。
+    // 通用 OneBox 风格窗口外壳：无边框、圆角 12、#17151F 底色、40px 合并标题栏（可选图标 + 标题 + 关闭）。
     // 调用方传入内容和标题，返回可直接 ShowDialog() 的 Window。
     static class OneBoxWindow
     {
-        public static Window Create(Window owner, string title, double width, double height, UIElement body, bool resizable)
+        public static Window Create(Window owner, string title, double width, double height, UIElement body, bool resizable,
+            IconKey? icon = null)
         {
             var dlg = new Window {
                 Title = title,
                 Width = width, Height = height,
                 Owner = owner,
-                WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                WindowStartupLocation = owner != null ? WindowStartupLocation.CenterOwner : WindowStartupLocation.CenterScreen,
                 ResizeMode = resizable ? ResizeMode.CanResize : ResizeMode.NoResize,
                 WindowStyle = WindowStyle.None,
                 AllowsTransparency = true,
@@ -432,49 +558,45 @@ namespace PowerAudioManager
                 FontFamily = owner != null ? owner.FontFamily : SystemFonts.MessageFontFamily
             };
 
-            var fg = new SolidColorBrush(Color.FromRgb(190, 188, 220));
             var rootGrid = new Grid();
             rootGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             rootGrid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
 
-            // 圆角标题栏，上圆角 r=10，匹配悬浮卡片
-            var titleBarBorder = new Border {
-                CornerRadius = new CornerRadius(10, 10, 0, 0),
-                Background = new SolidColorBrush(Color.FromRgb(34, 32, 50)),
-                Height = 36
-            };
-            var titleBar = new DockPanel { LastChildFill = true };
+            // 40px title bar merged into the window ground.
+            var titleBar = new DockPanel { LastChildFill = true, Height = 40, Background = Brushes.Transparent };
+            if (icon.HasValue)
+            {
+                var glyph = IconCatalog.CreateElement(icon.Value, 16, UiKit.FrozenBrush(UiKit.AccentColor));
+                glyph.Margin = new Thickness(14, 0, 0, 0);
+                glyph.VerticalAlignment = VerticalAlignment.Center;
+                DockPanel.SetDock(glyph, Dock.Left);
+                titleBar.Children.Add(glyph);
+            }
             var titleText = new TextBlock {
-                Text = "  " + title,
-                Foreground = Brushes.White, FontSize = 13,
+                Text = title,
+                Margin = new Thickness(icon.HasValue ? 8 : 14, 0, 0, 0),
+                Foreground = UiKit.FrozenBrush(UiKit.TextPrimary), FontSize = 13,
                 FontWeight = FontWeights.SemiBold,
-                VerticalAlignment = VerticalAlignment.Center
+                VerticalAlignment = VerticalAlignment.Center,
+                TextTrimming = TextTrimming.CharacterEllipsis
             };
-            var closeBtn = new Button {
-                Content = IconCatalog.CreateElement(IconKey.Close, 16, fg),
-                Width = 36, Height = 36,
-                Foreground = fg, Background = Brushes.Transparent,
-                BorderBrush = Brushes.Transparent, Cursor = Cursors.Hand, ToolTip = "关闭"
-            };
-            AutomationProperties.SetName(closeBtn, "关闭");
-            // MD 按钮样式的 MinWidth/MinHeight 会裁剪此 36x36 槽位中的图标；ApplyIconButtonStyle 禁用这些限制
-            UiKit.ApplyIconButtonStyle(closeBtn);
+            var closeBtn = UiKit.MakeIconButton(IconKey.Close, "关闭", 32);
+            closeBtn.Margin = new Thickness(0, 0, 4, 0);
+            closeBtn.VerticalAlignment = VerticalAlignment.Center;
             closeBtn.Click += (s, e) => dlg.Close();
             DockPanel.SetDock(closeBtn, Dock.Right);
             titleBar.Children.Add(closeBtn);
             titleBar.Children.Add(titleText);
-            titleBarBorder.Child = titleBar;
             titleBar.MouseLeftButtonDown += (s, e) => { try { dlg.DragMove(); } catch { } };
-            Grid.SetRow(titleBarBorder, 0); rootGrid.Children.Add(titleBarBorder);
+            Grid.SetRow(titleBar, 0); rootGrid.Children.Add(titleBar);
 
             Grid.SetRow(body, 1); rootGrid.Children.Add(body);
 
-            // 外边框圆角 + 深色填充，底部圆角也匹配
             var border = new Border {
-                CornerRadius = new CornerRadius(10),
-                BorderBrush = new SolidColorBrush(Color.FromRgb(80, 75, 120)),
+                CornerRadius = new CornerRadius(12),
+                BorderBrush = UiKit.FrozenBrush(UiKit.BorderColor),
                 BorderThickness = new Thickness(1),
-                Background = new SolidColorBrush(Color.FromRgb(28, 26, 40)),
+                Background = UiKit.FrozenBrush(UiKit.BgColor),
                 Child = rootGrid
             };
             dlg.Content = border;
@@ -482,4 +604,3 @@ namespace PowerAudioManager
         }
     }
 }
-

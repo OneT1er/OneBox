@@ -14,6 +14,11 @@
     <ApplicationIcon>app.ico</ApplicationIcon>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <SatelliteResourceLanguages>en;zh-Hans</SatelliteResourceLanguages>
+    <!-- A resident tray/floating-window tool is not latency-sensitive to
+         blocking gen2 collections.  Workstation non-concurrent GC drops the
+         dedicated background-GC thread and the extra heap headroom it keeps,
+         lowering steady-state private bytes. -->
+    <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
   </PropertyGroup>
 
   <!-- Framework-dependent folder publish. The output intentionally contains
