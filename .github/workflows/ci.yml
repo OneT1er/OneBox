@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  workflow_dispatch:
+  push:
+    branches-ignore: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Build
+        run: |
+          dotnet build OneBox.sln -c Release
+          if ($LASTEXITCODE -ne 0) { throw 'Build failed' }
+
+      - name: Test
+        run: |
+          New-Item -ItemType Directory -Force artifacts/test-results | Out-Null
+          dotnet test tests/OneBox.Tests/OneBox.Tests.csproj -c Release --logger "trx" --logger "console;verbosity=normal" --results-directory artifacts/test-results 2>&1 | Tee-Object -FilePath artifacts/test-results/test-output.log
+          if ($LASTEXITCODE -ne 0) { throw 'Tests failed' }
+
+      - name: Report test failures
+        if: failure()
+        run: |
+          function Esc([string]$s) { if (-not $s) { return '' }; $s.Replace('%','%25').Replace("`r",'').Replace("`n",'%0A') }
+          $count = 0
+          foreach ($trx in Get-ChildItem artifacts/test-results -Filter *.trx -Recurse -ErrorAction SilentlyContinue) {
+            [xml]$x = Get-Content $trx.FullName -Raw
+            foreach ($r in $x.TestRun.Results.UnitTestResult | Where-Object { $_.outcome -eq 'Failed' }) {
+              $msg = "$($r.Output.ErrorInfo.Message)`n$($r.Output.ErrorInfo.StackTrace)"
+              if ($msg.Length -gt 6000) { $msg = $msg.Substring(0, 6000) }
+              Write-Output "::error title=$(Esc $r.testName)::$(Esc $msg)"
+              $count++
+            }
+          }
+          if ($count -eq 0 -and (Test-Path artifacts/test-results/test-output.log)) {
+            $tail = (Get-Content artifacts/test-results/test-output.log -Tail 60) -join "`n"
+            if ($tail.Length -gt 6000) { $tail = $tail.Substring($tail.Length - 6000) }
+            Write-Output "::error title=dotnet test output (no failed results in trx)::$(Esc $tail)"
+          }
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: artifacts/test-results
+          if-no-files-found: ignore

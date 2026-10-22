@@ -22,10 +22,10 @@ namespace PowerAudioManager
     {
         // 基础设计尺寸：以 1080p 100% DPI 为 1.0 scale 时的参考值。
         const double BaseWindowWidth = 280.0;
-        const double BaseCornerRadius = 10.0;
+        const double BaseCornerRadius = 12.0;
         const double BaseBorderThickness = 1.0;
-        const double BaseShadowBlur = 36.0;
-        const double BaseShadowDepth = 2.0;
+        const double BaseShadowBlur = 24.0;
+        const double BaseShadowDepth = 6.0;
         // 1080p 对角线像素数 = sqrt(1920² + 1080²) ≈ 2202.9
         const double ReferenceDiagonal = 2202.907;
         // 缩放幂指数（<1 让分辨率差异比线性更柔和）

@@ -152,7 +152,7 @@ namespace PowerAudioManager
                 return;
             }
 
-            // 后台预热内存 PerformanceCounter：.NET 10 冷启动首次构造 ~5s，GetStatus() 在 UI 线程执行，提前启动避免界面卡顿。
+            // Starts the cached-memory background reading early so the first GetStatus() on the UI thread already has a value.
             if (PowerAudioManager.MainWindow.ModuleVisible("Mem"))
                 try { PowerAudioManager.MemoryCleaner.WarmupCounters(); } catch { }
 

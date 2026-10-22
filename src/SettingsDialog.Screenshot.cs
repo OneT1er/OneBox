@@ -11,185 +11,156 @@ namespace PowerAudioManager
     {
         static FrameworkElement BuildScreenshotTab(Window owner, Window dlg, SolidColorBrush fg)
         {
-            var stack = new StackPanel { Margin = new Thickness(20) };
+            var stack = NewPage("截图");
 
-            stack.Children.Add(new TextBlock { Text = "截图保存位置", Foreground = Brushes.White, FontWeight = FontWeights.SemiBold, FontSize = 13, Margin = new Thickness(0, 0, 0, 6) });
-            var rootRow = new DockPanel { Margin = new Thickness(0, 0, 0, 4), LastChildFill = true };
-            var rootBox = new TextBox
-            {
-                MinHeight = 26, FontSize = 12,
-                Background = new SolidColorBrush(Color.FromRgb(42, 39, 60)),
-                Foreground = Brushes.White,
-                BorderBrush = new SolidColorBrush(Color.FromRgb(80, 75, 120))
-            };
+            // ---- 基本 ----
+            var hk = MakeHotkeyRow(owner, dlg, AppPrefs.GetInt("Screenshot.Hotkey", 0), fg);
+            var rootBox = MakeBox();
+            rootBox.Width = 190;
+            rootBox.FontFamily = UiKit.MonoFont;
+            rootBox.FontSize = 11;
+            System.Windows.Automation.AutomationProperties.SetName(rootBox, "截图保存位置");
             string savedRoot = AppPrefs.GetString("Screenshot.RootDir", "");
             if (string.IsNullOrWhiteSpace(savedRoot))
                 savedRoot = System.IO.Path.Combine(System.Environment.GetFolderPath(System.Environment.SpecialFolder.MyPictures), "OneBoxScreenshots");
             rootBox.Text = savedRoot;
-            var browseBtn = new Button { Content = "浏览…", Height = 26, FontSize = 12, Margin = new Thickness(8, 0, 0, 0), Padding = new Thickness(10, 0, 10, 0) };
-            AppResources.StyleDialogButton(browseBtn, false);
+            rootBox.ToolTip = savedRoot;
+            var browseBtn = UiKit.MakeButton("浏览…", ButtonVariant.Secondary);
+            browseBtn.Margin = new Thickness(6, 0, 0, 0);
             browseBtn.Click += (s, e) =>
             {
                 var fbd = new System.Windows.Forms.FolderBrowserDialog { SelectedPath = rootBox.Text };
                 if (fbd.ShowDialog() == System.Windows.Forms.DialogResult.OK)
                     rootBox.Text = fbd.SelectedPath;
             };
-            DockPanel.SetDock(browseBtn, Dock.Right);
-            rootRow.Children.Add(browseBtn);
-            rootRow.Children.Add(rootBox);
-            stack.Children.Add(rootRow);
+            var rootControl = new StackPanel { Orientation = Orientation.Horizontal };
+            rootControl.Children.Add(rootBox);
+            rootControl.Children.Add(browseBtn);
+            stack.Children.Add(UiKit.SettingsGroup("基本",
+                HotkeySettingsRow("截图快捷键", hk),
+                UiKit.SettingsRow("保存位置", rootControl)));
 
+            // ---- 截图通知 ----
             var toastOptions = ScreenshotToastOptions.Load();
-            var notificationPanel = new StackPanel();
-            notificationPanel.Children.Add(new TextBlock { Text = "截图通知", Foreground = Brushes.White,
-                FontWeight = FontWeights.SemiBold, FontSize = 13, Margin = new Thickness(0, 0, 0, 10) });
-            notificationPanel.Children.Add(new TextBlock { Text = "弹出位置", Foreground = fg, FontSize = 11, Margin = new Thickness(0, 0, 0, 4) });
-            var positionBox = new ComboBox { Height = 28, FontSize = 12 };
-            AppResources.StyleDarkComboBox(positionBox);
-            foreach (var label in new[] { "右下角", "左下角", "右上角", "左上角" }) positionBox.Items.Add(label);
-            positionBox.SelectedIndex = (int)toastOptions.Position;
-            notificationPanel.Children.Add(positionBox);
-            notificationPanel.Children.Add(new TextBlock { Text = "显示在截图时前台应用所在屏幕，悬停时暂停关闭。",
-                Foreground = fg, FontSize = 10, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 4, 0, 8) });
-            var durationRow = new DockPanel { LastChildFill = true, Margin = new Thickness(0, 0, 0, 8) };
-            var durationInput = new StackPanel { Orientation = Orientation.Horizontal };
-            var durationBox = MakeBox();
-            durationBox.Text = toastOptions.DurationSeconds.ToString();
-            durationBox.Width = 50; durationBox.Height = 28; durationBox.Padding = new Thickness(6, 3, 6, 3);
-            durationInput.Children.Add(durationBox);
-            durationInput.Children.Add(new TextBlock { Text = "秒（1–30）", Foreground = fg, FontSize = 11,
-                VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(6, 0, 0, 0) });
-            DockPanel.SetDock(durationInput, Dock.Right); durationRow.Children.Add(durationInput);
-            durationRow.Children.Add(new TextBlock { Text = "显示时间", Foreground = fg, FontSize = 11, VerticalAlignment = VerticalAlignment.Center });
-            notificationPanel.Children.Add(durationRow);
-            var compactToggle = new CheckBox { Content = "缩略版（小缩略图，更少占屏）", IsChecked = toastOptions.Compact,
-                Foreground = Brushes.White, FontSize = 11, Margin = new Thickness(0, 0, 0, 8) };
-            var excludeToggle = new CheckBox { Content = "避免通知被再次截图截入", IsChecked = toastOptions.ExcludeFromCapture,
-                Foreground = Brushes.White, FontSize = 11, Margin = new Thickness(0, 0, 0, 4) };
-            notificationPanel.Children.Add(compactToggle); notificationPanel.Children.Add(excludeToggle);
-            notificationPanel.Children.Add(new TextBlock {
-                Text = "启用系统截图排除，OneBox 再次截图前会关闭旧通知。部分游戏或第三方截图工具可能不支持排除。",
-                Foreground = fg, FontSize = 10, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 8) });
+            int selectedPosition = (int)toastOptions.Position;
+            // 2×2 屏幕角落选择器：格子顺序（左上、右上、左下、右下）对应枚举值 3、2、1、0。
+            var cornerGrid = new System.Windows.Controls.Primitives.UniformGrid { Rows = 2, Columns = 2 };
+            int[] cornerValues = { 3, 2, 1, 0 };
+            string[] cornerNames = { "左上角", "右上角", "左下角", "右下角" };
+            string cornerGroup = "corner" + Guid.NewGuid().ToString("N");
+            for (int i = 0; i < 4; i++)
+            {
+                int value = cornerValues[i];
+                var cell = new RadioButton
+                {
+                    GroupName = cornerGroup, IsChecked = value == selectedPosition,
+                    Style = CornerCellStyle(), ToolTip = cornerNames[i], Margin = new Thickness(1.5)
+                };
+                System.Windows.Automation.AutomationProperties.SetName(cell, cornerNames[i]);
+                cell.Checked += (_, _) => selectedPosition = value;
+                cornerGrid.Children.Add(cell);
+            }
+            var cornerPicker = new Border
+            {
+                Width = 56, Height = 40, Padding = new Thickness(2),
+                Background = UiKit.FrozenBrush(UiKit.BgColor),
+                BorderBrush = UiKit.FrozenBrush(UiKit.BorderStrongColor), BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(6), Child = cornerGrid
+            };
+            System.Windows.Automation.AutomationProperties.SetName(cornerPicker, "弹出位置");
+
+            var durationBox = NumBox(toastOptions.DurationSeconds.ToString());
+            System.Windows.Automation.AutomationProperties.SetName(durationBox, "通知显示时间（秒）");
+            var compactToggle = Switch("缩略版通知", toastOptions.Compact);
+            var excludeToggle = Switch("避免通知被再次截图截入", toastOptions.ExcludeFromCapture);
             ScreenshotToastOptions ReadNotificationOptions()
             {
                 if (!int.TryParse(durationBox.Text, out int seconds) || seconds < 1 || seconds > 30)
                 {
-                    MessageBox.Show(dlg, "通知显示时间请输入 1–30 秒的整数。", "OneBox 设置", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    OneBoxMessage.Error(dlg, "OneBox 设置", "通知显示时间请输入 1–30 秒的整数。");
                     durationBox.Focus(); durationBox.SelectAll();
                     return null;
                 }
-                return new ScreenshotToastOptions { Position = (ScreenshotToastPosition)positionBox.SelectedIndex,
+                return new ScreenshotToastOptions { Position = (ScreenshotToastPosition)selectedPosition,
                     DurationSeconds = seconds, Compact = compactToggle.IsChecked == true,
                     ExcludeFromCapture = excludeToggle.IsChecked == true }.Normalize();
             }
-            var previewButton = new Button { Content = "预览通知", Height = 28, FontSize = 11,
-                HorizontalAlignment = HorizontalAlignment.Left, Padding = new Thickness(12, 0, 12, 0) };
-            AppResources.StyleDialogButton(previewButton, false);
+            var previewButton = UiKit.MakeButton("预览通知", ButtonVariant.Secondary);
+            previewButton.HorizontalAlignment = HorizontalAlignment.Left;
             previewButton.Click += (_, _) => { var options = ReadNotificationOptions(); if (options != null) ScreenshotToast.ShowPreview(options); };
-            notificationPanel.Children.Add(previewButton);
-            stack.Children.Add(new Border { Child = notificationPanel, Background = UiKit.FrozenBrush(ThemeTokens.TitleSurface),
-                CornerRadius = new CornerRadius(8), Padding = new Thickness(12), Margin = new Thickness(0, 12, 0, 4) });
+            stack.Children.Add(UiKit.SettingsGroup("截图通知",
+                UiKit.SettingsRow("弹出位置", cornerPicker, "显示在截图时前台应用所在屏幕，悬停时暂停关闭"),
+                UiKit.SettingsRow("显示时间", Sentence(durationBox, "秒（1–30）")),
+                UiKit.SettingsRow("缩略版通知", compactToggle, "小缩略图，更少占屏"),
+                UiKit.SettingsRow("避免通知被再次截图截入", excludeToggle, "启用系统截图排除，OneBox 再次截图前会关闭旧通知。部分游戏或第三方截图工具可能不支持排除。"),
+                new Border { Padding = new Thickness(12, 4, 12, 12), Child = previewButton }));
 
-            // 安全接管：由 Game Bar / Steam / 显卡工具响应实体按键，OneBox 只接管落盘后的图片。
-            stack.Children.Add(new TextBlock { Text = "安全：外部截图接管（反作弊游戏）", Foreground = Brushes.White, FontWeight = FontWeights.SemiBold, FontSize = 13, Margin = new Thickness(0, 12, 0, 6) });
-            bool takeoverEnabled = AppPrefs.GetBool("Screenshot.ExternalTakeoverEnabled", false);
-            var takeoverToggle = new CheckBox
-            {
-                Content = "启用外部截图接管（不模拟按键）",
-                IsChecked = takeoverEnabled,
-                Foreground = Brushes.White,
-                FontSize = 12,
-                Margin = new Thickness(0, 0, 0, 5)
-            };
-            stack.Children.Add(takeoverToggle);
-            stack.Children.Add(new TextBlock
-            {
-                Text = "在游戏中按 Game Bar、Steam 或显卡工具的实体截图键；OneBox 会监听新图片、复制归档并弹出提示。支持子目录。",
-                Foreground = fg,
-                FontSize = 10,
-                TextWrapping = TextWrapping.Wrap,
-                Margin = new Thickness(0, 0, 0, 7)
-            });
-
-            var takeoverPanel = new StackPanel { IsEnabled = takeoverEnabled };
-            takeoverPanel.Children.Add(new TextBlock { Text = "官方截图保存目录", Foreground = fg, FontSize = 11, Margin = new Thickness(0, 0, 0, 3) });
-            var takeoverRow = new DockPanel { Margin = new Thickness(0, 0, 0, 10), LastChildFill = true };
-            var takeoverBox = new TextBox
-            {
-                Text = ScreenshotService.ExternalTakeoverDir(),
-                MinHeight = 26,
-                FontSize = 12,
-                Background = new SolidColorBrush(Color.FromRgb(42, 39, 60)),
-                Foreground = Brushes.White,
-                BorderBrush = new SolidColorBrush(Color.FromRgb(80, 75, 120))
-            };
-            var takeoverBrowseBtn = new Button { Content = "浏览…", Height = 26, FontSize = 12, Margin = new Thickness(8, 0, 0, 0), Padding = new Thickness(10, 0, 10, 0) };
-            AppResources.StyleDialogButton(takeoverBrowseBtn, false);
-            takeoverBrowseBtn.Click += (_, _) =>
-            {
-                var fbd = new System.Windows.Forms.FolderBrowserDialog { SelectedPath = takeoverBox.Text };
-                if (fbd.ShowDialog() == System.Windows.Forms.DialogResult.OK) takeoverBox.Text = fbd.SelectedPath;
-            };
-            DockPanel.SetDock(takeoverBrowseBtn, Dock.Right);
-            takeoverRow.Children.Add(takeoverBrowseBtn);
-            takeoverRow.Children.Add(takeoverBox);
-            takeoverPanel.Children.Add(takeoverRow);
-            stack.Children.Add(takeoverPanel);
-            takeoverToggle.Checked += (_, _) => takeoverPanel.IsEnabled = true;
-            takeoverToggle.Unchecked += (_, _) => takeoverPanel.IsEnabled = false;
-
-            stack.Children.Add(new Border { Height = 1, Background = new SolidColorBrush(Color.FromRgb(80, 75, 120)), Margin = new Thickness(0, 2, 0, 12) });
-
+            // ---- 游戏截图（可折叠的两个高级区） ----
             // 高级：Game Bar 截图默认关闭。开启后启用 HDR 检测 + Game Bar 回退，HDR/全屏游戏截图不走黑。
-            stack.Children.Add(new TextBlock { Text = "高级：Game Bar 截图（HDR / 全屏游戏）", Foreground = Brushes.White, FontWeight = FontWeights.SemiBold, FontSize = 13, Margin = new Thickness(0, 0, 0, 6) });
             bool gbEnabled = AppPrefs.GetBool("Screenshot.GameBarEnabled", false);
-            var gbToggle = new CheckBox { Content = "启用 Game Bar 截图回退", IsChecked = gbEnabled, Foreground = Brushes.White, FontSize = 12, Margin = new Thickness(0, 0, 0, 8) };
-            stack.Children.Add(gbToggle);
-
+            var gbToggle = Switch("启用 Game Bar 截图回退", gbEnabled);
             // Game Bar 配置仅在启用时有效，关闭开关时整体变灰。
-            var gbPanel = new StackPanel { Margin = new Thickness(0, 0, 0, 0) };
-            gbPanel.IsEnabled = gbEnabled;
-
-            gbPanel.Children.Add(new TextBlock { Text = "Game Bar 截图读取位置", Foreground = Brushes.White, FontWeight = FontWeights.SemiBold, FontSize = 13, Margin = new Thickness(0, 0, 0, 6) });
-            var gbRow = new DockPanel { Margin = new Thickness(0, 0, 0, 4), LastChildFill = true };
-            var gbBox = new TextBox
-            {
-                MinHeight = 26, FontSize = 12,
-                Background = new SolidColorBrush(Color.FromRgb(42, 39, 60)),
-                Foreground = Brushes.White,
-                BorderBrush = new SolidColorBrush(Color.FromRgb(80, 75, 120))
-            };
+            var gbPanel = new StackPanel { IsEnabled = gbEnabled };
+            var gbBox = MakeBox();
+            gbBox.FontFamily = UiKit.MonoFont;
+            gbBox.FontSize = 11;
+            gbBox.Width = 190;
+            System.Windows.Automation.AutomationProperties.SetName(gbBox, "Game Bar 截图读取位置");
             string savedGb = AppPrefs.GetString("Screenshot.GameBarDir", "");
             if (string.IsNullOrWhiteSpace(savedGb))
                 savedGb = System.IO.Path.Combine(System.Environment.GetFolderPath(System.Environment.SpecialFolder.MyVideos), "Captures");
             gbBox.Text = savedGb;
-            var gbBrowseBtn = new Button { Content = "浏览…", Height = 26, FontSize = 12, Margin = new Thickness(8, 0, 0, 0), Padding = new Thickness(10, 0, 10, 0) };
-            AppResources.StyleDialogButton(gbBrowseBtn, false);
+            var gbBrowseBtn = UiKit.MakeButton("浏览…", ButtonVariant.Secondary);
+            gbBrowseBtn.Margin = new Thickness(6, 0, 0, 0);
             gbBrowseBtn.Click += (s, e) =>
             {
                 var fbd = new System.Windows.Forms.FolderBrowserDialog { SelectedPath = gbBox.Text };
                 if (fbd.ShowDialog() == System.Windows.Forms.DialogResult.OK)
                     gbBox.Text = fbd.SelectedPath;
             };
-            DockPanel.SetDock(gbBrowseBtn, Dock.Right);
-            gbRow.Children.Add(gbBrowseBtn);
-            gbRow.Children.Add(gbBox);
-            gbPanel.Children.Add(gbRow);
-
-            gbPanel.Children.Add(new TextBlock { Text = "Game Bar 截图快捷键", Foreground = Brushes.White, FontWeight = FontWeights.SemiBold, FontSize = 13, Margin = new Thickness(0, 0, 0, 6) });
-            var gbHk = MakeHotkeyRow(owner, dlg, AppPrefs.GetInt("Screenshot.GameBarHotkey", 0), fg, emptyText: "（未设置，用默认 Win+Alt+PrtScn）", bottomMargin: 8, testOccupancy: false);
-            gbPanel.Children.Add(gbHk.Row);
-            gbPanel.Children.Add(new TextBlock { Text = "需与 Game Bar 使用相同快捷键，建议选择不含 Win 的组合。", Foreground = fg, FontSize = 10, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 16) });
-
-            stack.Children.Add(gbPanel);
+            var gbPath = new StackPanel { Orientation = Orientation.Horizontal };
+            gbPath.Children.Add(gbBox);
+            gbPath.Children.Add(gbBrowseBtn);
+            var gbHk = MakeHotkeyRow(owner, dlg, AppPrefs.GetInt("Screenshot.GameBarHotkey", 0), fg, emptyText: "默认 Win+Alt+PrtScn", bottomMargin: 0, testOccupancy: false);
+            gbPanel.Children.Add(UiKit.SettingsRow("截图读取位置", gbPath));
+            gbPanel.Children.Add(HotkeySettingsRow("Game Bar 截图快捷键", gbHk, "需与 Game Bar 使用相同快捷键，建议选择不含 Win 的组合。"));
             gbToggle.Checked += (s, e) => gbPanel.IsEnabled = true;
             gbToggle.Unchecked += (s, e) => gbPanel.IsEnabled = false;
+            var gbBody = new StackPanel();
+            gbBody.Children.Add(UiKit.SettingsRow("启用 Game Bar 截图回退", gbToggle));
+            gbBody.Children.Add(gbPanel);
 
-            stack.Children.Add(new Border { Height = 1, Background = new SolidColorBrush(Color.FromRgb(80, 75, 120)), Margin = new Thickness(0, 0, 0, 12) });
+            // 安全接管：由 Game Bar / Steam / 显卡工具响应实体按键，OneBox 只接管落盘后的图片。
+            bool takeoverEnabled = AppPrefs.GetBool("Screenshot.ExternalTakeoverEnabled", false);
+            var takeoverToggle = Switch("启用外部截图接管（不模拟按键）", takeoverEnabled);
+            var takeoverPanel = new StackPanel { IsEnabled = takeoverEnabled };
+            var takeoverBox = MakeBox();
+            takeoverBox.Text = ScreenshotService.ExternalTakeoverDir();
+            takeoverBox.FontFamily = UiKit.MonoFont;
+            takeoverBox.FontSize = 11;
+            takeoverBox.Width = 190;
+            System.Windows.Automation.AutomationProperties.SetName(takeoverBox, "官方截图保存目录");
+            var takeoverBrowseBtn = UiKit.MakeButton("浏览…", ButtonVariant.Secondary);
+            takeoverBrowseBtn.Margin = new Thickness(6, 0, 0, 0);
+            takeoverBrowseBtn.Click += (_, _) =>
+            {
+                var fbd = new System.Windows.Forms.FolderBrowserDialog { SelectedPath = takeoverBox.Text };
+                if (fbd.ShowDialog() == System.Windows.Forms.DialogResult.OK) takeoverBox.Text = fbd.SelectedPath;
+            };
+            var takeoverPath = new StackPanel { Orientation = Orientation.Horizontal };
+            takeoverPath.Children.Add(takeoverBox);
+            takeoverPath.Children.Add(takeoverBrowseBtn);
+            takeoverPanel.Children.Add(UiKit.SettingsRow("官方截图保存目录", takeoverPath));
+            takeoverToggle.Checked += (_, _) => takeoverPanel.IsEnabled = true;
+            takeoverToggle.Unchecked += (_, _) => takeoverPanel.IsEnabled = false;
+            var takeoverBody = new StackPanel();
+            takeoverBody.Children.Add(UiKit.SettingsRow("启用外部截图接管（不模拟按键）", takeoverToggle,
+                "在游戏中按 Game Bar、Steam 或显卡工具的实体截图键；OneBox 会监听新图片、复制归档并弹出提示。支持子目录。"));
+            takeoverBody.Children.Add(takeoverPanel);
 
-            stack.Children.Add(new TextBlock { Text = "截图快捷键", Foreground = Brushes.White, FontWeight = FontWeights.SemiBold, FontSize = 13, Margin = new Thickness(0, 0, 0, 6) });
-            var hk = MakeHotkeyRow(owner, dlg, AppPrefs.GetInt("Screenshot.Hotkey", 0), fg, bottomMargin: 8);
-            stack.Children.Add(hk.Row);
+            stack.Children.Add(UiKit.SettingsGroup("游戏截图",
+                CollapsibleGroup("Game Bar 截图回退", "HDR / 全屏游戏 · " + (gbEnabled ? "已开启" : "未开启"), gbBody, false),
+                CollapsibleGroup("外部截图接管", "反作弊游戏 · 不模拟按键 · " + (takeoverEnabled ? "已开启" : "未开启"), takeoverBody, false)));
 
             var btns = MakeButtons();
             ((Button)btns.Children[0]).Click += async (s, e) =>
@@ -201,8 +172,7 @@ namespace PowerAudioManager
                     string sourceDir = takeoverBox.Text.Trim();
                     if (!System.IO.Directory.Exists(sourceDir))
                     {
-                        MessageBox.Show(dlg, "外部截图接管目录不存在，请选择 Game Bar、Steam 或显卡工具实际使用的截图目录。",
-                            "OneBox 设置", MessageBoxButton.OK, MessageBoxImage.Warning);
+                        OneBoxMessage.Error(dlg, "OneBox 设置", "外部截图接管目录不存在，请选择 Game Bar、Steam 或显卡工具实际使用的截图目录。");
                         return;
                     }
                     try
@@ -211,15 +181,13 @@ namespace PowerAudioManager
                             System.IO.Path.TrimEndingDirectorySeparator(System.IO.Path.GetFullPath(rootBox.Text.Trim())),
                             StringComparison.OrdinalIgnoreCase))
                         {
-                            MessageBox.Show(dlg, "外部截图目录不能与 OneBox 截图保存目录相同，否则无法区分原图和归档副本。",
-                                "OneBox 设置", MessageBoxButton.OK, MessageBoxImage.Warning);
+                            OneBoxMessage.Error(dlg, "OneBox 设置", "外部截图目录不能与 OneBox 截图保存目录相同，否则无法区分原图和归档副本。");
                             return;
                         }
                     }
                     catch
                     {
-                        MessageBox.Show(dlg, "外部截图接管目录格式无效。", "OneBox 设置",
-                            MessageBoxButton.OK, MessageBoxImage.Warning);
+                        OneBoxMessage.Error(dlg, "OneBox 设置", "外部截图接管目录格式无效。");
                         return;
                     }
                 }
@@ -247,6 +215,41 @@ namespace PowerAudioManager
             stack.Children.Add(btns);
 
             return Scroll(stack);
+        }
+
+        static Style _cornerCellStyle;
+        // One cell of the 2×2 corner picker: a small rounded block, accent when chosen.
+        static Style CornerCellStyle()
+        {
+            if (_cornerCellStyle != null) return _cornerCellStyle;
+            const string xaml = @"
+<Style xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation'
+       xmlns:x='http://schemas.microsoft.com/winfx/2006/xaml'
+       TargetType='{x:Type RadioButton}'>
+  <Setter Property='Cursor' Value='Hand'/>
+  <Setter Property='FocusVisualStyle' Value='{x:Null}'/>
+  <Setter Property='Template'>
+    <Setter.Value>
+      <ControlTemplate TargetType='{x:Type RadioButton}'>
+        <Border Name='Cell' CornerRadius='3' Background='#2B2839' BorderThickness='1' BorderBrush='Transparent'/>
+        <ControlTemplate.Triggers>
+          <Trigger Property='IsMouseOver' Value='True'>
+            <Setter TargetName='Cell' Property='Background' Value='#3A3650'/>
+          </Trigger>
+          <Trigger Property='IsChecked' Value='True'>
+            <Setter TargetName='Cell' Property='Background' Value='#8E8CD8'/>
+          </Trigger>
+          <Trigger Property='IsKeyboardFocused' Value='True'>
+            <Setter TargetName='Cell' Property='BorderBrush' Value='#C9C7F7'/>
+          </Trigger>
+        </ControlTemplate.Triggers>
+      </ControlTemplate>
+    </Setter.Value>
+  </Setter>
+</Style>";
+            _cornerCellStyle = (Style)System.Windows.Markup.XamlReader.Parse(xaml);
+            _cornerCellStyle.Seal();
+            return _cornerCellStyle;
         }
     }
 }

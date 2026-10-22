@@ -11,11 +11,20 @@ namespace PowerAudioManager
     {
         static FrameworkElement BuildClipboardTab(Window owner, Window dlg, SolidColorBrush fg)
         {
-            var stack = new StackPanel { Margin = new Thickness(20) };
+            var stack = NewPage("剪贴板");
 
-            stack.Children.Add(new TextBlock { Text = "剪贴板历史快捷键", Foreground = Brushes.White, FontWeight = FontWeights.SemiBold, FontSize = 13, Margin = new Thickness(0, 0, 0, 6) });
             var clipHk = MakeHotkeyRow(owner, dlg, AppPrefs.GetInt("Clipboard.Hotkey", 0), fg);
-            stack.Children.Add(clipHk.Row);
+            var clearHistory = UiKit.MakeButton("清空历史", ButtonVariant.Danger);
+            clearHistory.Height = 30;
+            clearHistory.Click += (_, _) =>
+            {
+                if (!OneBoxMessage.Confirm(dlg, "清空剪贴板历史？", "已保存的文本和图片记录会被删除，且无法恢复。", "清空", danger: true)) return;
+                try { ClipboardHistory.Clear(); }
+                catch (Exception ex) { AppLog.Log("Settings.ClipboardClear", ex); OneBoxMessage.Error(dlg, "OneBox 设置", "清空剪贴板历史失败。"); }
+            };
+            stack.Children.Add(UiKit.SettingsGroup(null,
+                HotkeySettingsRow("打开剪贴板历史", clipHk),
+                UiKit.SettingsRow("保留最近 20 条", clearHistory, "文本和图片都在本机加密保存")));
 
             var btns = MakeButtons();
             ((Button)btns.Children[0]).Click += async (s, e) =>

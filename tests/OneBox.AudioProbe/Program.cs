@@ -181,16 +181,15 @@ internal static class Program
             window.WindowStartupLocation = WindowStartupLocation.Manual; window.Left = -10000; window.Top = -10000;
             window.Show(); Pump();
             Render(window, Path.Combine(directory, "studio-" + theme + ".png"));
-            var body = (System.Windows.Controls.StackPanel)typeof(StudioWindow)
-                .GetField("_body", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(view);
-            Expander VoicePanel() => body.Children.OfType<Border>()
-                .Select(x => x.Child).OfType<Expander>()
-                .First(x => x.Header?.ToString()?.StartsWith("2  ") == true);
-            VoicePanel().IsExpanded = true;
+            // The voice card is always open in the two-column layout; the
+            // collapsible card is 监听与炸麦.  Expand it, rebuild, and verify
+            // the expanded state survives Build().
+            var expanded = typeof(StudioWindow).GetField("_effectsExpanded", BindingFlags.Instance | BindingFlags.NonPublic);
+            expanded.SetValue(view, true);
             typeof(StudioWindow).GetMethod("Build", BindingFlags.Instance | BindingFlags.NonPublic).Invoke(view, null);
             Pump();
-            if (!VoicePanel().IsExpanded) throw new Exception("OneMic voice controls collapsed after rebuilding");
-            Render(window, Path.Combine(directory, "studio-voice-expanded.png"));
+            if (!(bool)expanded.GetValue(view)) throw new Exception("OneMic effects controls collapsed after rebuilding");
+            Render(window, Path.Combine(directory, "studio-effects-expanded.png"));
             foreach (string method in new[] { "Equalizer", "Guide" })
             {
                 typeof(StudioWindow).GetMethod(method, BindingFlags.Instance | BindingFlags.NonPublic).Invoke(view, null);

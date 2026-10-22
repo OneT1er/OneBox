@@ -11,11 +11,9 @@ namespace PowerAudioManager
     {
         static FrameworkElement BuildModulesTab(Window owner, Window dlg, SolidColorBrush fg)
         {
-            var stack = new StackPanel { Margin = new Thickness(20) };
-            stack.Children.Add(new TextBlock { Text = "悬浮窗板块", Foreground = Brushes.White, FontSize = 13, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 0, 0, 12) });
-            stack.Children.Add(new TextBlock { Text = "关闭板块会停用对应后台功能和快捷键；“截图文件夹”只控制入口，截图功能在“截图”页设置。",
-                Foreground = fg, FontSize = 12, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 10) });
+            var stack = NewPage("板块");
 
+            var cbTemp = MakeCb("性能趋势", "Temp");
             var cbPower = MakeCb("电源计划", "Power");
             var cbAudio = MakeCb("音频输出", "Audio");
             var cbOneMic = MakeCb("OneMic", "OneMic");
@@ -24,26 +22,25 @@ namespace PowerAudioManager
             var cbLaunch = MakeCb("快捷启动", "Launcher");
             var cbClip = MakeCb("剪贴板历史", "Clipboard");
             var cbGallery = MakeCb("截图文件夹", "Gallery");
-            var cbTemp = MakeCb("性能趋势", "Temp");
-            stack.Children.Add(cbPower);
-            stack.Children.Add(cbAudio);
-            stack.Children.Add(cbOneMic);
-            stack.Children.Add(cbMem);
-            stack.Children.Add(cbTr);
-            stack.Children.Add(cbLaunch);
-            stack.Children.Add(cbClip);
-            stack.Children.Add(cbGallery);
-            stack.Children.Add(cbTemp);
+
+            // 两列开关网格：每格一个板块，开关在右。
+            var grid = new System.Windows.Controls.Primitives.UniformGrid { Columns = 2 };
+            foreach (var cb in new[] { cbTemp, cbPower, cbAudio, cbOneMic, cbMem, cbTr, cbLaunch, cbClip, cbGallery })
+            {
+                cb.Margin = new Thickness(12, 2, 12, 2);
+                grid.Children.Add(cb);
+            }
+            stack.Children.Add(UiKit.GroupCaption("悬浮窗显示的板块"));
+            stack.Children.Add(UiKit.Card(grid, new Thickness(0, 4, 0, 4)));
+            stack.Children.Add(Hint("关闭板块会同时停用对应的后台功能和快捷键。「截图文件夹」只控制入口，截图功能在「截图」页设置。", 6, 14));
 
             // 音频循环切换快捷键（SoundSwitch 式）：按一下切到下一个可见输出设备并弹提示
-            stack.Children.Add(new TextBlock { Text = "音频循环切换快捷键", Foreground = Brushes.White, FontWeight = FontWeights.SemiBold, FontSize = 13, Margin = new Thickness(0, 16, 0, 6) });
             var cycleHk = MakeHotkeyRow(owner, dlg, AppPrefs.GetInt("Audio.CycleHotkey", 0), fg);
-            stack.Children.Add(cycleHk.Row);
-
             // 电源计划循环切换快捷键：按一下切到下一个电源计划并弹提示
-            stack.Children.Add(new TextBlock { Text = "电源循环切换快捷键", Foreground = Brushes.White, FontWeight = FontWeights.SemiBold, FontSize = 13, Margin = new Thickness(0, 16, 0, 6) });
             var pwHk = MakeHotkeyRow(owner, dlg, AppPrefs.GetInt("Power.CycleHotkey", 0), fg);
-            stack.Children.Add(pwHk.Row);
+            stack.Children.Add(UiKit.SettingsGroup("快捷键",
+                HotkeySettingsRow("循环切换音频输出", cycleHk),
+                HotkeySettingsRow("循环切换电源计划", pwHk)));
 
             var btns = MakeButtons();
             ((Button)btns.Children[0]).Click += async (s, e) =>

@@ -56,20 +56,17 @@ namespace PowerAudioManager
                 if (!_windowUiDetached) RefreshVisibleUi();
                 if (attach) _root.Children.Add(_contentPanel);
                 if (_contentPanel != null) _contentPanel.Visibility = Visibility.Visible;
-                // 展开时标题栏下角保持直角与内容区衔接。
-                if (_titleBarBorder != null) _titleBarBorder.CornerRadius = new CornerRadius(10, 10, 0, 0);
-                if (_collapsedTempLabel != null) _collapsedTempLabel.Visibility = Visibility.Collapsed;
+                // 展开时标题栏下角保持直角与内容区衔接，并恢复完整按钮组。
+                ApplyTitleBarState(true);
                 SizeToContent = SizeToContent.Height;
             }
             else
             {
                 if (_contentPanel != null) _contentPanel.Visibility = Visibility.Collapsed;
-                // 折叠时仅标题栏可见，下角也圆角匹配外层卡片，避免方角超出圆角弧边。
-                if (_titleBarBorder != null) _titleBarBorder.CornerRadius = new CornerRadius(10);
-                if (_collapsedTempLabel != null && ModuleVisible("Temp"))
-                    _collapsedTempLabel.Visibility = Visibility.Visible;
+                // 折叠时仅标题栏可见（40px 摘要条），下角也圆角匹配外层卡片。
+                ApplyTitleBarState(false);
                 SizeToContent = SizeToContent.Height;
-                MinHeight = 36;
+                MinHeight = 40;
                 UpdateTempUI();
                 if (_contentPanel != null) ScheduleUiReclamation();
             }

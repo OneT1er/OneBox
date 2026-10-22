@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
@@ -91,14 +92,13 @@ namespace PowerAudioManager
                     _powerSection.Children.Add(new TextBlock
                     {
                         Text = "未找到电源计划",
-                        Foreground = new SolidColorBrush(UiKit.TextSecondary),
+                        Foreground = UiKit.FrozenBrush(UiKit.TextSecondary),
                         FontSize = 11
                     });
                 }
                 else
                 {
-                    foreach (var plan in _powerPlans)
-                        _powerSection.Children.Add(CreatePlanButton(plan));
+                    _powerSection.Children.Add(CreatePlanSegments(_powerPlans));
                 }
             }
             catch { }
@@ -129,8 +129,9 @@ namespace PowerAudioManager
                     _audioDeviceSection.Children.Add(new TextBlock
                     {
                         Text = "未找到音频输出",
-                        Foreground = new SolidColorBrush(UiKit.TextSecondary),
-                        FontSize = 11
+                        Foreground = UiKit.FrozenBrush(UiKit.TextSecondary),
+                        FontSize = 11,
+                        Margin = new Thickness(0, 4, 0, 4)
                     });
                 }
                 else
@@ -142,37 +143,71 @@ namespace PowerAudioManager
             catch { }
         }
 
-        Button CreatePlanButton(PowerPlanInfo plan)
+        // 电源计划：分段切换控件（最多 3 列，超过时自动换行）。
+        Border CreatePlanSegments(List<PowerPlanInfo> plans)
         {
-            var isActive = plan.IsActive || plan.Guid == _currentPlanId;
-            var btn = new Button
+            var grid = new UniformGrid { Columns = Math.Min(3, Math.Max(1, plans.Count)) };
+            string group = "plan" + Guid.NewGuid().ToString("N");
+            var segmentStyle = Application.Current?.TryFindResource(ThemeTokens.SegmentKey) as Style;
+            foreach (var plan in plans)
             {
-                Content = plan.Name,
-                Tag = plan.Guid,
-                HorizontalContentAlignment = HorizontalAlignment.Left,
-                Padding = new Thickness(10, 6, 10, 6),
-                Margin = new Thickness(0, 2, 0, 2),
-                FontSize = 12,
-                Cursor = Cursors.Hand
+                var isActive = plan.IsActive || plan.Guid == _currentPlanId;
+                var rb = new RadioButton
+                {
+                    GroupName = group,
+                    IsChecked = isActive,
+                    Tag = plan.Guid,
+                    Margin = new Thickness(1),
+                    ToolTip = plan.Name,
+                    Content = new TextBlock { Text = plan.Name, TextTrimming = TextTrimming.CharacterEllipsis }
+                };
+                if (segmentStyle != null) rb.Style = segmentStyle;
+                rb.Height = 30;
+                System.Windows.Automation.AutomationProperties.SetName(rb, plan.Name);
+                rb.MouseDoubleClick += (s, e) => { try { System.Diagnostics.Process.Start("control.exe", "powercfg.cpl"); } catch { } e.Handled = true; };
+                rb.Command = CreateUiCommand(AppCommandId.PowerActivate, CommandSource.MainWindow,
+                    () => new PowerActivatePayload(plan.Guid));
+                grid.Children.Add(rb);
+            }
+            var host = new Border
+            {
+                Background = UiKit.FrozenBrush(UiKit.BgColor),
+                CornerRadius = new CornerRadius(8),
+                Padding = new Thickness(1),
+                Child = grid
             };
-            StyleButton(btn, isActive);
-            btn.MouseDoubleClick += (s, e) => { try { System.Diagnostics.Process.Start("control.exe", "powercfg.cpl"); } catch { } e.Handled = true; };
-            btn.Command = CreateUiCommand(AppCommandId.PowerActivate, CommandSource.MainWindow,
-                () => new PowerActivatePayload(plan.Guid));
-            return btn;
+            System.Windows.Automation.AutomationProperties.SetName(host, "电源计划");
+            return host;
         }
 
         Button CreateDeviceButton(AudioDeviceInfo dev)
         {
             var isActive = dev.IsDefault || dev.Id == _currentDeviceId;
             var content = new DockPanel { LastChildFill = true };
+            var dot = new System.Windows.Shapes.Ellipse
+            {
+                Width = 6, Height = 6,
+                Fill = UiKit.FrozenBrush(isActive ? UiKit.AccentColor : Color.FromRgb(0x4A, 0x46, 0x60)),
+                Margin = new Thickness(0, 0, 8, 0),
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            DockPanel.SetDock(dot, Dock.Left);
+            content.Children.Add(dot);
+            if (isActive)
+            {
+                var check = UiKit.Glyph(UiKit.Glyphs.Check, 14, UiKit.FrozenBrush(UiKit.AccentColor), 2.4);
+                check.Margin = new Thickness(8, 0, 0, 0);
+                check.VerticalAlignment = VerticalAlignment.Center;
+                DockPanel.SetDock(check, Dock.Right);
+                content.Children.Add(check);
+            }
             string hkText = dev.HotkeyIndex != 0 ? HotkeyCaptureDialog.Format(dev.HotkeyIndex) : null;
             if (hkText != null)
             {
                 var hkBlock = new TextBlock {
                     Text = hkText,
                     FontSize = 10,
-                    Opacity = 0.75,
+                    Foreground = UiKit.FrozenBrush(UiKit.TextTertiary),
                     Margin = new Thickness(8, 0, 0, 0),
                     VerticalAlignment = VerticalAlignment.Center
                 };
@@ -183,20 +218,22 @@ namespace PowerAudioManager
                 Text = string.IsNullOrEmpty(dev.Name) ? "(未命名设备)" : dev.Name,
                 TextTrimming = TextTrimming.CharacterEllipsis,
                 VerticalAlignment = VerticalAlignment.Center,
-                Foreground = Brushes.White // 显式设白色避免继承隐藏色
+                Foreground = UiKit.FrozenBrush(isActive ? UiKit.TextPrimary : UiKit.TextSecondary)
             };
             content.Children.Add(nameBlock);
             var btn = new Button {
                 Content = content,
                 Tag = dev.Id,
-                HorizontalContentAlignment = HorizontalAlignment.Stretch,
-                Padding = new Thickness(10, 6, 10, 6),
-                Margin = new Thickness(0, 2, 0, 2),
+                Height = 32,
+                Padding = new Thickness(8, 0, 8, 0),
+                Margin = new Thickness(0, 1, 0, 1),
                 FontSize = 12,
                 Cursor = Cursors.Hand,
                 ToolTip = hkText != null ? dev.Name + "  [" + hkText + "]" : dev.Name
             };
             StyleButton(btn, isActive);
+            btn.HorizontalContentAlignment = HorizontalAlignment.Stretch;
+            btn.FontWeight = FontWeights.Normal;
             btn.Command = CreateUiCommand(AppCommandId.AudioActivate, CommandSource.MainWindow,
                 () => new AudioActivatePayload(dev.Id));
             var devCtx = new ContextMenu();
@@ -231,7 +268,7 @@ namespace PowerAudioManager
             try
             {
                 _volSlider.Value = VolumeControl.GetVolume() * 100;
-                if (_volLabel != null) _volLabel.Text = ((int)_volSlider.Value).ToString() + "%";
+                if (_volLabel != null) _volLabel.Text = ((int)_volSlider.Value).ToString();
                 if (_muteBtn != null)
                     _muteBtn.Content = UiKit.MuteIcon(VolumeControl.GetMute(), UiKit.FrozenBrush(UiKit.TextSecondary));
             }

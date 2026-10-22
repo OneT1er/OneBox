@@ -18,6 +18,21 @@ namespace PowerAudioManager
     public static class ForegroundHistory
     {
         struct Entry { public DateTime Time, End; public string Exe; }
+        // Up to MaxEntries rows usually name a handful of executables; share
+        // one string instance per distinct name instead of one per row (the
+        // JSON loader otherwise allocates a fresh copy for every entry).
+        static readonly Dictionary<string, string> _namePool = new Dictionary<string, string>(StringComparer.Ordinal);
+        internal static string PoolName(string exe)
+        {
+            if (string.IsNullOrEmpty(exe)) return "";
+            lock (_namePool)
+            {
+                if (_namePool.TryGetValue(exe, out string shared)) return shared;
+                if (_namePool.Count >= 4096) _namePool.Clear();
+                _namePool[exe] = exe;
+                return exe;
+            }
+        }
         static readonly object _lock = new object();
         static readonly object _saveLock = new object();
         static readonly List<Entry> _entries = new List<Entry>();
@@ -101,7 +116,7 @@ namespace PowerAudioManager
                         last = _entries[^1]; last.End = time; _entries[^1] = last;
                     }
                 }
-                _entries.Add(new Entry { Time = time, End = time.AddSeconds(2), Exe = exe ?? "" });
+                _entries.Add(new Entry { Time = time, End = time.AddSeconds(2), Exe = PoolName(exe) });
                 _newSession = false;
                 _entries.RemoveAll(e => e.End < time.AddDays(-1));
                 if (_entries.Count > MaxEntries) _entries.RemoveRange(0, _entries.Count - MaxEntries);
@@ -156,7 +171,7 @@ namespace PowerAudioManager
                         foreach (var d in (data ?? new List<EntryData>()).OrderBy(d => d.time).TakeLast(MaxEntries))
                         {
                             if (!d.end.HasValue || d.end.Value <= d.time) continue;
-                            _entries.Add(new Entry { Time = d.time, End = d.end.Value, Exe = d.exe ?? "" });
+                            _entries.Add(new Entry { Time = d.time, End = d.end.Value, Exe = PoolName(d.exe) });
                         }
                         _newSession = true;
                         return true;

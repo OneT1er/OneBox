@@ -104,30 +104,14 @@ namespace PowerAudioManager
         }
 
         // ---- 对话框按钮样式（共享）------------------------------------
-        // Apply the shared flat button style to dialog buttons.
-        // 独立窗口（设置/翻译/剪贴板历史/快捷键）与悬浮窗保持统一设计语言。
+        // 独立窗口（设置/翻译/剪贴板历史/快捷键）与悬浮窗保持统一设计语言（方向 A）。
         //
-        // primary = true  → 紫影填充 + 白色文字（主操作，如确定/翻译）
-        // primary = false → 透明扁平按钮，暗色文字
-        static readonly Color DDim = Color.FromRgb(190, 188, 220);
-        static readonly Color DAccent = Color.FromRgb(142, 140, 216);
-
+        // primary = true  → 紫影填充 + 深色文字（主操作，如确定/翻译）
+        // primary = false → 描边次要按钮
         public static void StyleDialogButton(Button btn, bool primary)
         {
-            // Flat button: transparent secondary action with the shared hover state.
-            // 主操作按钮用紫影填充以突出显示；次要按钮保持透明，依赖波纹提供可交互暗示。
-            var style = Application.Current.TryFindResource(ThemeTokens.FlatButtonKey) as Style;
-            if (style != null) btn.Style = style;
-            if (primary)
-            {
-                btn.Background = new SolidColorBrush(DAccent);
-                btn.Foreground = Brushes.White;
-                btn.FontWeight = FontWeights.SemiBold;
-            }
-            else
-            {
-                btn.Foreground = new SolidColorBrush(DDim);
-            }
+            if (btn == null) return;
+            UiKit.ApplyButtonVariant(btn, primary ? ButtonVariant.Primary : ButtonVariant.Secondary);
         }
 
         // ---- 深色 TabControl 样式（共享）----------------------------------
@@ -149,9 +133,9 @@ namespace PowerAudioManager
         {
             if (cb == null) return;
             cb.Style = ThemeTokens.CreateDarkComboBoxStyle();
-            cb.Background = new SolidColorBrush(ThemeTokens.Card);
-            cb.Foreground = new SolidColorBrush(Color.FromRgb(230, 228, 250));
-            cb.BorderBrush = new SolidColorBrush(ThemeTokens.Border);
+            cb.Background = UiKit.FrozenBrush(ThemeTokens.Background);
+            cb.Foreground = UiKit.FrozenBrush(ThemeTokens.PrimaryText);
+            cb.BorderBrush = UiKit.FrozenBrush(ThemeTokens.BorderStrong);
             cb.BorderThickness = new Thickness(1);
         }
 

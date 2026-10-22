@@ -27,7 +27,21 @@ namespace PowerAudioManager
                 double avail = s.AvailableBytes / 1024.0 / 1024.0 / 1024.0;
                 double used = total - avail;
                 double cachedGb = s.CachedBytes / 1024.0 / 1024.0 / 1024.0;
-                _memStatusLabel.Text = string.Format("已用 {0:0.0} GB / {1:0.0} GB ({2}%) · 已缓存 {3:0.0} GB", used, total, s.MemoryLoadPercent, cachedGb);
+                _memStatusLabel.Text = string.Format("{0:0.0} / {1:0} GB · 缓存 {2:0.0} GB", used, total, cachedGb);
+                if (_memPercentLabel != null) _memPercentLabel.Text = s.MemoryLoadPercent + "%";
+                _collapsedMemoryPercent = s.MemoryLoadPercent;
+                _collapsedMemoryKnown = true;
+                _collapsedMemoryReadUtc = DateTime.UtcNow;
+                if (_memUsedColumn != null && total > 0)
+                {
+                    // 缓存位于可用内存之内（standby 计入可用），条形按 已用 / 缓存 / 其余 堆叠。
+                    double usedPart = Math.Clamp(used / total, 0, 1);
+                    double cachePart = Math.Clamp(Math.Min(cachedGb, avail) / total, 0, 1 - usedPart);
+                    double freePart = Math.Max(0, 1 - usedPart - cachePart);
+                    _memUsedColumn.Width = new GridLength(usedPart, GridUnitType.Star);
+                    _memCacheColumn.Width = new GridLength(cachePart, GridUnitType.Star);
+                    _memFreeColumn.Width = new GridLength(freePart, GridUnitType.Star);
+                }
             }
             catch { }
         }

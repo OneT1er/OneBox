@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace OneBox.Contracts;
 
@@ -22,6 +23,11 @@ public enum IpcCommand
     SubscribeHardware = 2,
     HardwareSnapshot = 3,
     Ping = 4,
+    // Read-only: standby + modified page totals for the 「缓存」 figure.  Lets
+    // the unprivileged GUI show Task Manager's Cached value without loading
+    // the PerformanceCounter stack (added after protocol v1; older services
+    // answer UnsupportedCommand and the GUI falls back locally).
+    MemoryListStatus = 5,
 }
 
 public enum IpcErrorCode
@@ -105,6 +111,49 @@ public sealed class CleanMemoryPayload
 public sealed class CleanMemoryResult
 {
     public ulong FreedBytes { get; set; }
+}
+
+public sealed class MemoryListStatusResult
+{
+    // All standby priorities (Task Manager's "Standby" portion of Cached).
+    public ulong StandbyBytes { get; set; }
+    // Modified page list (dirty pages awaiting write-back).
+    public ulong ModifiedBytes { get; set; }
+
+    [JsonIgnore]
+    public ulong CachedBytes => StandbyBytes + ModifiedBytes;
+}
+
+// Layout of SYSTEM_MEMORY_LIST_INFORMATION (NtQuerySystemInformation class
+// 80): every field is a ULONG_PTR page count.  Kept here, free of P/Invoke,
+// so both the privileged service and an elevated GUI decode it identically
+// and the arithmetic is unit-testable.
+public static class MemoryListLayout
+{
+    public const int InformationClass = 80;
+    public const int ZeroPageIndex = 0;
+    public const int FreePageIndex = 1;
+    public const int ModifiedPageIndex = 2;
+    public const int ModifiedNoWritePageIndex = 3;
+    public const int BadPageIndex = 4;
+    public const int StandbyByPriorityIndex = 5;
+    public const int PriorityCount = 8;
+    public const int RepurposedByPriorityIndex = StandbyByPriorityIndex + PriorityCount;
+    public const int ModifiedPageFileIndex = RepurposedByPriorityIndex + PriorityCount;
+    public const int FieldCount = ModifiedPageFileIndex + 1;
+
+    public static MemoryListStatusResult FromPageCounts(ReadOnlySpan<ulong> fields, ulong pageSize)
+    {
+        if (fields.Length < FieldCount) throw new ArgumentException("Memory list information is truncated.", nameof(fields));
+        if (pageSize == 0) throw new ArgumentOutOfRangeException(nameof(pageSize));
+        ulong standbyPages = 0;
+        for (int i = 0; i < PriorityCount; i++) standbyPages += fields[StandbyByPriorityIndex + i];
+        return new MemoryListStatusResult
+        {
+            StandbyBytes = standbyPages * pageSize,
+            ModifiedBytes = fields[ModifiedPageIndex] * pageSize,
+        };
+    }
 }
 
 public sealed class HardwareSubscribePayload

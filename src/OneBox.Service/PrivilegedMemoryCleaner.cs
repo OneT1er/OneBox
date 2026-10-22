@@ -55,6 +55,7 @@ internal static class PrivilegedMemoryCleaner
     [DllImport("ntdll.dll")] private static extern int NtSetSystemInformation(int infoClass, ref SystemFileCacheInformation data, int size);
     [DllImport("ntdll.dll")] private static extern int NtSetSystemInformation(int infoClass, ref MemoryCombineInformation data, int size);
     [DllImport("ntdll.dll")] private static extern int RtlGetVersion(ref OsVersionInfo version);
+    [DllImport("ntdll.dll")] private static extern int NtQuerySystemInformation(int infoClass, IntPtr buffer, int length, out int returnLength);
 
     public static bool AreFlagsValid(int flags) => flags > 0 && (flags & ~AllFlags) == 0;
 
@@ -112,6 +113,30 @@ internal static class PrivilegedMemoryCleaner
         Thread.Sleep(500);
         ulong after = AvailableMemory();
         return after > before ? after - before : 0;
+    }
+
+    private static int _profilePrivilegeEnabled;
+
+    // Standby (all priorities) + modified page totals.  Querying class 80
+    // needs SeProfileSingleProcessPrivilege, which LocalSystem holds; it is
+    // enabled once.  Returns null when the kernel rejects the query.
+    public static OneBox.Contracts.MemoryListStatusResult QueryMemoryLists()
+    {
+        if (Interlocked.Exchange(ref _profilePrivilegeEnabled, 1) == 0)
+            EnablePrivilege("SeProfileSingleProcessPrivilege");
+        int fieldCount = OneBox.Contracts.MemoryListLayout.FieldCount;
+        int length = fieldCount * IntPtr.Size;
+        IntPtr buffer = Marshal.AllocHGlobal(length);
+        try
+        {
+            if (NtQuerySystemInformation(OneBox.Contracts.MemoryListLayout.InformationClass, buffer, length, out _) != 0)
+                return null;
+            var fields = new ulong[fieldCount];
+            for (int i = 0; i < fieldCount; i++)
+                fields[i] = (ulong)(nuint)Marshal.ReadIntPtr(buffer, i * IntPtr.Size);
+            return OneBox.Contracts.MemoryListLayout.FromPageCounts(fields, (ulong)Environment.SystemPageSize);
+        }
+        finally { Marshal.FreeHGlobal(buffer); }
     }
 
     private static ulong AvailableMemory()
