@@ -168,7 +168,7 @@ internal sealed class StudioWindow
         box.Margin = new Thickness(0);
         return new Border { Background = B(ThemeTokens.Raised), CornerRadius = new CornerRadius(8), Padding = new Thickness(10, 4, 10, 4), Margin = new Thickness(0, 0, 6, 0), Child = box };
     }
-    // "label  [■■■■■■|      ]  value" tile slider row.
+    // "label  [######|      ]  value" tile slider row.
     Slider SliderRow(Panel parent, string label, double value, double max, Action<float> changed, double min = 0, double labelWidth = 64)
     {
         var row = new DockPanel { LastChildFill = true, Margin = new Thickness(0, 0, 0, 8) };
@@ -765,7 +765,7 @@ internal sealed class StudioWindow
             Set(_input, devices.Item1, s.InputId); Set(_output, cables, s.OutputId);
             Set(_monitor, devices.Item2.Where(x => !x.IsCable).ToArray(), s.MonitorId);
             bool hasCable = cables.Length > 0;
-            _cableStatus.Text = hasCable ? "✓ VB-CABLE 已安装" : "未检测到 VB-CABLE";
+            _cableStatus.Text = hasCable ? "VB-CABLE 已安装" : "未检测到 VB-CABLE";
             _cableStatus.Foreground = B(hasCable ? Color.FromRgb(143, 224, 176) : ThemeTokens.Warn);
             _cableHint.Text = hasCable
                 ? "已检测到 VB-CABLE。请在通话软件中把麦克风选为 CABLE Output。"

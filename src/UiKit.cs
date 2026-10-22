@@ -368,7 +368,7 @@ namespace PowerAudioManager
             };
         }
 
-        // Status dot + text (e.g. 「● OneBoxSvc 已接管特权清理」).
+        // Status dot (drawn Ellipse) + text, e.g. a colored dot followed by 「OneBoxSvc 已接管特权清理」.
         internal static StackPanel StatusLine(string text, Color dot)
         {
             var sp = new StackPanel { Orientation = Orientation.Horizontal };
