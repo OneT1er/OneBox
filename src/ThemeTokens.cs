@@ -361,6 +361,9 @@ namespace PowerAudioManager
             style.Setters.Add(new Setter(Control.FontWeightProperty, weight));
             style.Setters.Add(new Setter(Control.FontSizeProperty, 12.0));
             style.Setters.Add(new Setter(Control.PaddingProperty, new Thickness(12, 0, 12, 0)));
+            // Not based on the system theme style, so restore Button's centred content.
+            style.Setters.Add(new Setter(Control.HorizontalContentAlignmentProperty, HorizontalAlignment.Center));
+            style.Setters.Add(new Setter(Control.VerticalContentAlignmentProperty, VerticalAlignment.Center));
             style.Setters.Add(new Setter(FrameworkElement.MinHeightProperty, 30.0));
             style.Setters.Add(new Setter(FrameworkElement.CursorProperty, Cursors.Hand));
             style.Setters.Add(new Setter(FrameworkElement.FocusVisualStyleProperty, null));

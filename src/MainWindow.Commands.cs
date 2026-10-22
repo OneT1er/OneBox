@@ -36,9 +36,9 @@ namespace PowerAudioManager
             AppLog.Log("Command", $"{source}/{id}: {(result.Success ? "ok" : result.ErrorCode.ToString())}");
             if (!result.IsCancelled && !string.IsNullOrWhiteSpace(result.UserMessage))
             {
-                MessageBox.Show(this, result.UserMessage, AppCommandCatalog.TryGet(id, out var definition)
-                    ? definition.Term : "OneBox", MessageBoxButton.OK,
-                    result.Success ? MessageBoxImage.Information : MessageBoxImage.Warning);
+                string title = AppCommandCatalog.TryGet(id, out var definition) ? definition.Term : "OneBox";
+                if (result.Success) OneBoxMessage.Info(this, title, result.UserMessage);
+                else OneBoxMessage.Error(this, title, result.UserMessage);
             }
             return result;
         }
@@ -286,7 +286,7 @@ namespace PowerAudioManager
             if (_pinBtn != null)
             {
                 _pinBtn.Content = UiKit.PinIcon(payload.LockPosition, UiKit.FrozenBrush(payload.LockPosition ? UiKit.AccentColor : UiKit.TextSecondary));
-                _pinBtn.Foreground = new System.Windows.Media.SolidColorBrush(
+                _pinBtn.Foreground = UiKit.FrozenBrush(
                     payload.LockPosition ? UiKit.AccentColor : UiKit.TextSecondary);
                 System.Windows.Automation.AutomationProperties.SetName(_pinBtn,
                     payload.LockPosition ? "解除锁定窗口位置" : "锁定窗口位置");

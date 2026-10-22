@@ -116,13 +116,14 @@ namespace PowerAudioManager
                 bar.Template = ProgressTemplate();
                 // Progress<int> writes "…NN%" into status; mirror it on the bar.
                 var descriptor = System.ComponentModel.DependencyPropertyDescriptor.FromProperty(TextBlock.TextProperty, typeof(TextBlock));
-                descriptor?.AddValueChanged(status, (_, _) =>
+                EventHandler mirror = (_, _) =>
                 {
                     var text = status.Text ?? "";
                     int pct = text.LastIndexOf('%');
                     int sp = pct > 0 ? text.LastIndexOf(' ', pct) : -1;
                     if (sp >= 0 && int.TryParse(text.Substring(sp + 1, pct - sp - 1), out int value)) bar.Value = value;
-                });
+                };
+                descriptor?.AddValueChanged(status, mirror);
                 var hint = UiKit.Text("安装时 OneBox 会自动重启", 11, UiKit.TextSecondary);
                 hint.Margin = new Thickness(0, 8, 0, 0);
                 var body = new StackPanel { Margin = new Thickness(16, 0, 16, 18) };
@@ -131,7 +132,8 @@ namespace PowerAudioManager
                 body.Children.Add(hint);
                 var dialog = OneBoxWindow.Create(owner, "OneBox 更新", 360, 150, body, false, IconKey.Brand);
                 dialog.SizeToContent = SizeToContent.Height;
-                dialog.Closed += (_, _) => cancellation.Cancel();
+                // DependencyPropertyDescriptor holds its handlers strongly; detach on close.
+                dialog.Closed += (_, _) => { descriptor?.RemoveValueChanged(status, mirror); cancellation.Cancel(); };
                 dialog.Show();
                 return (dialog, status);
             });

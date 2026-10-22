@@ -142,7 +142,7 @@ namespace PowerAudioManager
                     new AudioVolumePayload(Math.Clamp(
                         VolumeControl.GetVolume() + (e.Delta > 0 ? 0.02f : -0.02f), 0, 1)));
             };
-            // LoadData() 推迟到 OnLoaded 异步执行，避免 GetStatus() 首次创建 PerformanceCounter（~300ms）阻塞构造函数。
+            // LoadData() 推迟到 OnLoaded 异步执行，避免首次读取电源/设备/内存状态阻塞构造函数。
             AppLog.Log("Startup", "ctor done " + sw.ElapsedMilliseconds + "ms");
             _refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(30) };
             _refreshTimer.Tick += (s, e) => { LoadData(); if (_tray != null) _tray.UpdateIcon(); if (IsVisible) try { _scaling.ApplyScaling(); _scaling.Reposition(); } catch { } };
@@ -223,7 +223,7 @@ namespace PowerAudioManager
                     Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_NOACTIVATE);
                 try { _tray = new TrayController(this, ExitApp); _tray.Init(); } catch { }
                 if (ModuleVisible("OneMic")) AudioStudio.StudioController.Instance.Initialize();
-                // UpdateIcon 调用 MemoryCleaner.GetStatus() 首次创建 PerformanceCounter ~400ms，推迟到 Idle 执行避免阻塞 OnLoaded。
+                // UpdateIcon 读取托盘状态（含内存），推迟到 Idle 执行避免阻塞 OnLoaded。
                 Dispatcher.BeginInvoke(new Action(() => { try { if (_tray != null) _tray.UpdateIcon(); } catch { } }),
                     System.Windows.Threading.DispatcherPriority.ApplicationIdle);
                 if (ModuleVisible("Clipboard"))
@@ -246,7 +246,7 @@ namespace PowerAudioManager
                 _scaling.ApplyScaling();
                 // 首次布局后夹回屏幕内（仅启动时，后续分辨率变化遵守固定位置）。
                 Dispatcher.BeginInvoke(new Action(EnsureFullyVisible), DispatcherPriority.Loaded);
-                // 窗口显示后延迟加载电源计划/设备/内存，避免 PerformanceCounter 初始化（~300ms）阻塞首帧。
+                // 窗口显示后延迟加载电源计划/设备/内存，避免 powercfg / 设备枚举阻塞首帧。
                 // 原先用 ApplicationIdle，但 .NET 10 冷启动时派发器数秒不进入 Idle，导致 ~6s 延迟。
                 // 改用 threading timer 确定性地 50ms 后触发，通过 BeginInvoke 回到 UI 线程。
                 _initLoadTimer = new System.Threading.Timer(_ =>

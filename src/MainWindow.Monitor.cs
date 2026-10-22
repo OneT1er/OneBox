@@ -161,22 +161,21 @@ namespace PowerAudioManager
             return m.Unit;
         }
 
-        // 置顶集合：AppPrefs「Metrics.Pinned」（逗号分隔的 ConfigKey），未设置时默认前 3 项。
+        // 置顶集合：AppPrefs「Metrics.Pinned」（逗号分隔的 ConfigKey，由设置页
+        // SettingsDialog.PinnedMetricsPrefKey 写入）。未设置时默认前 3 项；已设置时
+        // 只认精确匹配的键，与设置页 LoadPinnedMetrics 的判定保持一致。
         static bool[] ResolvePinned(List<MetricValue> metrics)
         {
             var pinned = new bool[metrics.Count];
-            string pref = AppPrefs.GetString("Metrics.Pinned", null);
-            int count = 0;
-            if (!string.IsNullOrWhiteSpace(pref))
+            string pref = AppPrefs.GetString(SettingsDialog.PinnedMetricsPrefKey, null);
+            if (pref == null)
             {
-                var keys = new HashSet<string>(StringComparer.Ordinal);
-                foreach (var part in pref.Split(','))
-                    if (!string.IsNullOrWhiteSpace(part)) keys.Add(part.Trim());
-                for (int i = 0; i < metrics.Count; i++)
-                    if (metrics[i].ConfigKey != null && keys.Contains(metrics[i].ConfigKey.Trim())) { pinned[i] = true; count++; }
-            }
-            if (count == 0)
                 for (int i = 0; i < metrics.Count && i < 3; i++) pinned[i] = true;
+                return pinned;
+            }
+            var keys = new HashSet<string>(pref.Split(',', StringSplitOptions.RemoveEmptyEntries), StringComparer.Ordinal);
+            for (int i = 0; i < metrics.Count; i++)
+                if (metrics[i].ConfigKey != null && keys.Contains(metrics[i].ConfigKey)) pinned[i] = true;
             return pinned;
         }
 

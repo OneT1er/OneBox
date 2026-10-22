@@ -546,7 +546,7 @@ namespace PowerAudioManager
             var popup = new FrameworkElementFactory(typeof(Popup));
             popup.Name = "SubmenuPopup";
             popup.SetValue(Popup.PlacementProperty, PlacementMode.Left);
-            popup.SetValue(Popup.HorizontalOffsetProperty, -4d);
+            popup.SetValue(Popup.HorizontalOffsetProperty, 4d);
             popup.SetValue(Popup.AllowsTransparencyProperty, true);
             popup.SetValue(Popup.PopupAnimationProperty, PopupAnimation.Fade);
             popup.SetValue(Popup.IsOpenProperty, new TemplateBindingExtension(MenuItem.IsSubmenuOpenProperty));

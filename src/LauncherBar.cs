@@ -578,10 +578,7 @@ namespace PowerAudioManager
         {
             string message = rejected == 1 ? "快捷启动栏最多只能添加 8 项。" : $"快捷启动栏最多只能添加 8 项，已有 {rejected} 项未添加。";
             var window = owner == null ? Application.Current?.MainWindow : Window.GetWindow(owner);
-            if (window != null)
-                MessageBox.Show(window, message, "快捷启动栏", MessageBoxButton.OK, MessageBoxImage.Information);
-            else
-                MessageBox.Show(message, "快捷启动栏", MessageBoxButton.OK, MessageBoxImage.Information);
+            OneBoxMessage.Info(window, "快捷启动栏", message);
         }
 
         static string PromptUrl(Button owner)

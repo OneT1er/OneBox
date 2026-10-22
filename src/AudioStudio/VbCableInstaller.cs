@@ -50,22 +50,20 @@ internal static class VbCableInstaller
                 Verb = "runas",
                 WorkingDirectory = extracted
             });
-            MessageBox.Show(owner,
-                "已启动 VB-Audio 官方安装程序。请按安装向导完成安装，按官方提示重启，然后在 OneBox 选择 CABLE Input。",
-                "VB-CABLE", MessageBoxButton.OK, MessageBoxImage.Information);
+            OneBoxMessage.Info(owner, "VB-CABLE",
+                "已启动 VB-Audio 官方安装程序。请按安装向导完成安装，按官方提示重启，然后在 OneBox 选择 CABLE Input。");
         }
         catch (Win32Exception ex) when (ex.NativeErrorCode == 1223)
         {
-            MessageBox.Show(owner,
-                "已取消管理员授权。官方安装包和解压文件仍保存在“下载”，可稍后手动运行 VBCABLE_Setup_x64.exe。",
-                "VB-CABLE", MessageBoxButton.OK, MessageBoxImage.Information);
+            OneBoxMessage.Info(owner, "VB-CABLE",
+                "已取消管理员授权。官方安装包和解压文件仍保存在“下载”，可稍后手动运行 VBCABLE_Setup_x64.exe。");
         }
         catch (Exception ex)
         {
             AppLog.Log("VB-CABLE install", ex);
-            if (MessageBox.Show(owner,
+            if (OneBoxMessage.Confirm(owner, "VB-CABLE",
                     "VB-CABLE 安装程序未能启动：" + ex.Message + "\n\n是否打开官方页面手动下载？\n" + OfficialSite,
-                    "VB-CABLE", MessageBoxButton.YesNo, MessageBoxImage.Warning) == MessageBoxResult.Yes)
+                    "打开官方页面"))
             {
                 try { Process.Start(new ProcessStartInfo(OfficialSite) { UseShellExecute = true }); }
                 catch (Exception browserError) { AppLog.Log("VB-CABLE official site", browserError); }
