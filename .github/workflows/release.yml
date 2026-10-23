@@ -103,8 +103,8 @@ jobs:
           # Pre-release tags (e.g. v1.10.0-beta.1) are published as GitHub pre-releases and never marked
           # Latest, so the Velopack GithubSource (prerelease: false) keeps stable users on stable builds.
           $isPrerelease = $tag -match '^v\d+\.\d+\.\d+-'
-          $prereleaseArgs = if ($isPrerelease) { @('--prerelease') } else { @() }
-          $publishArgs = if ($isPrerelease) { @('--prerelease', '--latest=false') } else { @('--latest') }
+          [string[]]$prereleaseArgs = if ($isPrerelease) { @('--prerelease') } else { @() }
+          [string[]]$publishArgs = if ($isPrerelease) { @('--prerelease', '--latest=false') } else { @('--latest') }
           $existing = gh release view $tag --json isDraft 2>$null
           if ($LASTEXITCODE -eq 0) {
             if (-not ($existing | ConvertFrom-Json).isDraft) { throw "$tag is already published; refusing to overwrite it" }
