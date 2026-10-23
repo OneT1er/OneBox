@@ -15,8 +15,9 @@ namespace PowerAudioManager
         // an opaque popup border, even when ContextMenu.Background is dark. Keep
         // the whole menu authored here so the popup chrome, check slot,
         // separators and submenu arrows share the OneBox surface tokens.
-        static readonly Color MenuSurface = Color.FromArgb(250, 23, 21, 31);   // #17151F
-        static readonly Color MenuBorder = Color.FromArgb(255, 46, 42, 62);    // #2E2A3E
+        static readonly Color MenuSurface = Color.FromArgb(250,
+            ThemeTokens.Background.R, ThemeTokens.Background.G, ThemeTokens.Background.B);
+        static readonly Color MenuBorder = ThemeTokens.Border;
 
         internal static ContextMenu Create(bool includeHeader = false)
         {
@@ -24,6 +25,8 @@ namespace PowerAudioManager
             {
                 Background = new SolidColorBrush(MenuSurface),
                 Foreground = UiKit.FrozenBrush(UiKit.TextPrimary),
+                FontFamily = AppResources.AppFont,
+                FontSize = 12,
                 BorderBrush = new SolidColorBrush(MenuBorder),
                 BorderThickness = new Thickness(1),
                 Padding = new Thickness(4),
