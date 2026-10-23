@@ -340,8 +340,14 @@ namespace PowerAudioManager
             Typography.SetNumeralAlignment(value, FontNumeralAlignment.Tabular);
             value.Inlines.Add(valueRun);
             value.Inlines.Add(unitRun);
+            var label = new DockPanel { LastChildFill = true };
+            var icon = UiKit.MetricIcon(m.IconKey, UiKit.MetricIconColorByKey(m.IconKey), 12);
+            icon.Margin = new Thickness(0, 0, 4, 0);
+            DockPanel.SetDock(icon, Dock.Left);
+            label.Children.Add(icon);
+            label.Children.Add(name);
             var stack = new StackPanel();
-            stack.Children.Add(name);
+            stack.Children.Add(label);
             stack.Children.Add(value);
             var tile = new Border
             {

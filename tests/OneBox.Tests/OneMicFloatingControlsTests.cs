@@ -74,6 +74,7 @@ public class OneMicFloatingControlsTests
                 window = new TestMainWindow();
                 var type = typeof(MainWindow);
                 AssertOneMicRefreshControls(window, type);
+                AssertMetricTileIcons(window, type);
 
                 var contentPanel = Field(type, "_contentPanel");
                 var mainBorder = Field(type, "_mainBorder");
@@ -287,6 +288,34 @@ public class OneMicFloatingControlsTests
         Assert.Equal(4, buttons.Count(button => Grid.GetRow(button) == 0));
         Assert.Equal(4, buttons.Count(button => Grid.GetRow(button) == 1));
         Assert.Contains(devices.Children.OfType<TextBlock>(), x => x.Text == "未找到音频输出");
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void AssertMetricTileIcons(MainWindow window, Type type)
+    {
+        var host = new StackPanel();
+        var metrics = new System.Collections.Generic.List<MetricValue>
+        {
+            new() { DisplayName = "CPU", IconKey = "cpu", Value = 50, Unit = "°C" },
+            new() { DisplayName = "GPU", IconKey = "gpu", Value = 40, Unit = "°C" }
+        };
+        type.GetMethod("BuildMetricStructure", BindingFlags.Instance | BindingFlags.NonPublic)
+            .Invoke(window, new object[] { host, metrics, new[] { true, false }, "metric-icons-test" });
+        var tiles = (System.Collections.Generic.List<Border>)Field(type, "_metricTiles").GetValue(window);
+        Assert.Equal(2, tiles.Count);
+        for (int i = 0; i < tiles.Count; i++)
+        {
+            var tile = tiles[i];
+            tile.Measure(new Size(84, double.PositiveInfinity));
+            tile.Arrange(new Rect(new Point(), tile.DesiredSize));
+            var stack = Assert.IsType<StackPanel>(tile.Child);
+            var label = Assert.IsType<DockPanel>(stack.Children[0]);
+            var icon = Assert.Single(label.Children.OfType<System.Windows.Shapes.Path>());
+            Assert.Same(IconCatalog.GetGeometry(i == 0 ? IconKey.Cpu : IconKey.Gpu), icon.Data);
+            Assert.True(icon.ActualWidth > 0 && icon.ActualHeight > 0);
+            Assert.Equal(metrics[i].DisplayName, Assert.Single(label.Children.OfType<TextBlock>()).Text);
+        }
+        Field(type, "_metricSig").SetValue(window, null);
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
