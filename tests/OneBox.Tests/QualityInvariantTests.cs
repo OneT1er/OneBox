@@ -247,17 +247,18 @@ public sealed class QualityInvariantTests
     }
 
     [Fact]
-    public void TrayMenuTheme_UsesTransparentPopupChromeAndVectorStates()
+    public void ContextMenuTheme_UsesTransparentPopupChromeAndVectorStates()
     {
-        string source = ReadSource("src", "TrayController.cs");
-        Assert.Contains("CreateTrayMenu", source, StringComparison.Ordinal);
+        string source = ReadSource("src", "ContextMenuTheme.cs");
         Assert.Contains("HasDropShadow = false", source, StringComparison.Ordinal);
         Assert.Contains("ContextMenuService.SetHasDropShadow(menu, false)", source, StringComparison.Ordinal);
         Assert.Contains("Popup.AllowsTransparencyProperty, true", source, StringComparison.Ordinal);
         Assert.Contains("CheckMark", source, StringComparison.Ordinal);
         Assert.Contains("Path.StrokeProperty, UiKit.FrozenBrush(UiKit.AccentColor)", source, StringComparison.Ordinal);
-        Assert.Contains("CreateTraySeparatorStyle", source, StringComparison.Ordinal);
-        Assert.Contains("SubmenuPopup", source, StringComparison.Ordinal);
+        Assert.Contains("CreateSeparatorStyle", source, StringComparison.Ordinal);
+        Assert.Contains("PART_Popup", source, StringComparison.Ordinal);
+        foreach (string caller in new[] { "TrayController.cs", "MainWindow.Data.cs", "LauncherBar.cs" })
+            Assert.Contains("ContextMenuTheme.Create(", ReadSource("src", caller), StringComparison.Ordinal);
         // Popup.HasDropShadowProperty is read-only. It cannot be assigned by
         // FrameworkElementFactory; the transparent popup chrome plus the
         // ContextMenuService setting above are the supported no-shadow path.
@@ -265,24 +266,26 @@ public sealed class QualityInvariantTests
         Assert.DoesNotContain("ButtonBase.IsPressedProperty", source, StringComparison.Ordinal);
     }
 
-    [Fact]
-    public void TrayMenuTemplate_CanInstantiateOnStaWithoutReadOnlyPopupPropertyFailure()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ContextMenuTemplate_CanInstantiateOnStaWithoutReadOnlyPopupPropertyFailure(bool includeHeader)
     {
         Exception failure = null;
         var thread = new Thread(() =>
         {
             try
             {
-                var trayType = typeof(MainWindow).Assembly.GetType("PowerAudioManager.TrayController", throwOnError: true);
-                var factory = trayType.GetMethod("CreateTrayMenu", BindingFlags.Static | BindingFlags.NonPublic);
-                Assert.NotNull(factory);
-                var menu = Assert.IsType<ContextMenu>(factory.Invoke(null, null));
+                var menu = ContextMenuTheme.Create(includeHeader);
                 Assert.False(menu.HasDropShadow);
                 Assert.False(ContextMenuService.GetHasDropShadow(menu));
                 var item = new MenuItem { Header = "Template smoke", IsCheckable = true, IsChecked = true };
                 menu.Items.Add(item);
                 Assert.True(menu.ApplyTemplate());
                 Assert.True(item.ApplyTemplate());
+                Assert.Equal(includeHeader, menu.Template.FindName("TrayStatus", menu) != null);
+                var popup = Assert.IsType<Popup>(item.Template.FindName("PART_Popup", item));
+                Assert.Same(item, popup.PlacementTarget);
             }
             catch (Exception ex)
             {
@@ -294,6 +297,51 @@ public sealed class QualityInvariantTests
         thread.SetApartmentState(ApartmentState.STA);
         thread.Start();
         thread.Join();
+        Assert.Null(failure);
+    }
+
+    [Fact]
+    public void HiddenDevices_ProvideRestorableItemsAndRefreshEmptyState()
+    {
+        Exception failure = null;
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                var submenu = new MenuItem { Header = "显示已隐藏设备" };
+                var visible = new AudioDeviceInfo { Name = "Visible" };
+                var first = new AudioDeviceInfo { Name = "Hidden A", IsHidden = true };
+                var second = new AudioDeviceInfo { Name = "Hidden B", IsHidden = true };
+                AudioDeviceInfo restored = null;
+                AudioDeviceInfo[] devices = { visible, first, second };
+                void Restore(AudioDeviceInfo device) { restored = device; device.IsHidden = false; }
+
+                TrayController.PopulateHiddenDevices(submenu, devices, Restore);
+                Assert.Equal(2, submenu.Items.Count);
+                Assert.True(submenu.HasItems);
+                var firstItem = Assert.IsType<MenuItem>(submenu.Items[0]);
+                firstItem.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+                Assert.Same(first, restored);
+                TrayController.PopulateHiddenDevices(submenu, devices, Restore);
+                var remaining = Assert.IsType<MenuItem>(Assert.Single(submenu.Items));
+                Assert.Equal("Hidden B", remaining.Header);
+                remaining.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+                Assert.Same(second, restored);
+                TrayController.PopulateHiddenDevices(submenu, devices, Restore);
+                var empty = Assert.IsType<MenuItem>(Assert.Single(submenu.Items));
+                Assert.False(empty.IsEnabled);
+                Assert.True(submenu.HasItems);
+
+                // A later hide must replace the empty state on the next open.
+                first.IsHidden = true;
+                TrayController.PopulateHiddenDevices(submenu, devices, Restore);
+                Assert.Equal("Hidden A", Assert.IsType<MenuItem>(Assert.Single(submenu.Items)).Header);
+            }
+            catch (Exception ex) { failure = ex; }
+        }) { IsBackground = true };
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        Assert.True(thread.Join(TimeSpan.FromSeconds(15)), "Context menu test did not finish.");
         Assert.Null(failure);
     }
 

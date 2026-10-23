@@ -236,7 +236,7 @@ namespace PowerAudioManager
             btn.FontWeight = FontWeights.Normal;
             btn.Command = CreateUiCommand(AppCommandId.AudioActivate, CommandSource.MainWindow,
                 () => new AudioActivatePayload(dev.Id));
-            var devCtx = new ContextMenu();
+            var devCtx = ContextMenuTheme.Create();
             var hideItem = new MenuItem { Header = "隐藏此设备" };
             hideItem.Click += (s, e) => { DevicePrefs.SetHidden(dev.Name, true); LoadData(); RefreshHotkeys(); };
             devCtx.Items.Add(hideItem);

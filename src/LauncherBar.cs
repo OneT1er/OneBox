@@ -222,7 +222,7 @@ namespace PowerAudioManager
                 if (string.IsNullOrEmpty(path))
                 {
                     // 弹菜单选择添加类型：程序 / 文件夹 / 网页
-                    var menu = new ContextMenu();
+                    var menu = ContextMenuTheme.Create();
                     var miExe = new MenuItem { Header = "程序 / 快捷方式..." };
                     var miFolder = new MenuItem { Header = "文件夹..." };
                     var miUrl = new MenuItem { Header = "网页 (URL)..." };
