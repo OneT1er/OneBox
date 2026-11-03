@@ -17,13 +17,13 @@ public sealed class PerfChartTests
     {
         var chart = new TestChart { WindowSec = 86400, EnableTooltip = true, ShowLegend = false, Series = new() };
         DateTime start = DateTime.Now.AddDays(-1);
-        var times = Enumerable.Range(0, PerfHistory.Capacity).Select(i => start.AddSeconds(i)).ToList();
+        var times = Enumerable.Range(0, PerfHistory.DaySeconds).Select(i => start.AddSeconds(i)).ToList();
         for (int i = 0; i < 8; i++)
             chart.Series.Add(new ChartSeries
             {
                 Name = "Sensor " + i, Color = Colors.MediumPurple, IsTemp = i < 4,
                 Unit = i < 4 ? "°C" : "rpm", Times = times,
-                Points = Enumerable.Repeat(i < 4 ? 50f : 4000f, PerfHistory.Capacity).ToList()
+                Points = Enumerable.Repeat(i < 4 ? 50f : 4000f, PerfHistory.DaySeconds).ToList()
             });
         chart.Layout(830, 400);
         DrawingGroup first = chart.Draw(300);
@@ -51,6 +51,101 @@ public sealed class PerfChartTests
         chart.Leave();
         Assert.Empty(TooltipMarkers(chart.Draw()));
         Assert.Same(curves[0], Curves(chart.Draw())[0]);
+    });
+
+    [Fact]
+    public void PixelEnvelope_KeepsPeaksTroughsGapsAndTheLastSample() => OnSta(() =>
+    {
+        DateTime end = DateTime.Now.AddDays(-2);
+        DateTime start = end.AddDays(-1);
+        var series = new ChartSeries { Name = "CPU", Color = Colors.MediumPurple, Points = new(), Times = new() };
+        for (int i = 1; i <= PerfHistory.DaySeconds; i++)
+        {
+            if (i >= 20000 && i < 20120) continue; // A real gap must survive pixel bucketing.
+            series.Times.Add(start.AddSeconds(i));
+            series.Points.Add(i == 43201 ? 95 : i == 43202 ? 5 : i == PerfHistory.DaySeconds ? 70 : 50);
+        }
+        var chart = new TestChart
+        {
+            Series = new() { series }, WindowSec = 0, EndTime = end,
+            ShowLegend = false, EnableTooltip = true
+        };
+        chart.Layout(830, 400);
+        double cursor = 26 + 770 * 43201.0 / PerfHistory.DaySeconds;
+        var drawing = chart.Draw(cursor);
+        var curve = PathGeometry.CreateFromGeometry(Assert.Single(Curves(drawing)));
+        Assert.Equal(2, curve.Figures.Count);
+        Assert.Equal(26 + 770 * 19999.0 / PerfHistory.DaySeconds,
+            CurvePoints(new PathGeometry(new[] { curve.Figures[0] })).Last().X, 5);
+        Point[] points = CurvePoints(curve).ToArray();
+        Assert.Equal(28.6, points.Min(p => p.Y), 5); // 95°C survived in the same pixel as 5°C.
+        Assert.Equal(363.4, points.Max(p => p.Y), 5);
+        Assert.Equal(121.6, points[^1].Y, 5);       // The line reaches the latest 70°C reading.
+        Assert.Equal(796, points[^1].X, 5);
+        Assert.True(points.Length <= 4 * (Math.Ceiling(770 * VisualTreeHelper.GetDpi(chart).PixelsPerDip) + 2));
+        Assert.Equal(28.6, Assert.Single(TooltipMarkers(drawing), p => p.Center.X == cursor).Center.Y, 5); // Original raw reading.
+        foreach (var figure in curve.Figures)
+        {
+            var xs = CurvePoints(new PathGeometry(new[] { figure })).Select(p => p.X).ToArray();
+            Assert.True(xs.Zip(xs.Skip(1), (a, b) => a <= b).All(value => value));
+        }
+    });
+
+    [Theory]
+    [InlineData(0.5)]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(60)]
+    public void FullDay_Is24HoursAtEverySamplingIntervalAndUsesTheHistoricalEnd(double interval) => OnSta(() =>
+    {
+        DateTime end = DateTime.Now.AddDays(-2);
+        var series = new ChartSeries
+        {
+            Name = "Old CPU", Color = Colors.MediumPurple, Points = new() { 40, 50 },
+            Times = new() { end.AddSeconds(-1), end }
+        };
+        var chart = new TestChart
+        {
+            Series = new() { series }, WindowSec = 0, IntervalSec = interval,
+            EndTime = end, ShowLegend = false, EnableTooltip = true
+        };
+        chart.Layout(830, 400);
+        Assert.Equal(86400, chart.DisplayWindowSec);
+        DrawingGroup drawing = chart.Draw(796);
+        var curve = PathGeometry.CreateFromGeometry(Assert.Single(Curves(drawing)));
+        Assert.Single(curve.Figures);
+        Assert.Equal(796, CurvePoints(curve).Last().X, 5);
+        Assert.Equal(196, Assert.Single(TooltipMarkers(drawing), p => p.Center.X == 796).Center.Y, 5);
+    });
+
+    [Fact]
+    public void DenseForeground_MergesVisibleMarkersWithoutFillingGapsOrChangingHover() => OnSta(() =>
+    {
+        DateTime end = DateTime.Now;
+        DateTime start = end.AddDays(-1);
+        var chart = new TestChart
+        {
+            WindowSec = 0, EndTime = end, ShowLegend = false, EnableTooltip = true,
+            Series = new(), Segments = new()
+        };
+        for (int i = 0; i < 720; i++)
+        {
+            if (i == 360) continue;
+            chart.Segments.Add(new ForegroundSegment
+            {
+                Start = start.AddSeconds(i * 120), End = start.AddSeconds((i + 1) * 120), Exe = "app" + i + ".exe"
+            });
+        }
+        chart.Layout(830, 400);
+        DrawingGroup drawing = chart.Draw(26 + 770 * 120.5 / 720);
+        var background = ((DrawingVisual)VisualTreeHelper.GetChild(chart, 0)).Drawing;
+        int boundaries = GeometryDrawings(background).Count(g => g.Geometry is LineGeometry && g.Pen?.DashStyle == DashStyles.Dot);
+        Assert.InRange(boundaries, 1, 97);
+        var gap = new Point(26 + 770 * 360.5 / 720, 100);
+        foreach (var band in GeometryDrawings(background).Where(g => g.Brush is SolidColorBrush b && b.Color.A == 0x18))
+            Assert.False(band.Geometry.FillContains(gap));
+        var tooltip = ((DrawingVisual)VisualTreeHelper.GetChild(chart, 1)).Drawing;
+        Assert.Contains("app120.exe", DrawingText(tooltip));
     });
 
     [Fact]
@@ -120,6 +215,26 @@ public sealed class PerfChartTests
 
     static StreamGeometry[] Curves(Drawing drawing) => GeometryDrawings(drawing)
         .Select(item => item.Geometry).OfType<StreamGeometry>().ToArray();
+
+    static IEnumerable<Point> CurvePoints(PathGeometry geometry)
+    {
+        foreach (var figure in geometry.Figures)
+        {
+            yield return figure.StartPoint;
+            foreach (var segment in figure.Segments)
+            {
+                if (segment is LineSegment line) yield return line.Point;
+                if (segment is PolyLineSegment lines) foreach (var point in lines.Points) yield return point;
+            }
+        }
+    }
+
+    static string DrawingText(Drawing drawing) => drawing switch
+    {
+        GlyphRunDrawing glyph => new string(glyph.GlyphRun.Characters.ToArray()),
+        DrawingGroup group => string.Concat(group.Children.Select(DrawingText)),
+        _ => ""
+    };
 
     static EllipseGeometry[] TooltipMarkers(Drawing drawing) => GeometryDrawings(drawing)
         .Select(item => item.Geometry).OfType<EllipseGeometry>()

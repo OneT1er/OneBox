@@ -77,6 +77,106 @@ public sealed class ForegroundNamePoolTests
 public sealed class PerfHistoryChunkTests
 {
     [Fact]
+    public void TimeWindow_AnchorsOldHistoryAndReusesItThenAdvancesWithNewSamples()
+    {
+        WithIsolatedHistory(null, history =>
+        {
+            var (_, append) = CreateSeries(history, "window");
+            long end = DateTimeOffset.UtcNow.AddDays(-2).ToUnixTimeSeconds();
+            for (int i = 0; i < PerfHistory.DaySeconds; i++) append(i % 100, end - PerfHistory.DaySeconds + 1 + i);
+            var reused = new List<ChartSeries>();
+            DateTime now = DateTime.Now;
+            PerfHistory.GetWindow(now, PerfHistory.DaySeconds, reused, out DateTime viewEnd);
+            Assert.Equal(DateTimeOffset.FromUnixTimeSeconds(end).LocalDateTime, viewEnd);
+            ChartSeries chart = Assert.Single(reused);
+            Assert.Equal(PerfHistory.DaySeconds, chart.Points.Count);
+            var points = chart.Points;
+            long allocated = GC.GetAllocatedBytesForCurrentThread();
+            for (int i = 0; i < 10; i++) PerfHistory.GetWindow(now, PerfHistory.DaySeconds, reused, out _);
+            allocated = GC.GetAllocatedBytesForCurrentThread() - allocated;
+            Assert.True(allocated < 128 * 1024, $"Old-history refresh allocated {allocated:N0} bytes.");
+            Assert.Same(points, reused[0].Points);
+
+            // A sub-second lower bound excludes the sample just before it.
+            PerfHistory.GetSeries(viewEnd.AddSeconds(-300).AddTicks(1), viewEnd, reused);
+            Assert.Equal(300, reused[0].Points.Count);
+            Assert.Equal(viewEnd.AddSeconds(-299), reused[0].Times[0]);
+            append(77, end + 1);
+            PerfHistory.GetSeries(viewEnd.AddSeconds(-299).AddTicks(1), viewEnd.AddSeconds(1), reused);
+            Assert.Same(points, reused[0].Points);
+            Assert.Equal(300, reused[0].Points.Count);
+            Assert.Equal(77, reused[0].Points[^1]);
+            var independent = Assert.Single(PerfHistory.GetSeries(viewEnd.AddSeconds(-299).AddTicks(1), viewEnd.AddSeconds(1)));
+            Assert.Equal(independent.Points, reused[0].Points);
+            Assert.Equal(independent.Times, reused[0].Times);
+
+            long live = new DateTimeOffset(now).ToUnixTimeSeconds();
+            append(88, live);
+            PerfHistory.GetWindow(now, 300, reused, out viewEnd);
+            Assert.Equal(now, viewEnd);
+            Assert.Equal(88, Assert.Single(Assert.Single(reused).Points));
+        });
+    }
+
+    [Fact]
+    public void Retention_Covers24HoursAt500MillisecondsAndReleasesExpiredBlocksAtOneSecond()
+    {
+        WithIsolatedHistory(null, history =>
+        {
+            long start = new DateTimeOffset(2026, 10, 1, 0, 0, 0, TimeSpan.Zero).ToUnixTimeSeconds();
+            var (_, fast) = CreateSeries(history, "fast");
+            for (int i = 0; i < PerfHistory.Capacity + 1000; i++) fast(i, start + i / 2);
+            ChartSeries highRate = Assert.Single(PerfHistory.GetSeries(DateTime.MinValue, DateTime.MaxValue));
+            Assert.Equal(PerfHistory.Capacity, highRate.Points.Count);
+            Assert.Equal(1000, highRate.Points[0]);
+            Assert.Equal(PerfHistory.DaySeconds - 1, (highRate.Times[^1] - highRate.Times[0]).TotalSeconds);
+            DateTime second = highRate.Times[^1];
+            Assert.Equal(2, Assert.Single(PerfHistory.GetSeries(second, second)).Points.Count);
+
+            var (ring, normal) = CreateSeries(history, "normal");
+            for (int i = 0; i < PerfHistory.DaySeconds * 3; i++) normal(i, start + i);
+            ChartSeries normalRate = PerfHistory.GetSeries(DateTime.MinValue, DateTime.MaxValue).Single(s => s.Name == "normal");
+            Assert.Equal(PerfHistory.DaySeconds + 1, normalRate.Points.Count);
+            Assert.Equal(PerfHistory.DaySeconds, (normalRate.Times[^1] - normalRate.Times[0]).TotalSeconds);
+            Assert.Equal(PerfHistory.DaySeconds * 2 - 1, normalRate.Points[0]);
+            int chunks = (int)ring.GetType().GetProperty("AllocatedChunks").GetValue(ring);
+            Assert.InRange(chunks, 24, 25);
+
+            // A long shutdown can expire a wrapped, partly filled block without losing the new sample.
+            normal(99, start + 10 * PerfHistory.DaySeconds);
+            normalRate = PerfHistory.GetSeries(DateTime.MinValue, DateTime.MaxValue).Single(s => s.Name == "normal");
+            Assert.Equal(99, Assert.Single(normalRate.Points));
+        });
+    }
+
+    [Fact]
+    public void TimeRangeQuery_HandlesClockRollbackWithoutLosingReadings()
+    {
+        WithIsolatedHistory(null, history =>
+        {
+            var (_, append) = CreateSeries(history, "clock");
+            long start = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            append(40, start); append(50, start + 10); append(60, start + 5);
+            DateTime t = DateTimeOffset.FromUnixTimeSeconds(start).LocalDateTime;
+            var all = Assert.Single(PerfHistory.GetSeries(t, t.AddSeconds(10)));
+            Assert.Equal(new float[] { 40, 50, 60 }, all.Points);
+            Assert.False(all.TimesOrdered);
+            Assert.Equal(new float[] { 60 }, Assert.Single(PerfHistory.GetSeries(t.AddSeconds(4), t.AddSeconds(6))).Points);
+            Assert.Equal(t.AddSeconds(10), PerfHistory.GetLastTime());
+        });
+    }
+
+    static (object Ring, Action<float, long> Append) CreateSeries(IDictionary history, string key)
+    {
+        Type type = typeof(PerfHistory).GetNestedType("Series", BindingFlags.NonPublic);
+        object ring = Activator.CreateInstance(type, true);
+        type.GetField("Name").SetValue(ring, key);
+        type.GetField("IsTemp").SetValue(ring, true);
+        history[key] = ring;
+        return (ring, type.GetMethod("Append").CreateDelegate<Action<float, long>>(ring));
+    }
+
+    [Fact]
     public void FullDayRefresh_ReusesSnapshotBuffersAndUpdatesMetadataWithoutStaleSamples()
     {
         WithIsolatedHistory(null, _ =>

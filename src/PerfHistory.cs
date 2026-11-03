@@ -12,15 +12,16 @@ using System.Windows.Media;
 namespace PowerAudioManager
 {
     /// <summary>
-    /// 性能监控历史采样：按 ConfigKey 存最近 N 个 (值, 时间戳)（环形数组，容量全天 86400 @1s）。
-    /// 环形数组按 3600 点分块、写到才分配：Add 为 O(1)，新传感器几乎不占内存，满一天约 0.7MB/条。
+    /// 性能监控历史采样：按 ConfigKey 保留最近 24 小时的 (值, 时间戳)。
+    /// 环形数组按 3600 点分块、写到才分配；上限支持 500ms 采样，1s 采样约 0.7MB/条。
     /// 采集温度（°C）与风扇（RPM）。仅存真实读数（Cached 兜底值跳过），故传感器失配/跨重启缺口在图表上断线而非填旧值。
     /// 后台持续采集：无需打开图表即记录（数据常驻内存，全天容量固定）。
     /// 启动懒加载磁盘历史，每 60 秒自动落盘 + 退出落盘，崩溃最多丢 1 分钟；时间戳随值一并持久化。
     /// </summary>
     public static class PerfHistory
     {
-        public const int Capacity = 86400; // 全天 @1s
+        public const int DaySeconds = 86400;
+        public const int Capacity = DaySeconds * 2; // 覆盖设置支持的最短 500ms 间隔；与显示时长无关。
         static readonly object _lock = new object();
         static readonly object _saveIoLock = new object();
         static readonly Dictionary<string, Series> _series = new Dictionary<string, Series>();
@@ -47,11 +48,27 @@ namespace PowerAudioManager
             public readonly float[][] Values = new float[ChunkCount][];
             public readonly int[][] Seconds = new int[ChunkCount][];
             public int Head, Count;
+            public long TotalAdded;
+            public bool TimesOrdered = true;
             public string Name, Icon;
             public bool IsTemp;
 
             public void Append(float value, long unixSeconds)
             {
+                if (Count > 0 && unixSeconds < UnixAt(RingIndex(Count - 1))) TimesOrdered = false;
+                // 按实际时间淘汰，不因采样变慢把“全天”扩成多天。时钟回拨时保留读数并走线性查询。
+                while (TimesOrdered && Count > 0 && UnixAt(RingIndex(0)) < unixSeconds - DaySeconds)
+                {
+                    int oldest = RingIndex(0);
+                    Count--;
+                    // 完整过期的块可释放；环绕时同一块也可能含最新样本，不能清掉那一段。
+                    if (oldest % ChunkSize == ChunkSize - 1 &&
+                        (Count == 0 || (Head - 1 + Capacity) % Capacity / ChunkSize != oldest / ChunkSize))
+                    {
+                        Values[oldest / ChunkSize] = null;
+                        Seconds[oldest / ChunkSize] = null;
+                    }
+                }
                 int chunk = Head / ChunkSize, offset = Head % ChunkSize;
                 if (Values[chunk] == null)
                 {
@@ -62,6 +79,21 @@ namespace PowerAudioManager
                 Seconds[chunk][offset] = ToStoredSeconds(unixSeconds);
                 Head = (Head + 1) % Capacity;
                 if (Count < Capacity) Count++;
+                TotalAdded++;
+            }
+
+            // 有序 UTC 时间戳上的上下界；重复的整秒时间戳（500ms 采样）也全部保留。
+            public int TimeBound(long seconds, bool after)
+            {
+                int lo = 0, hi = Count;
+                while (lo < hi)
+                {
+                    int mid = lo + (hi - lo) / 2;
+                    long time = UnixAt(RingIndex(mid));
+                    if (time < seconds || (after && time == seconds)) lo = mid + 1;
+                    else hi = mid;
+                }
+                return lo;
             }
 
             // i-th oldest retained sample → ring position.
@@ -217,29 +249,53 @@ namespace PowerAudioManager
         {
             lock (_lock)
             {
+                long firstSecond = ToUnixSeconds(from), lastSecond = ToUnixSeconds(to);
+                if (from.Ticks % TimeSpan.TicksPerSecond != 0) firstSecond++;
                 var result = reuse ?? new List<ChartSeries>();
                 int idx = 0, count = 0;
                 foreach (var kv in _series.OrderBy(x => x.Key))   // 稳定顺序 -> 稳定配色
                 {
                     var s = kv.Value;
                     if (s.Count == 0) { idx++; continue; }
+                    int first = s.TimesOrdered ? s.TimeBound(firstSecond, false) : 0;
+                    int end = s.TimesOrdered ? s.TimeBound(lastSecond, true) : s.Count;
+                    if (first >= end || from > to) { idx++; continue; }
                     var chart = count < result.Count ? result[count] : new ChartSeries
                     {
                         Points = new List<float>(), Times = new List<DateTime>()
                     };
                     var pts = chart.Points;
                     var times = chart.Times;
-                    pts.Clear();
-                    times.Clear();
-                    for (int i = 0; i < s.Count; i++)
+                    long ringStart = s.TotalAdded - s.Count;
+                    long snapshotStart = ringStart + first, snapshotEnd = ringStart + end;
+                    if (s.TimesOrdered && ReferenceEquals(chart.HistorySource, s) &&
+                        pts.Count == chart.HistoryEnd - chart.HistoryStart && times.Count == pts.Count &&
+                        chart.HistoryStart <= snapshotStart && snapshotStart <= chart.HistoryEnd && chart.HistoryEnd <= snapshotEnd)
+                    {
+                        int expired = (int)(snapshotStart - chart.HistoryStart);
+                        pts.RemoveRange(0, expired);
+                        times.RemoveRange(0, expired);
+                        first = (int)(chart.HistoryEnd - ringStart);
+                    }
+                    else
+                    {
+                        pts.Clear(); times.Clear();
+                        chart.TimesOrdered = true;
+                    }
+                    for (int i = first; i < end; i++)
                     {
                         int bi = s.RingIndex(i);
-                        var t = UnixToLocal(s.UnixAt(bi));
-                        if (t < from || t > to) continue;
+                        long unix = s.UnixAt(bi);
+                        if (!s.TimesOrdered && (unix < firstSecond || unix > lastSecond)) continue;
+                        var t = UnixToLocal(unix);
+                        if (times.Count > 0 && t < times[times.Count - 1]) chart.TimesOrdered = false;
                         pts.Add(s.ValueAt(bi));
                         times.Add(t);
                     }
                     if (pts.Count == 0) { idx++; continue; }
+                    chart.HistorySource = s;
+                    chart.HistoryStart = snapshotStart;
+                    chart.HistoryEnd = snapshotEnd;
                     chart.Name = s.Name ?? kv.Key;
                     chart.Color = Palette[idx % Palette.Length];
                     chart.IsTemp = s.IsTemp;
@@ -253,6 +309,18 @@ namespace PowerAudioManager
             }
         }
 
+        // 先选好范围再取快照，避免“空查询 → 丢弃复用缓冲 → 查询旧记录”的大数组分配。
+        public static List<ChartSeries> GetWindow(DateTime now, double windowSec, List<ChartSeries> reuse, out DateTime end)
+        {
+            lock (_lock)
+            {
+                end = now;
+                DateTime? last = GetLastTime();
+                if (last.HasValue && last.Value < now.AddSeconds(-windowSec)) end = last.Value;
+                return GetSeries(end.AddSeconds(-windowSec), end, reuse);
+            }
+        }
+
         // 所有系列里最新一条记录的时间戳（无记录返回 null）。
         // 图表刚打开且窗口内无数据时，用它将时间窗锚到历史末尾，让以前记录的数据立即可见。
         public static DateTime? GetLastTime()
@@ -263,7 +331,10 @@ namespace PowerAudioManager
                 foreach (var s in _series.Values)
                 {
                     if (s.Count == 0) continue;
-                    var t = UnixToLocal(s.UnixAt((s.Head - 1 + Capacity) % Capacity));
+                    long unix = s.UnixAt(s.RingIndex(s.Count - 1));
+                    if (!s.TimesOrdered)
+                        for (int i = 0; i < s.Count; i++) unix = Math.Max(unix, s.UnixAt(s.RingIndex(i)));
+                    var t = UnixToLocal(unix);
                     if (last == null || t > last.Value) last = t;
                 }
                 return last;

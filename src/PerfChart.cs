@@ -16,6 +16,9 @@ namespace PowerAudioManager
         public List<DateTime> Times;    // 与 Points 等长，每点的采集时刻
         public string Unit = "°C";
         public bool IsTemp = true;      // true=温度(左Y轴 0-100°C)，false=风扇(右Y轴 0-FanYMax rpm)
+        internal object HistorySource;
+        internal long HistoryStart, HistoryEnd;
+        internal bool TimesOrdered = true;
     }
 
     /// <summary>
@@ -29,11 +32,13 @@ namespace PowerAudioManager
         public const int Capacity = PerfHistory.Capacity;
 
         public List<ChartSeries> Series { get; set; }
-        public double WindowSec { get; set; } = 900;   // 时间窗秒数；0=全部(Capacity*IntervalSec)。默认 15 分钟
+        public double WindowSec { get; set; } = 900;   // 时间窗秒数；0=全天 24 小时。默认 15 分钟
+        public double DisplayWindowSec => WindowSec > 0 ? WindowSec : PerfHistory.DaySeconds;
+        public DateTime? EndTime { get; set; }         // 查询与绘制共用的窗口末端；null 时跟随当前时间。
         public float FanYMax { get; set; } = 2000;
         public bool EnableTooltip { get; set; }
         public bool OnlyTemp { get; set; }     // 悬浮窗小图：只画温度，不画风扇
-        public double IntervalSec { get; set; } = 1;  // 采样间隔，用于缺口阈值与全部窗计算
+        public double IntervalSec { get; set; } = 1;  // 采样间隔，仅用于缺口和悬停取值阈值。
         public List<ForegroundSegment> Segments { get; set; }  // 前台应用时间段（大图按时间标注）
         public HashSet<string> HiddenSeries { get; set; }      // 图例切换隐藏的系列名
         public bool ShowLegend { get; set; } = true;           // 大图窗口用外部图例芯片时关闭
@@ -222,10 +227,8 @@ namespace PowerAudioManager
             double plotW = w - padLeft - padRight;
             double plotH = h - padTop - padBottom;
 
-            // 时间窗（WindowSec=0 -> 全部 = Capacity*IntervalSec）
-            double windowSec = WindowSec > 0 ? WindowSec : Capacity * IntervalSec;
-            if (windowSec <= 0) windowSec = 1;
-            DateTime nowT = DateTime.Now;
+            double windowSec = DisplayWindowSec;
+            DateTime nowT = EndTime ?? DateTime.Now;
             DateTime fromTime = nowT.AddSeconds(-windowSec);
             // 缺口阈值：相邻真实读数时间差超过此值则断线（默认 3 个采样间隔，至少 5s）
             double gapSec = Math.Max(3 * IntervalSec, 5.0);
@@ -267,31 +270,47 @@ namespace PowerAudioManager
             // 前台应用时间段标注：半透明色块（交替）+ 切换点虚线 + exe 标签，按 x 轴时间对齐
             if (Segments != null && Segments.Count > 0 && plotH > 2)
             {
-                int si = 0;
-                foreach (var seg in Segments)
+                int band = 0;
+                double lastBoundary = padLeft;
+                const double minBandWidth = 8;
+                for (int si = 0; si < Segments.Count; si++)
                 {
-                    if (seg.End < fromTime || seg.Start > nowT) { si++; continue; }
+                    var seg = Segments[si];
+                    if (seg.End < fromTime || seg.Start > nowT) continue;
                     DateTime s0 = seg.Start < fromTime ? fromTime : seg.Start;
                     DateTime s1 = seg.End > nowT ? nowT : seg.End;
+                    string exe = seg.Exe;
+                    // 合并连续、无法辨认的窄区间；原始 Segments 仍供悬停精确查值。
+                    while (TimeToX(s1) - TimeToX(s0) < minBandWidth && si + 1 < Segments.Count)
+                    {
+                        var next = Segments[si + 1];
+                        if (next.Start > s1 || next.End <= s1 || next.Start >= nowT) break;
+                        s1 = next.End > nowT ? nowT : next.End;
+                        exe = null;
+                        si++;
+                    }
                     double x1 = TimeToX(s0), x2 = TimeToX(s1);
                     if (x1 < padLeft) x1 = padLeft;
                     if (x2 > w - padRight) x2 = w - padRight;
-                    if (x2 <= x1) { si++; continue; }
-                    if ((si % 2) == 0)
+                    if (x2 <= x1) continue;
+                    if ((band++ % 2) == 0 && x2 - x1 >= 1 / ppd)
                         dc.DrawRectangle(_segBrushAlt, null, new Rect(x1, padTop, x2 - x1, plotH));
-                    if (x1 > padLeft) dc.DrawLine(_segPen, new Point(x1, padTop), new Point(x1, h - padBottom));
-                    double segW = x2 - x1;
-                    if (segW > 28 && !string.IsNullOrEmpty(seg.Exe))
+                    if (x1 - lastBoundary >= minBandWidth)
                     {
-                        var ft = MakeText(seg.Exe, 9, FanLabelBrush, ppd);
+                        dc.DrawLine(_segPen, new Point(x1, padTop), new Point(x1, h - padBottom));
+                        lastBoundary = x1;
+                    }
+                    double segW = x2 - x1;
+                    if (segW > 28 && !string.IsNullOrEmpty(exe))
+                    {
+                        var ft = MakeText(exe, 9, FanLabelBrush, ppd);
                         if (ft.Width < segW - 4)
                             dc.DrawText(ft, new Point(x1 + (segW - ft.Width) / 2, padTop + 1));
                     }
-                    si++;
                 }
             }
 
-            // 折线：按时间戳定位 x，缺口断线，像素级去重避免超密
+            // 每个像素列保留峰谷，每段另保留首尾；按原采样顺序连接，不跳过同像素内的尖峰。
             foreach (var s in eff)
             {
                 int n = s.Points.Count;
@@ -304,23 +323,51 @@ namespace PowerAudioManager
                 int lastInWin = -1;
                 using (var ctx = geo.Open())
                 {
-                    bool first = true;
-                    double lastX = double.NaN;
-                    DateTime prevT = default;
+                    bool newFigure = true;
+                    int bucket = -1, first = -1, last = -1, min = -1, max = -1, emitted = -1;
+                    long prevTicks = 0;
+                    double pixelsPerTick = plotW * ppd / (windowSec * TimeSpan.TicksPerSecond);
+                    long gapTicks = (long)(gapSec * TimeSpan.TicksPerSecond);
+                    void Emit(int i)
+                    {
+                        if (i == emitted) return;
+                        double y = padTop + plotH - (Clamp(s.Points[i], s.IsTemp, yMax) / yMax) * plotH;
+                        var point = new Point(TimeToX(s.Times[i]), y);
+                        if (newFigure) { ctx.BeginFigure(point, false, false); newFigure = false; }
+                        else ctx.LineTo(point, true, false);
+                        emitted = i;
+                    }
+                    void FlushBucket()
+                    {
+                        if (first < 0) return;
+                        if (newFigure) Emit(first);
+                        if (min < max) { Emit(min); Emit(max); }
+                        else { Emit(max); Emit(min); }
+                    }
                     for (int i = 0; i < n; i++)
                     {
                         var t = s.Times[i];
-                        if (t < fromTime) continue;        // 窗外左溢出
+                        if (t < fromTime || t > nowT) continue;
                         lastInWin = i;
-                        double x = TimeToX(t);
-                        float val = Clamp(s.Points[i], s.IsTemp, yMax);
-                        double y = padTop + plotH - (val / yMax) * plotH;
-                        bool gap = !first && (t - prevT).TotalSeconds > gapSec;
-                        if (first || gap) { ctx.BeginFigure(new Point(x, y), false, false); lastX = x; }
-                        else if (x - lastX >= 1.0) { ctx.LineTo(new Point(x, y), true, false); lastX = x; }
-                        first = false;
-                        prevT = t;
+                        int pixel = (int)((t.Ticks - fromTime.Ticks) * pixelsPerTick);
+                        bool gap = first >= 0 && (t.Ticks - prevTicks > gapTicks || t.Ticks < prevTicks);
+                        if (first < 0 || pixel != bucket || gap)
+                        {
+                            FlushBucket();
+                            if (gap) { Emit(last); newFigure = true; }
+                            bucket = pixel;
+                            first = last = min = max = i;
+                        }
+                        else
+                        {
+                            if (s.Points[i] < s.Points[min]) min = i;
+                            if (s.Points[i] > s.Points[max]) max = i;
+                            last = i;
+                        }
+                        prevTicks = t.Ticks;
                     }
+                    FlushBucket();
+                    if (last >= 0) Emit(last);
                 }
                 geo.Freeze();
                 dc.DrawGeometry(null, pen, geo);
@@ -394,7 +441,13 @@ namespace PowerAudioManager
                     int n = s.Points.Count;
                     // 二分找最接近 tAt 的点（Times 升序），避免全天 86400 点下鼠标移动线性扫描卡顿
                     int best;
-                    if (tAt <= s.Times[0]) best = 0;
+                    if (!s.TimesOrdered)
+                    {
+                        best = 0;
+                        for (int i = 1; i < n; i++)
+                            if (Math.Abs((s.Times[i] - tAt).Ticks) < Math.Abs((s.Times[best] - tAt).Ticks)) best = i;
+                    }
+                    else if (tAt <= s.Times[0]) best = 0;
                     else if (tAt >= s.Times[n - 1]) best = n - 1;
                     else
                     {

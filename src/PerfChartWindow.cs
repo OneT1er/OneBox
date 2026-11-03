@@ -12,7 +12,7 @@ namespace PowerAudioManager
     /// <summary>
     /// 双击性能趋势弹出的放大图表窗口。时长档位：5分/15分/30分/1时/2时/6时/12时/全天，
     /// 默认 15 分钟。每 1s 从 PerfHistory 拉时间窗内最新数据刷新；缺口处断线而非填旧值。
-    /// 全天靠 86400 容量的 ring buffer + 像素级去密支撑。
+    /// 全天固定 24 小时，原始历史查询与保留峰谷的像素抽样分别处理。
     /// </summary>
     public class PerfChartWindow : Window
     {
@@ -161,23 +161,10 @@ namespace PowerAudioManager
 
         void Refresh()
         {
-            double windowSec = _chart.WindowSec > 0 ? _chart.WindowSec : PerfHistory.Capacity * _chart.IntervalSec;
-            DateTime to = DateTime.Now;
+            double windowSec = _chart.DisplayWindowSec;
+            var series = PerfHistory.GetWindow(DateTime.Now, windowSec, _series, out DateTime to);
             DateTime from = to.AddSeconds(-windowSec);
-            var series = PerfHistory.GetSeries(from, to, _series);
-            // 图表刚打开且窗口内暂无数据（上次记录早于窗口起点）时，把窗口锚到最后一条历史记录，
-            // 让以前记录的数据立即可见；新数据到达后窗口自然滑回当前时间。
-            if (series.Count == 0)
-            {
-                var last = PerfHistory.GetLastTime();
-                if (last.HasValue && last.Value < from)
-                {
-                    to = last.Value.AddSeconds(Math.Max(_chart.IntervalSec, 1));
-                    if (to > DateTime.Now) to = DateTime.Now;
-                    from = to.AddSeconds(-windowSec);
-                    series = PerfHistory.GetSeries(from, to, _series);
-                }
-            }
+            _chart.EndTime = to;
             _chart.Series = series;
             try { UpdateLegend(series); } catch (Exception ex) { AppLog.Log("PerfChartWindow.Legend", ex); }
             _chart.Segments = ForegroundHistory.GetSegments(from, to);
