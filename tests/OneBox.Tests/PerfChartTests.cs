@@ -27,6 +27,12 @@ public sealed class PerfChartTests
             });
         chart.Layout(830, 400);
         DrawingGroup first = chart.Draw(300);
+        var background = Assert.IsType<DrawingVisual>(VisualTreeHelper.GetChild(chart, 0));
+        Assert.IsType<BitmapCache>(background.CacheMode);
+        DependencyObject hit = VisualTreeHelper.HitTest(chart, new Point(400, 200))?.VisualHit;
+        Assert.NotNull(hit);
+        while (hit is not UIElement) hit = VisualTreeHelper.GetParent(hit);
+        Assert.Same(chart, hit); // DrawingVisual children must still route mouse input to the chart.
         var curves = Curves(first);
         Assert.Equal(8, curves.Length);
         Assert.All(curves, curve => Assert.True(curve.IsFrozen));
@@ -86,6 +92,10 @@ public sealed class PerfChartTests
         chart.ChangeDpi();
         var dpiChanged = Assert.Single(Curves(chart.Draw()));
         Assert.NotSame(resized, dpiChanged);
+        chart.Layout(0, 0);
+        Assert.Empty(Curves(chart.Draw()));
+        chart.Layout(1000, 500);
+        Assert.Single(Curves(chart.Draw()));
 
         chart.HiddenSeries.Add("CPU");
         chart.Refresh();
@@ -142,6 +152,9 @@ public sealed class PerfChartTests
             if (mouseX.HasValue) MouseX.SetValue(this, mouseX.Value);
             var drawing = new DrawingGroup();
             using (var dc = drawing.Open()) OnRender(dc);
+            for (int i = 0; i < VisualTreeHelper.GetChildrenCount(this); i++)
+                if (VisualTreeHelper.GetChild(this, i) is DrawingVisual visual && visual.Drawing is Drawing child)
+                    drawing.Children.Add(child);
             return drawing;
         }
         public void Leave() => OnMouseLeave(null);

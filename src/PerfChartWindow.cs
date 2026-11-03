@@ -18,6 +18,7 @@ namespace PowerAudioManager
     {
         PerfChart _chart;
         DispatcherTimer _timer;
+        readonly List<ChartSeries> _series = new List<ChartSeries>();
 
         public PerfChartWindow()
         {
@@ -163,7 +164,7 @@ namespace PowerAudioManager
             double windowSec = _chart.WindowSec > 0 ? _chart.WindowSec : PerfHistory.Capacity * _chart.IntervalSec;
             DateTime to = DateTime.Now;
             DateTime from = to.AddSeconds(-windowSec);
-            var series = PerfHistory.GetSeries(from, to);
+            var series = PerfHistory.GetSeries(from, to, _series);
             // 图表刚打开且窗口内暂无数据（上次记录早于窗口起点）时，把窗口锚到最后一条历史记录，
             // 让以前记录的数据立即可见；新数据到达后窗口自然滑回当前时间。
             if (series.Count == 0)
@@ -174,7 +175,7 @@ namespace PowerAudioManager
                     to = last.Value.AddSeconds(Math.Max(_chart.IntervalSec, 1));
                     if (to > DateTime.Now) to = DateTime.Now;
                     from = to.AddSeconds(-windowSec);
-                    series = PerfHistory.GetSeries(from, to);
+                    series = PerfHistory.GetSeries(from, to, _series);
                 }
             }
             _chart.Series = series;

@@ -209,18 +209,28 @@ namespace PowerAudioManager
         }
 
         // 返回 [from, to] 时间窗内的点（带时间戳），供图表按真实时间定位、缺口断线。
-        public static List<ChartSeries> GetSeries(DateTime from, DateTime to)
+        public static List<ChartSeries> GetSeries(DateTime from, DateTime to) => GetSeries(from, to, null);
+
+        // 图表在 UI 线程复用自己的快照缓冲，避免全天刷新每秒分配数十 MB 的大数组。
+        // 传入的列表及其 Points/Times 会原地更新，调用方应在返回后同步刷新图表。
+        public static List<ChartSeries> GetSeries(DateTime from, DateTime to, List<ChartSeries> reuse)
         {
             lock (_lock)
             {
-                var result = new List<ChartSeries>();
-                int idx = 0;
+                var result = reuse ?? new List<ChartSeries>();
+                int idx = 0, count = 0;
                 foreach (var kv in _series.OrderBy(x => x.Key))   // 稳定顺序 -> 稳定配色
                 {
                     var s = kv.Value;
                     if (s.Count == 0) { idx++; continue; }
-                    var pts = new List<float>();
-                    var times = new List<DateTime>();
+                    var chart = count < result.Count ? result[count] : new ChartSeries
+                    {
+                        Points = new List<float>(), Times = new List<DateTime>()
+                    };
+                    var pts = chart.Points;
+                    var times = chart.Times;
+                    pts.Clear();
+                    times.Clear();
                     for (int i = 0; i < s.Count; i++)
                     {
                         int bi = s.RingIndex(i);
@@ -230,17 +240,15 @@ namespace PowerAudioManager
                         times.Add(t);
                     }
                     if (pts.Count == 0) { idx++; continue; }
-                    result.Add(new ChartSeries
-                    {
-                        Name = s.Name ?? kv.Key,
-                        Color = Palette[idx % Palette.Length],
-                        Points = pts,
-                        Times = times,
-                        IsTemp = s.IsTemp,
-                        Unit = s.IsTemp ? "°C" : "rpm"
-                    });
+                    chart.Name = s.Name ?? kv.Key;
+                    chart.Color = Palette[idx % Palette.Length];
+                    chart.IsTemp = s.IsTemp;
+                    chart.Unit = s.IsTemp ? "°C" : "rpm";
+                    if (count == result.Count) result.Add(chart);
+                    count++;
                     idx++;
                 }
+                if (count < result.Count) result.RemoveRange(count, result.Count - count);
                 return result;
             }
         }

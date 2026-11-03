@@ -77,6 +77,59 @@ public sealed class ForegroundNamePoolTests
 public sealed class PerfHistoryChunkTests
 {
     [Fact]
+    public void FullDayRefresh_ReusesSnapshotBuffersAndUpdatesMetadataWithoutStaleSamples()
+    {
+        WithIsolatedHistory(null, _ =>
+        {
+            var metrics = Enumerable.Range(0, 8).Select(i => new MetricValue
+            {
+                ConfigKey = "refresh-" + i, DisplayName = "Sensor " + i,
+                Unit = i < 4 ? "°C" : "RPM", IconKey = i < 4 ? "Temp" : "Fan", Value = i + 10
+            }).ToList();
+            for (int i = 0; i < PerfHistory.Capacity; i++) PerfHistory.Add(metrics);
+            var snapshot = PerfHistory.GetSeries(DateTime.MinValue, DateTime.MaxValue);
+            var points = snapshot.Select(s => s.Points).ToArray();
+            var times = snapshot.Select(s => s.Times).ToArray();
+            PerfHistory.GetSeries(DateTime.MinValue, DateTime.MaxValue, snapshot); // Warm up.
+            long before = GC.GetAllocatedBytesForCurrentThread();
+            for (int i = 0; i < 10; i++) PerfHistory.GetSeries(DateTime.MinValue, DateTime.MaxValue, snapshot);
+            long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+            Assert.True(allocated < 128 * 1024, $"Repeated full-day snapshots allocated {allocated:N0} bytes.");
+            for (int i = 0; i < snapshot.Count; i++)
+            {
+                Assert.Same(points[i], snapshot[i].Points);
+                Assert.Same(times[i], snapshot[i].Times);
+                Assert.Equal(PerfHistory.Capacity, snapshot[i].Points.Count);
+                Assert.Equal(snapshot[i].Points.Count, snapshot[i].Times.Count);
+            }
+
+            metrics[4].DisplayName = "Updated fan";
+            metrics[4].Value = 2400;
+            PerfHistory.Add(metrics);
+            // Removing the earlier series shifts the reused destination slot from a temperature to a fan.
+            PerfHistory.RetainEnabledSeries(new[] { metrics[4].ConfigKey });
+            Assert.Same(snapshot, PerfHistory.GetSeries(DateTime.MinValue, DateTime.MaxValue, snapshot));
+            ChartSeries fan = Assert.Single(snapshot);
+            Assert.Equal("Updated fan", fan.Name);
+            Assert.False(fan.IsTemp);
+            Assert.Equal("rpm", fan.Unit);
+            Assert.Equal(2400, fan.Points[^1]);
+            Assert.Equal(14, fan.Points[0]);
+            Assert.Equal(PerfHistory.Capacity, fan.Points.Count);
+            var independent = Assert.Single(PerfHistory.GetSeries(DateTime.MinValue, DateTime.MaxValue));
+            Assert.NotSame(fan.Points, independent.Points);
+            Assert.Equal(independent.Points, fan.Points);
+            Assert.Equal(independent.Times, fan.Times);
+            Assert.Equal(independent.Color, fan.Color);
+
+            PerfHistory.GetSeries(DateTime.MaxValue, DateTime.MaxValue, snapshot);
+            Assert.Empty(snapshot);
+            PerfHistory.GetSeries(DateTime.MinValue, DateTime.MaxValue, snapshot);
+            Assert.Equal(2400, Assert.Single(snapshot).Points[^1]);
+        });
+    }
+
+    [Fact]
     public void NewSeries_AllocatesOnlyTheFirstChunk()
     {
         WithIsolatedHistory(null, series =>

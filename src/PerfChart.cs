@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Windows;
-using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 
@@ -20,12 +19,12 @@ namespace PowerAudioManager
     }
 
     /// <summary>
-    /// 手写 WPF 折线图（Control + OnRender）。双 Y 轴（左温度 0-100°C，右风扇自适应 rpm）。
+    /// 手写 WPF 折线图（FrameworkElement + DrawingVisual）。双 Y 轴（左温度 0-100°C，右风扇自适应 rpm）。
     /// 时间轴：x 按 Points 的真实时间戳映射（WindowSec 时间窗），相邻点时间差超阈值则断线--
     /// 传感器失配/跨重启的"无数据"区间显示为断口，而非用旧值填满。图例高度自适应，永不与折线重叠。
     /// OnlyTemp=true 时只画温度（悬浮窗小图用），大图关掉以同时显示风扇。EnableTooltip=true 时鼠标画十字线+各线交点值卡片。
     /// </summary>
-    public class PerfChart : Control
+    public class PerfChart : FrameworkElement
     {
         public const int Capacity = PerfHistory.Capacity;
 
@@ -63,6 +62,11 @@ namespace PowerAudioManager
 
         double _mouseX = -1;
         DrawingGroup _chartDrawing;
+        readonly DrawingVisual _chartVisual = new DrawingVisual
+        {
+            CacheMode = new BitmapCache { SnapsToDevicePixels = true }
+        };
+        readonly DrawingVisual _tooltipVisual = new DrawingVisual();
         Size _drawingSize;
         double _drawingPixelsPerDip;
         List<ChartSeries> _drawnSeries;
@@ -100,7 +104,26 @@ namespace PowerAudioManager
             return p;
         }
 
-        public PerfChart() { SnapsToDevicePixels = true; Width = double.NaN; Focusable = false; Background = Brushes.Transparent; }
+        public PerfChart()
+        {
+            SnapsToDevicePixels = true; Width = double.NaN; Focusable = false;
+            AddVisualChild(_chartVisual);
+            AddVisualChild(_tooltipVisual);
+        }
+
+        protected override int VisualChildrenCount => base.VisualChildrenCount + 2;
+
+        protected override Visual GetVisualChild(int index)
+        {
+            int count = base.VisualChildrenCount;
+            if (index < count) return base.GetVisualChild(index);
+            return (index - count) switch
+            {
+                0 => _chartVisual,
+                1 => _tooltipVisual,
+                _ => throw new ArgumentOutOfRangeException(nameof(index))
+            };
+        }
 
         // 数据、时长或图例改变时重建底图；鼠标移动只重画十字线和提示卡片。
         public void Refresh()
@@ -129,7 +152,13 @@ namespace PowerAudioManager
         protected override void OnRender(DrawingContext dc)
         {
             base.OnRender(dc);
-            if (ActualWidth <= 1 || ActualHeight <= 1) return;
+            if (ActualWidth <= 1 || ActualHeight <= 1)
+            {
+                using (_chartVisual.RenderOpen()) { }
+                using (_tooltipVisual.RenderOpen()) { }
+                _chartDrawing = null;
+                return;
+            }
             double ppd = VisualTreeHelper.GetDpi(this).PixelsPerDip;
             if (_chartDrawing == null || _drawingSize != RenderSize || _drawingPixelsPerDip != ppd)
             {
@@ -139,9 +168,10 @@ namespace PowerAudioManager
                 _chartDrawing = drawing;
                 _drawingSize = RenderSize;
                 _drawingPixelsPerDip = ppd;
+                using (var context = _chartVisual.RenderOpen()) context.DrawDrawing(drawing);
             }
-            dc.DrawDrawing(_chartDrawing);
-            DrawTooltip(dc, ppd);
+            // 独立的位图缓存层：鼠标更新不能重新提交底图，否则 WPF 仍会逐帧光栅化整天的折线。
+            using (var context = _tooltipVisual.RenderOpen()) DrawTooltip(context, ppd);
         }
 
         void DrawChart(DrawingContext dc, double ppd)
