@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
-using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -63,6 +62,13 @@ namespace PowerAudioManager
         static readonly Pen _warnPen;
 
         double _mouseX = -1;
+        DrawingGroup _chartDrawing;
+        Size _drawingSize;
+        double _drawingPixelsPerDip;
+        List<ChartSeries> _drawnSeries;
+        Rect _plotBounds;
+        DateTime _plotFromTime;
+        double _plotWindowSec, _plotFanMax;
 
         static PerfChart()
         {
@@ -96,7 +102,18 @@ namespace PowerAudioManager
 
         public PerfChart() { SnapsToDevicePixels = true; Width = double.NaN; Focusable = false; Background = Brushes.Transparent; }
 
-        public void Refresh() => InvalidateVisual();
+        // 数据、时长或图例改变时重建底图；鼠标移动只重画十字线和提示卡片。
+        public void Refresh()
+        {
+            _chartDrawing = null;
+            InvalidateVisual();
+        }
+
+        protected override void OnDpiChanged(DpiScale oldDpi, DpiScale newDpi)
+        {
+            base.OnDpiChanged(oldDpi, newDpi);
+            Refresh();
+        }
 
         protected override void OnMouseMove(MouseEventArgs e)
         {
@@ -112,10 +129,24 @@ namespace PowerAudioManager
         protected override void OnRender(DrawingContext dc)
         {
             base.OnRender(dc);
-            double w = ActualWidth, h = ActualHeight;
-            if (w <= 1 || h <= 1) return;
-
+            if (ActualWidth <= 1 || ActualHeight <= 1) return;
             double ppd = VisualTreeHelper.GetDpi(this).PixelsPerDip;
+            if (_chartDrawing == null || _drawingSize != RenderSize || _drawingPixelsPerDip != ppd)
+            {
+                var drawing = new DrawingGroup();
+                using (var context = drawing.Open()) DrawChart(context, ppd);
+                drawing.Freeze();
+                _chartDrawing = drawing;
+                _drawingSize = RenderSize;
+                _drawingPixelsPerDip = ppd;
+            }
+            dc.DrawDrawing(_chartDrawing);
+            DrawTooltip(dc, ppd);
+        }
+
+        void DrawChart(DrawingContext dc, double ppd)
+        {
+            double w = ActualWidth, h = ActualHeight;
             double padLeft = 26, padRight = OnlyTemp ? 8 : 34, padBottom = 18;
 
             // 有效 series（OnlyTemp 时只取温度）
@@ -303,18 +334,31 @@ namespace PowerAudioManager
                 }
             }
 
+            // 提示层使用底图同一份时间轴/刻度，避免两次每秒刷新之间鼠标取值与曲线错位。
+            _drawnSeries = eff;
+            _plotBounds = new Rect(padLeft, padTop, Math.Max(0, plotW), Math.Max(0, plotH));
+            _plotFromTime = fromTime;
+            _plotWindowSec = windowSec;
+            _plotFanMax = fanMax;
+        }
+
+        void DrawTooltip(DrawingContext dc, double ppd)
+        {
+            double w = ActualWidth;
+            double padLeft = _plotBounds.Left, padTop = _plotBounds.Top;
+            double plotW = _plotBounds.Width, plotH = _plotBounds.Height;
             // tooltip：十字线 + 各线在该时间点最近的值卡片（顶部显示该时间点的前台应用）
-            if (EnableTooltip && _mouseX >= padLeft && _mouseX <= w - padRight && plotH > 2)
+            if (EnableTooltip && _mouseX >= padLeft && _mouseX <= _plotBounds.Right && plotW > 0 && plotH > 2)
             {
                 var vpen = _vpen;
-                dc.DrawLine(vpen, new Point(_mouseX, padTop), new Point(_mouseX, h - padBottom));
+                dc.DrawLine(vpen, new Point(_mouseX, padTop), new Point(_mouseX, _plotBounds.Bottom));
 
                 double tt = (_mouseX - padLeft) / plotW;
-                DateTime tAt = fromTime.AddSeconds(tt * windowSec);
+                DateTime tAt = _plotFromTime.AddSeconds(tt * _plotWindowSec);
                 double nearSec = Math.Max(2 * IntervalSec, 3.0);
 
                 var labels = new List<(Color, string)>();
-                foreach (var s in eff)
+                foreach (var s in _drawnSeries)
                 {
                     if (s.Points == null || s.Points.Count < 1) continue;
                     int n = s.Points.Count;
@@ -332,7 +376,7 @@ namespace PowerAudioManager
                     double bestDt = Math.Abs((s.Times[best] - tAt).TotalSeconds);
                     if (bestDt > nearSec) continue;   // 该时间点无数据（缺口），不显示该线
                     float val = s.Points[best];
-                    double yMax = s.IsTemp ? 100.0 : fanMax; if (yMax <= 0) yMax = 1;
+                    double yMax = s.IsTemp ? 100.0 : _plotFanMax; if (yMax <= 0) yMax = 1;
                     float vv = Clamp(val, s.IsTemp, yMax);
                     double y = padTop + plotH - (vv / yMax) * plotH;
                     dc.DrawEllipse(BrushFor(s.Color), null, new Point(_mouseX, y), 3, 3);
